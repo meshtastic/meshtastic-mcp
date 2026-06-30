@@ -136,6 +136,72 @@ def test_session_handshake_and_stream():
         sess.stop()
 
 
+def test_get_owner_request_is_answered_for_strict_clients():
+    """A get_owner_request during seeding gets an owner+passkey response.
+
+    Strict clients (e.g. the Kotlin SDK) block their post-NodeDB "seeding" step
+    on this admin round-trip; the replay device must emulate the firmware reply
+    so they can reach a ready state.
+    """
+    from meshtastic.protobuf import admin_pb2, portnums_pb2
+
+    from meshtastic_mcp.replay.engine import OBSERVER_NUM
+
+    cap = sim.generate(nodes=8, days=1, seed=5)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession("owner", cap, ReplayParams(host="127.0.0.1", port=port, node_delay=0))
+    sess.start()
+    try:
+        deadline = time.time() + 5
+        client = None
+        while time.time() < deadline:
+            try:
+                client = socket.create_connection(("127.0.0.1", port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        assert client is not None
+
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+
+        # Send the admin get_owner_request the SDK issues to seed the passkey.
+        req = admin_pb2.AdminMessage(get_owner_request=True)
+        mp = mesh_pb2.MeshPacket()
+        mp.to = OBSERVER_NUM
+        mp.id = 0xABCDEF
+        mp.decoded.portnum = portnums_pb2.PortNum.ADMIN_APP
+        mp.decoded.payload = req.SerializeToString()
+        _send_toradio(client, packet=mp)
+
+        owner_resp = None
+        t0 = time.time()
+        while time.time() - t0 < 4 and owner_resp is None:
+            fr = _read_frame(client)
+            if fr.WhichOneof("payload_variant") != "packet":
+                continue
+            d = fr.packet.decoded
+            if d.portnum != portnums_pb2.PortNum.ADMIN_APP:
+                continue
+            am = admin_pb2.AdminMessage()
+            am.ParseFromString(d.payload)
+            if am.WhichOneof("payload_variant") == "get_owner_response":
+                owner_resp = (fr.packet, am)
+        client.close()
+
+        assert owner_resp is not None, "no get_owner_response from the replay device"
+        pkt, am = owner_resp
+        assert getattr(pkt, "from") == OBSERVER_NUM  # client keys the passkey on this
+        assert len(am.session_passkey) > 0
+        assert am.get_owner_response.id == f"!{OBSERVER_NUM:08x}"
+        assert pkt.decoded.request_id == 0xABCDEF  # echoes the request id
+    finally:
+        sess.stop()
+
+
 def test_sqlite_roundtrip_is_lossless(tmp_path):
     cap = sim.generate(nodes=30, days=1, seed=3, start=1_700_000_000)
     db = tmp_path / "rt.db"
