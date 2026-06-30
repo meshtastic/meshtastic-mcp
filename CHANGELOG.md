@@ -12,6 +12,14 @@ All notable changes are documented here. Format loosely follows
   state. Previously the replay device only handled `want_config_id`, so such a client drained
   config + the full NodeDB and then timed out. Read-only still holds: mutating admin writes are
   not honored (replay has tx disabled).
+- **Kotlin-SDK device-IO bridge (experimental)** — an optional capability that drives a device
+  through the Meshtastic Kotlin SDK's headless JVM sample CLI instead of the Python `meshtastic`
+  library, by shelling out to it in `--json` (NDJSON) mode — the same pattern the MCP already uses
+  for `pio`/`adb`/`idb`/`esptool`. Tools `sdk_status` / `sdk_device_info` / `sdk_list_nodes`
+  (read-only) + `sdk_send_text` (destructive), gated on a resolvable `cli` launcher
+  (`MESHTASTIC_MCP_SDK_CLI` or `MESHTASTIC_SDK_ROOT`). Proof-of-concept for evaluating the SDK
+  engine (BLE/TCP/serial, handshake, NodeDB, ACK correlation) as an alternative backend. See
+  `docs/sdk-cli-bridge.md`.
 - **Local-model offload** (`summarize_window` / `vision_oracle` / `triage_window`, plus
   `local_model_status` / `local_model_serve` / `local_model_serve_stop`) — an optional capability
   that pushes token-heavy work onto a local GPU: distill a recorder window, a first-pass
