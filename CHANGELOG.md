@@ -80,6 +80,12 @@ All notable changes are documented here. Format loosely follows
 - Tool annotations: full coverage (every tool classified), `_IDEMPOTENT_WRITES`,
   android/apple capability gating, lethal-trifecta `openWorldHint` on `logs_window`/`packets_window`.
 - `doctor` now detects uhubctl udev-permission issues on Linux with the exact fix command.
+- **Device discovery recognizes common board chips.** The upstream allowlist is only `0x239a`
+  (Adafruit/nRF) + `0x303a` (Espressif native-USB / USB-Serial-JTAG), so it flagged the USB-UART
+  bridges most ESP32 boards ship with as `likely_meshtastic=False`. `list_devices` now also treats
+  CP210x (`0x10c4`, Heltec/most ESP32), CH340/CH9102 (`0x1a86`), FTDI (`0x0403`), and Seeed XIAO
+  (`0x2886`, TinyUSB-CDC) as likely, and bases the flag on the VID directly rather than the upstream
+  `findPorts` filter (which hid a bridge-chip board whenever a native-USB board was also attached).
 
 ## [0.1.0] — 2026-06-25
 
