@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Mesh: direct text addressed to RX's node_num arrives at RX.
 
 Uses the same pubsub receive pattern as `test_broadcast_delivers`, but sends

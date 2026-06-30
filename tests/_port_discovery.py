@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Role-to-port rediscovery after USB CDC re-enumeration.
 
 Used by tests that mutate device identity in ways macOS treats as a
@@ -33,14 +30,13 @@ import time
 
 from meshtastic_mcp import devices as devices_module
 
-# Role → canonical VID(s). Kept in sync with:
-#   - `mcp-server/run-tests.sh` (ROLE_BY_VID)
-#   - `mcp-server/tests/conftest.py::hub_profile`
-# If any of those change, this must too.
-_ROLE_VIDS: dict[str, tuple[int, ...]] = {
-    "nrf52": (0x239A,),  # Adafruit / RAK nRF52840 native USB
-    "esp32s3": (0x303A, 0x10C4),  # Espressif native USB + CP2102 USB-UART
-}
+from . import _bench
+
+# Role → canonical VID(s), derived from the single source of truth in
+# `tests/_bench.py`. With three same-VID (0x239a) nRF52 boards on the bench, VID
+# alone is ambiguous — `resolve_port_by_role` prefers each role's pinned hub-slot
+# location and only falls back to VID for roles with no location.
+_ROLE_VIDS: dict[str, tuple[int, ...]] = {role: _bench.role_vids(role) for role in _bench.roles()}
 
 
 def _coerce_vid(raw: object) -> int | None:
@@ -92,6 +88,7 @@ def resolve_port_by_role(
     if role not in _ROLE_VIDS:
         raise ValueError(f"unknown role {role!r}; expected one of {sorted(_ROLE_VIDS)}")
     wanted_vids = _ROLE_VIDS[role]
+    location = _bench.role_location(role)
 
     deadline = time.monotonic() + timeout_s
     delay = poll_start
@@ -106,16 +103,27 @@ def resolve_port_by_role(
             # Treat as "nothing seen this round" and retry.
             last_seen = [{"error": repr(exc)}]
         for dev in last_seen:
+            port = dev.get("port")
+            if not port:
+                continue
+            if location is not None:
+                # Prefer the exact physical hub slot — stable across the
+                # app↔bootloader USB PID flip and unambiguous when several
+                # boards share a VID. Do NOT fall back to VID here: we want
+                # THIS board, not any same-VID sibling.
+                if _bench.device_location(port) == location:
+                    return port
+                continue
             vid = _coerce_vid(dev.get("vid"))
-            if vid is not None and vid in wanted_vids and dev.get("port"):
-                return dev["port"]
+            if vid is not None and vid in wanted_vids:
+                return port
         time.sleep(delay)
         delay = min(delay * 1.5, poll_max)
 
     # Timeout path — include what we saw so the operator can tell
-    # "nothing plugged in" from "wrong VID" from "transient USB error".
+    # "nothing plugged in" from "wrong board" from "transient USB error".
+    where = f"location {location!r}" if location else f"VIDs {[hex(v) for v in wanted_vids]}"
     raise AssertionError(
-        f"no device matching role {role!r} (VIDs "
-        f"{[hex(v) for v in wanted_vids]}) appeared within {timeout_s:.0f}s. "
-        f"Last enumeration: {last_seen!r}"
+        f"no device matching role {role!r} ({where}) appeared within "
+        f"{timeout_s:.0f}s. Last enumeration: {last_seen!r}"
     )

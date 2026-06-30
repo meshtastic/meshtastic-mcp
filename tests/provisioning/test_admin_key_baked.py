@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Provisioning: baked admin keys end up in the device's security config.
 
 Fleet operators pre-bake an `USERPREFS_USE_ADMIN_KEY_0` into firmware so that

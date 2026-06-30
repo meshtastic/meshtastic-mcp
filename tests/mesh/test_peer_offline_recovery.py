@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Isolation test for peer-offline-then-back mid-conversation.
 
 Verifies the mesh stack's behavior when a peer is physically powered

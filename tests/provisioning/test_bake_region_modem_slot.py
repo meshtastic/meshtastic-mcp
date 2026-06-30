@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Provisioning: the pre-bake recipe (US/LONG_FAST/slot 88/private channel)
 lands on the device exactly as specified.
 

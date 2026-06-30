@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """SELECT on the home frame opens the home menu; BACK closes it.
 
 The home menu is an overlay (menuHandler::homeBaseMenu), not a frame

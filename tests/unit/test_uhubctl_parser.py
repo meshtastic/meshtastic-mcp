@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Pin the `uhubctl` default-output parser against canned real-world samples.
 
 uhubctl's output format has been stable since v2.x but occasionally adds

@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Tool-surface coverage: track which MCP tools the test suite actually exercises.
 
 This is NOT line coverage (that's `coverage.py`). This measures which of the

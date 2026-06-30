@@ -51,16 +51,16 @@ if str(_MCP_SRC) not in sys.path:
 # Default firmware root: the repo this mcp-server/ lives inside.
 os.environ.setdefault("MESHTASTIC_FIRMWARE_ROOT", str(_HERE.parent.parent))
 
-from meshtastic_mcp import (  # noqa: E402
+from meshtastic_mcp import (
     admin,
     info,
     serial_session,
     userprefs,
 )
-from meshtastic_mcp import config as mcp_config  # noqa: E402
-from meshtastic_mcp import devices as devices_module  # noqa: E402
+from meshtastic_mcp import config as mcp_config
+from meshtastic_mcp import devices as devices_module
 
-from . import tool_coverage  # noqa: E402
+from . import tool_coverage
 
 # ---------- CLI options ---------------------------------------------------
 
@@ -1030,18 +1030,36 @@ def _run_with_timeout(fn: Callable[[], Any], timeout: float) -> Any:
     thread via SIGALRM, which doesn't protect code running inside
     `pytest_runtest_makereport` — that hook runs outside the test's timer. So
     we wrap each device query in a bounded worker.
-    """
-    import concurrent.futures
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(fn)
+    Must use a *daemon* thread, NOT a ThreadPoolExecutor: the executor's
+    context-manager exit (and its atexit handler) call `shutdown(wait=True)`,
+    which JOINS a still-running worker — so a truly-hung `SerialInterface`
+    connect makes this function block past `timeout` instead of returning. When
+    that block happens inside the makereport hook, pytest-timeout's SIGALRM
+    fires mid-hook and crashes the whole session with an INTERNALERROR (losing
+    every remaining tier). A daemon thread is abandoned cleanly on timeout — it
+    dies with the process and is never joined.
+    """
+    import threading
+
+    box: dict[str, Any] = {}
+
+    def _runner() -> None:
         try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError as exc:
-            # The worker thread will keep running in the background (we can't
-            # cancel a blocked SerialInterface). It's a daemon-ish leak for
-            # the session, but better than hanging pytest forever.
-            raise TimeoutError(f"operation did not complete within {timeout}s") from exc
+            box["result"] = fn()
+        except BaseException as exc:  # propagate to the caller below
+            box["error"] = exc
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        # The worker is wedged in an uncancellable connect — abandon it (daemon,
+        # so it can't block interpreter exit) rather than joining it here.
+        raise TimeoutError(f"operation did not complete within {timeout}s")
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
 
 
 def _attach_ui_captures(item: pytest.Item, report: Any) -> None:

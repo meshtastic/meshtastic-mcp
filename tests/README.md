@@ -48,10 +48,14 @@ pytest tests/ --force-bake --html=report.html
 ## Environment variables
 
 - `MESHTASTIC_FIRMWARE_ROOT` — firmware repo path (defaults to `../` from tests/)
-- `MESHTASTIC_MCP_ENV_NRF52` — PlatformIO env for the nRF52 role (default
-  `rak4631`)
-- `MESHTASTIC_MCP_ENV_ESP32S3` — PlatformIO env for the ESP32-S3 role (default
-  `heltec-v3`)
+- `MESHTASTIC_MCP_ENV_<ROLE>` — PlatformIO env override per *per-board* bench
+  role (`tests/_bench.py`): `MESHTASTIC_MCP_ENV_T_ECHO`,
+  `MESHTASTIC_MCP_ENV_HELTEC_T114`, `MESHTASTIC_MCP_ENV_ESP32S3`,
+  `MESHTASTIC_MCP_ENV_RAK4631`. Defaults come from `BENCH_ROLES`
+  (`t-echo-plus`, `heltec-mesh-node-t114`, `heltec-v3`, `rak4631`). Keying per
+  board — not by the collapsible VID — is what lets the three same-VID 0x239a
+  nRF52 boards each get their own firmware. FleetSuite bakes these automatically
+  from each connected board's pinned hub slot.
 - `MESHTASTIC_MCP_SEED` — override the session PSK seed (default:
   `pytest-<unix-ts>`). Set this to reproduce a specific failing run.
 

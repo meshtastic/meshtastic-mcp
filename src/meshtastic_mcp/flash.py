@@ -15,12 +15,13 @@ from __future__ import annotations
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import serial
 
-from . import boards, config, connection, devices, pio, userprefs
+from . import boards, config, connection, devices, pio, port_recovery, userprefs
 
 # Meshtastic variants use both `esp32s3` and `esp32-s3` style names across
 # variants/*/platformio.ini (no consistency enforced). Accept both spellings.
@@ -175,12 +176,39 @@ def clean(env: str) -> dict[str, Any]:
     }
 
 
+# adafruit-nrfutil prints one of these when a serial-DFU upload fails to program
+# the device — but `pio run -t upload` STILL exits 0, so a flash that uploaded
+# NOTHING looks like a success. Every caller that trusts the exit code (the
+# bake's `assert exit_code == 0`, FleetSuite's /flash + /recover reflash) then
+# records a phantom flash and marks an unprovisioned board as baked. Detect the
+# signature and fail loudly instead. (The strings are stable nrfutil output and
+# don't appear on a real upload, so the match is low-risk.)
+_UPLOAD_FAILURE_MARKERS = (
+    "Failed to upgrade target",
+    "Target is not in DFU mode",
+    "No data received on serial port",
+)
+
+
+def _detect_upload_failure(stdout: str | None, stderr: str | None) -> str | None:
+    """Return the upload-failure marker present in the pio output, or None.
+
+    Catches the case where the nRF52 DFU upload silently failed but pio reported
+    success — so callers can treat it as the failure it actually was."""
+    blob = f"{stdout or ''}\n{stderr or ''}"
+    for marker in _UPLOAD_FAILURE_MARKERS:
+        if marker in blob:
+            return marker
+    return None
+
+
 def flash(
     env: str,
     port: str,
     confirm: bool = False,
     userprefs_overrides: dict[str, Any] | None = None,
     build_flags: dict[str, Any] | None = None,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """`pio run -e <env> -t upload --upload-port <port>`. All architectures.
 
@@ -192,10 +220,29 @@ def flash(
     actually carries the flags. Without this propagation, `pio run -t upload`
     would relink without the env var and silently drop them. Common use:
     `build_flags={"DEBUG_HEAP": 1}` for the leak-hunt path.
+
+    `progress_cb` (optional): invoked with each pio output line as it arrives
+    (forwarded to `pio.run`'s `line_cb`), so a caller can stream live
+    compile/upload progress without waiting for the multi-minute run to finish.
+
+    Pre-flight: the port is run through `port_recovery.ensure_port_free` first so
+    a held or wedged device auto-recovers before the upload (see body). A
+    `PortRecoveryError` there is surfaced as a `FlashError`.
     """
     _require_confirm(confirm, "flash")
     _reject_native_env(env, "flash")
     connection.reject_if_tcp(port, "flash")
+    # Pre-flight: a held or wedged port can't be flashed. ensure_port_free waits
+    # out a transient holder and, if the device is genuinely wedged (hung
+    # firmware / stale CDC node), power-cycles its own hub slot to re-enumerate
+    # it. Re-enumeration can bring the device back on a DIFFERENT /dev path, so
+    # flash whatever path it returns rather than the one we were handed.
+    try:
+        port = port_recovery.ensure_port_free(port, allow_power_cycle=True)
+    except port_recovery.PortRecoveryError as exc:
+        raise FlashError(
+            f"cannot flash {env!r}: serial port {port} could not be made usable ({exc})"
+        ) from exc
     extra_env = _build_flags_env(build_flags) if build_flags else None
     with userprefs.temporary_overrides(userprefs_overrides) as effective:
         result = pio.run(
@@ -203,15 +250,25 @@ def flash(
             timeout=pio.TIMEOUT_UPLOAD,
             check=False,
             extra_env=extra_env,
+            line_cb=progress_cb,
         )
-    return {
-        "exit_code": result.returncode,
+    upload_error = _detect_upload_failure(result.stdout, result.stderr)
+    exit_code = result.returncode
+    if upload_error and exit_code == 0:
+        # pio masked a silent DFU failure as success — surface it as non-zero so
+        # the bake/flash/recover paths don't record a flash that never landed.
+        exit_code = 1
+    out = {
+        "exit_code": exit_code,
         "stdout_tail": pio.tail_lines(result.stdout, 200),
         "stderr_tail": pio.tail_lines(result.stderr, 200),
         "duration_s": round(result.duration_s, 2),
         "userprefs": _userprefs_summary(effective),
         "build_flags": dict(build_flags) if build_flags else None,
     }
+    if upload_error:
+        out["upload_error"] = upload_error
+    return out
 
 
 def _check_esp32_env(env: str) -> str:
@@ -410,20 +467,46 @@ _NRF52_BOOTLOADER_PIDS = {
 }
 
 
-def _find_nrf52_bootloader_port() -> dict[str, Any] | None:
-    """Return a dict for any currently-enumerated nRF52 bootloader port, or None."""
+def _parse_hex(value: Any) -> int | None:
+    """Parse a ``"0x239a"``-style hex string (or raw int) to an int, or None."""
+    if value is None:
+        return None
+    try:
+        return int(value, 16) if isinstance(value, str) else int(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _find_nrf52_bootloader_port(
+    before_pids: dict[str, int | None] | None = None,
+) -> dict[str, Any] | None:
+    """Return a port genuinely in Adafruit nRF52 *serial-DFU* mode, or None.
+
+    A candidate must present the bootloader VID/PID (0x239A / one of
+    ``_NRF52_BOOTLOADER_PIDS``). When ``before_pids`` (a pre-touch
+    ``{port: pid_int}`` map captured before the 1200bps touch) is supplied, the
+    candidate must ALSO represent a real re-enumeration into DFU: either the
+    port did not exist before the touch, or its PID changed.
+
+    Without that before-state check a wedged app-mode board can be misreported
+    as flashable: a LilyGO T-Echo (0x239A/0x002A) sits on the USB bus with a
+    VID/PID that collides with a bootloader PID, yet it never entered DFU — so
+    nrfutil would fail with "Target is not in DFU mode". Requiring a new port or
+    a PID change rejects that false positive.
+    """
     for d in devices.list_devices(include_unknown=True):
-        vid_str = d.get("vid")
-        pid_str = d.get("pid")
-        if vid_str is None or pid_str is None:
+        vid = _parse_hex(d.get("vid"))
+        pid = _parse_hex(d.get("pid"))
+        if vid is None or pid is None:
             continue
-        try:
-            vid = int(vid_str, 16) if isinstance(vid_str, str) else int(vid_str)
-            pid = int(pid_str, 16) if isinstance(pid_str, str) else int(pid_str)
-        except ValueError:
+        if vid != _NRF52_BOOTLOADER_VID or pid not in _NRF52_BOOTLOADER_PIDS:
             continue
-        if vid == _NRF52_BOOTLOADER_VID and pid in _NRF52_BOOTLOADER_PIDS:
-            return d
+        # If the port already existed before the touch, only a PID change is a
+        # genuine app→DFU re-enumeration. An unchanged PID means we're still
+        # looking at the same app-mode (or wedged) port, not a bootloader.
+        if before_pids is not None and d["port"] in before_pids and before_pids[d["port"]] == pid:
+            continue
+        return d
     return None
 
 
@@ -453,6 +536,11 @@ def touch_1200bps(
     connection.reject_if_tcp(port, "touch_1200bps")
     before_list = devices.list_devices(include_unknown=True)
     before_ports = {d["port"] for d in before_list}
+    # Pre-touch VID/PID per port, so we can distinguish a genuine DFU
+    # re-enumeration (PID changed at a known port, or a brand-new port) from an
+    # app-mode/wedged port that merely carries a VID/PID colliding with a
+    # bootloader PID (e.g. a wedged T-Echo at 0x239A/0x002A).
+    before_pids = {d["port"]: _parse_hex(d.get("pid")) for d in before_list}
 
     attempts = 0
     new_port_info: dict[str, Any] | None = None
@@ -461,13 +549,14 @@ def touch_1200bps(
         attempts = attempt
         _do_1200bps_touch(port, settle_ms=settle_ms, touch_timeout_s=3.0)
 
-        # Poll for either (a) the nRF52 bootloader VID/PID appearing, or
-        # (b) a brand-new port appearing that wasn't there before.
+        # Poll for either (a) the nRF52 bootloader VID/PID appearing as a real
+        # DFU re-enumeration (new port, or changed PID), or (b) a brand-new port
+        # appearing that wasn't there before.
         deadline = time.monotonic() + poll_timeout_s
         while time.monotonic() < deadline:
             time.sleep(0.2)
 
-            bootloader = _find_nrf52_bootloader_port()
+            bootloader = _find_nrf52_bootloader_port(before_pids=before_pids)
             if bootloader is not None:
                 new_port_info = bootloader
                 break
