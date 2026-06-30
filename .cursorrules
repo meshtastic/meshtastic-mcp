@@ -1,0 +1,10 @@
+See AGENTS.md — it is the source of truth for architecture, rules, and workflow.
+
+Quick reference for Cursor:
+- Core MCP tools always register; firmware/android/apple tools gate on capabilities.detect().
+- No firmware-tree assumptions in core modules (use config.firmware_root_or_none()).
+- Destructive tools require confirm=True; never bypass the gate.
+- One MCP call per serial port at a time (exclusive lock).
+- No type debt: mypy with no per-module ignore_errors; ruff clean (no blanket # noqa).
+- Pre-push: ruff check + ruff format --check + mypy + pytest tests/unit
+- License: GPL-3.0-only; git commit -s (DCO sign-off).

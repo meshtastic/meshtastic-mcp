@@ -1,0 +1,28 @@
+name: Bug report
+description: Something in the MCP server, tools, or skill misbehaves
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Expected vs actual. Include the tool name / command.
+    validations: { required: true }
+  - type: dropdown
+    id: capability
+    attributes:
+      label: Capability
+      options: [core, firmware, emulator, skill, unsure]
+    validations: { required: true }
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: meshtastic-mcp version, Python, OS, device/transport (serial/TCP/BLE), firmware version.
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Server log (capability line), recorder/firmware log tail. Redact PII/keys/location.
+      render: shell

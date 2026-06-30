@@ -1,0 +1,8 @@
+cff-version: 1.2.0
+title: meshtastic-mcp
+message: "MCP server + agent skills for AI tooling to test Meshtastic devices and apps."
+type: software
+authors:
+  - name: Meshtastic contributors
+repository-code: "https://github.com/meshtastic/meshtastic-mcp"
+license: GPL-3.0-only

@@ -1,0 +1,21 @@
+<!--
+SPDX-FileCopyrightText: Meshtastic contributors
+SPDX-License-Identifier: GPL-3.0-only
+
+Outbound (app -> device) loop. The app sends; assert WIRE TRUTH on the device plane (the
+tester's recorder packets_window), NOT the app's delivery checkmark — a broadcast shows an
+error icon in a flat virtual mesh even when delivered (see loop-outbound.md). For app-visible
+delivery success use a directed message after NodeInfo warmup. {DUT_ADDR}/{TOKEN} as in inbound.
+-->
+<journey name="outbound-message">
+  <description>
+    Compose and send a channel message from the app; the device plane confirms it on the wire.
+  </description>
+  <actions>
+    <action>Complete onboarding if shown and connect to {DUT_ADDR} over TCP.</action>
+    <action>Open Messages, then Channels, then the Primary Channel.</action>
+    <action>Type {TOKEN} into the message compose field.</action>
+    <action>Tap send.</action>
+    <action>Verify the app shows the message in the conversation (delivery state may show an error icon in a flat mesh — that is expected; assert wire truth separately via the recorder).</action>
+  </actions>
+</journey>

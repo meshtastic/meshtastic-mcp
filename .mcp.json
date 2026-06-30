@@ -1,0 +1,9 @@
+{
+  "$comment": "Example MCP client registration. Easiest: run `meshtastic-mcp install` (registers this automatically + installs skills); `meshtastic-mcp uninstall` removes it. Or copy this into ~/.claude.json (user scope) or a project .mcp.json. `uvx` gives a zero-install run. To enable the firmware capability (build/flash), add env MESHTASTIC_FIRMWARE_ROOT pointing at a firmware checkout.",
+  "mcpServers": {
+    "meshtastic": {
+      "command": "uvx",
+      "args": ["meshtastic-mcp"]
+    }
+  }
+}

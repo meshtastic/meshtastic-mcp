@@ -1,0 +1,112 @@
+[project]
+name = "meshtastic-mcp"
+dynamic = ["version"]
+description = "MCP server + agent skills for AI tooling to discover, drive, observe, and test Meshtastic devices and apps: device discovery, serial/TCP transport, admin, recorder/observability, PlatformIO build/flash (optional), and hardware-free Android-emulator e2e."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "Meshtastic" }]
+keywords = ["meshtastic", "mcp", "lora", "mesh", "testing", "agent", "ai"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Testing",
+  "Topic :: System :: Hardware",
+]
+
+# Portable core: works against any connected device (serial or TCP), no firmware checkout.
+dependencies = [
+  "mcp>=1.2",
+  "pyserial>=3.5",
+  "meshtastic>=2.7.8",
+  "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+# Hardware test harness (pytest + live TUI).
+test = [
+  "pytest>=8",
+  "pytest-html>=4",
+  "pytest-reportlog>=0.4",
+  "pytest-timeout>=2.3",
+  "coverage[toml]>=7",
+  "pytest-cov>=5",
+  "pyyaml>=6",
+  "textual>=0.50",
+]
+# On-device OLED UI testing + `capture_screen` (camera + OCR; ~100 MB models).
+ui = [
+  "opencv-python-headless>=4.9",
+  "numpy>=1.26",
+  "easyocr>=1.7",
+  "Pillow>=10.0",
+  "rich-pixels>=3.0",
+]
+ui-min = ["opencv-python-headless>=4.9", "numpy>=1.26"]
+# The `firmware` capability needs a Meshtastic firmware checkout + PlatformIO `pio`
+# on PATH (not pip-installable) — set MESHTASTIC_FIRMWARE_ROOT.
+# The `emulator` capability needs the `android` CLI + `adb` on PATH (not pip-installable).
+dev = ["ruff>=0.6", "mypy>=1.10", "pytest>=8"]
+
+[project.scripts]
+meshtastic-mcp = "meshtastic_mcp.__main__:main"
+meshtastic-mcp-test-tui = "meshtastic_mcp.cli.test_tui:main"
+
+[project.urls]
+Homepage = "https://github.com/meshtastic/meshtastic-mcp"
+Repository = "https://github.com/meshtastic/meshtastic-mcp"
+Issues = "https://github.com/meshtastic/meshtastic-mcp/issues"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/meshtastic_mcp/_version.py"
+
+[tool.hatch.build.targets.wheel]
+# Skills (SKILL.md + references + helper) live inside the package dir, so hatchling ships
+# them in the wheel automatically — keeping `meshtastic-mcp skills install` version-matched.
+packages = ["src/meshtastic_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "firmware: needs a Meshtastic firmware checkout (variants/pio/userprefs); auto-skipped without MESHTASTIC_FIRMWARE_ROOT",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+  "B008",
+  "SIM105",
+  "SIM108",                 # ternary suggestions hurt readability for CRC/format math
+  "RUF001", "RUF002", "RUF003",  # ambiguous unicode (×, –, −) is intentional in technical prose
+  "RUF012",                 # Textual widgets use class-level mutable defaults by design
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011", "SIM117", "E501"]   # embedded device-output fixtures have long lines
+"src/meshtastic_mcp/cli/**" = ["E501"]    # CLI/TUI embed rich-markup templates + help text
+"src/meshtastic_mcp/camera.py" = ["E501"] # one long ffmpeg-error f-string
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/meshtastic_mcp"]
+ignore_missing_imports = true   # meshtastic / mcp / cv2 / pubsub ship no stubs
+check_untyped_defs = false
+warn_unused_ignores = false
+exclude = ["_version.py"]

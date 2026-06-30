@@ -1,0 +1,25 @@
+<!--
+SPDX-FileCopyrightText: Meshtastic contributors
+SPDX-License-Identifier: GPL-3.0-only
+
+Inbound (device -> app) loop as an agent-evaluated journey. Platform-neutral: the agent uses
+`android layout`/tap (Android) or apple_sim.ui_dump/tap (Apple) as its senses. The device plane
+(mesh_up + recorder) is prepared by the harness before this journey runs; substitute the real
+DUT address for {DUT_ADDR} (Android emulator: 10.0.2.2:<port>; iOS sim/macOS: 127.0.0.1:<port>)
+and a fresh unique token for {TOKEN}.
+-->
+<journey name="inbound-message">
+  <description>
+    A mesh peer broadcasts a text; the app must render the bubble. Connection is over TCP to a
+    virtual meshtasticd node. Dismiss any permission/onboarding dialogs as they appear.
+  </description>
+  <actions>
+    <action>Complete first-run onboarding if shown (grant location/notifications/Siri).</action>
+    <action>Open the Connect screen.</action>
+    <action>Add a manual TCP connection to {DUT_ADDR} (use an existing saved entry if present).</action>
+    <action>Verify the app reports it is connected/subscribed to the radio.</action>
+    <action>Open Messages, then Channels, then the Primary Channel.</action>
+    <action>Wait for an incoming message whose text contains {TOKEN} (the tester broadcasts it).</action>
+    <action>Verify a message bubble containing {TOKEN} is rendered in the Primary Channel.</action>
+  </actions>
+</journey>

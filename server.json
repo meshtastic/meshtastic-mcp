@@ -1,0 +1,60 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.meshtastic/meshtastic-mcp",
+  "description": "Discover, drive, observe, and test Meshtastic devices and companion apps over serial and TCP.",
+  "repository": {
+    "url": "https://github.com/meshtastic/meshtastic-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "meshtastic-mcp",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "MESHTASTIC_FIRMWARE_ROOT",
+          "description": "Path to a Meshtastic firmware checkout. Optional — enables the firmware capability (build/flash/boards/userprefs). Core device/admin/recorder tools work without it.",
+          "isRequired": false
+        },
+        {
+          "name": "MESHTASTIC_MCP_TCP_HOST",
+          "description": "host[:port] of a meshtasticd TCP node to surface in list_devices (default port 4403).",
+          "isRequired": false
+        },
+        {
+          "name": "MESHTASTIC_MCP_DATA_DIR",
+          "description": "Directory for recorder JSONL logs and persistent data. Defaults to platformdirs user-data-dir, then cwd. Set this to keep recorder data in a known location.",
+          "isRequired": false
+        },
+        {
+          "name": "MESHTASTIC_UI_CAMERA_DEVICE",
+          "description": "Camera device index or path for capture_screen (default: 0). Role-specific overrides: MESHTASTIC_UI_CAMERA_DEVICE_TESTER, _DUT, etc.",
+          "isRequired": false
+        },
+        {
+          "name": "MESHTASTIC_UHUBCTL_LOCATION_TESTER",
+          "description": "uhubctl USB hub location for the TESTER role port (e.g. '1-1'). Enables uhubctl_power/uhubctl_cycle against that role. Suffix varies by role: _DUT, _RELAY, etc.",
+          "isRequired": false
+        },
+        {
+          "name": "MESHTASTIC_PIO_BIN",
+          "description": "Path to the PlatformIO CLI binary. Searched in order: this env var, ~/.platformio/penv/bin/pio, then PATH. Only needed if PlatformIO is not on PATH.",
+          "isRequired": false
+        },
+        {
+          "name": "MESHTASTIC_ANDROID_ROOT",
+          "description": "Path to a Meshtastic-Android source checkout (directory containing gradlew). Optional — enables building the APK from source via scripts/build_android_apk.sh. If unset, scripts default to cloning fresh or using a release APK.",
+          "isRequired": false
+        },
+        {
+          "name": "MESHTASTIC_APPLE_ROOT",
+          "description": "Path to a Meshtastic-Apple source checkout (directory containing Meshtastic.xcworkspace). Optional — enables building the iOS Simulator .app from source via scripts/build_apple.sh. If unset, scripts clone fresh.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

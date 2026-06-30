@@ -1,0 +1,294 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch: # on-demand hardware-free e2e (optionally pin component versions)
+    inputs:
+      firmware_ref:
+        description: "meshtastic/firmware ref (sha/tag/branch) for meshtasticd; blank = default"
+        required: false
+        default: ""
+      apple_ref:
+        description: "meshtastic/Meshtastic-Apple ref; blank = default"
+        required: false
+        default: ""
+      android_ref:
+        description: "Meshtastic-Android source ref (sha/tag/branch) to BUILD; blank = use a release APK"
+        required: false
+        default: ""
+      android_apk_ref:
+        description: "Meshtastic-Android release tag for the prebuilt APK; blank = latest (ignored if android_ref set)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 6 * * 1" # weekly Mon 06:00 UTC — run the e2e tier
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # hatch-vcs needs tags
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Ruff lint
+        run: uvx ruff check --output-format=github .
+      - name: Ruff format
+        run: uvx ruff format --check .
+
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: mypy
+        run: uv run --extra dev mypy
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Portable unit tier (hardware- and firmware-free)
+        run: uv run --python ${{ matrix.python-version }} --extra test
+          python -m pytest tests/unit -q --cov=meshtastic_mcp --cov-report=xml
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          fail_ci_if_error: false
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Check the bundled skills shipped in the wheel
+        run: |
+          list=$(python -m zipfile -l dist/*.whl)
+          for f in \
+            meshtastic_mcp/skills/meshtastic-e2e/SKILL.md \
+            meshtastic_mcp/skills/meshtastic-device-ops/SKILL.md \
+            meshtastic_mcp/skills/meshtastic-e2e/references/journeys/inbound.journey.xml ; do
+            echo "$list" | grep -q "$f" || { echo "MISSING from wheel: $f" >&2; exit 1; }
+          done
+          echo "skills bundled OK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  specs:
+    # Audit against the published specs: MCP registry server.json schema + Agent Skills SKILL.md.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Validate server.json (MCP registry schema)
+        run: uvx check-jsonschema --schemafile "$(jq -r '."$schema"' server.json)" server.json
+      - name: Validate bundled skills (Agent Skills spec)
+        run: python3 scripts/validate_skills.py
+
+  # ---------------------------------------------------------------------------
+  # Hardware-free end-to-end tier. Heavy (firmware build + KVM emulator), so it runs on
+  # manual dispatch / weekly schedule, not on every PR. The mesh is `meshtasticd` native
+  # nodes over UDP multicast; the app talks to them over TCP.
+  # See src/meshtastic_mcp/skills/meshtastic-e2e/references/emulator-lab.md.
+  # ---------------------------------------------------------------------------
+
+  # Build the native meshtasticd once (UDP multicast comes from the firmware native
+  # env / framework-portduino #75); both e2e legs consume it.
+  meshtasticd-native:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4 # this repo, for scripts/build_meshtasticd.sh
+      - name: Checkout firmware${{ inputs.firmware_ref && format(' @ {0}', inputs.firmware_ref) || '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: meshtastic/firmware
+          ref: ${{ inputs.firmware_ref }}
+          submodules: recursive
+          fetch-depth: 0 # need history so a sha/tag ref resolves
+          path: firmware
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Native build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgpiod-dev libyaml-cpp-dev libbluetooth-dev libusb-1.0-0-dev \
+            libi2c-dev libuv1-dev openssl libssl-dev libulfius-dev liborcania-dev
+      - name: Build meshtasticd (native)${{ inputs.firmware_ref && format(' @ {0}', inputs.firmware_ref) || '' }}
+        run: |
+          # firmware already checked out at the requested ref; build it + record the sha.
+          sha=$(scripts/build_meshtasticd.sh --env native --firmware-dir firmware \
+            --dest "$GITHUB_WORKSPACE/meshtasticd" | sed -n 's/^meshtasticd-sha=//p')
+          echo "meshtasticd: firmware ${{ inputs.firmware_ref || 'default' }} ($sha)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meshtasticd-native
+          path: meshtasticd
+          if-no-files-found: error
+
+  # Deterministic device-plane loop: mesh + transport + admin (no emulator). The reliable
+  # regression signal — fully self-contained (package + the native binary).
+  device-mesh-e2e:
+    needs: meshtasticd-native
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: meshtasticd-native
+          path: bin
+      - run: chmod +x bin/meshtasticd
+      - name: Inbound loop (tester broadcast -> DUT receives over the mesh)
+        run: uv run --extra test python scripts/ci_device_mesh_e2e.py --binary bin/meshtasticd
+
+  # Full app-plane loop: Android emulator app <- TCP <- native UDP mesh. Heavier and depends
+  # on the `android` dev CLI (the android-cli skill's tool) for UI drive; the device-plane
+  # job above is the lighter must-pass signal.
+  android-e2e:
+    needs: meshtasticd-native
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: meshtasticd-native
+          path: bin
+      - run: chmod +x bin/meshtasticd
+      - name: Set up JDK (for building the app from source)
+        if: inputs.android_ref != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Provide the APK (build from source if android_ref set, else a release)
+        run: |
+          if [ -n "${{ inputs.android_ref }}" ]; then
+            sha=$(scripts/build_android_apk.sh --ref "${{ inputs.android_ref }}" \
+              --dest "$PWD/app.apk" | sed -n 's/^android-sha=//p')
+            echo "Meshtastic-Android: built from source ${{ inputs.android_ref }} ($sha)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            ref="${{ inputs.android_apk_ref }}"
+            api="https://api.github.com/repos/meshtastic/Meshtastic-Android/releases"
+            rel="$api/latest"; [ -n "$ref" ] && rel="$api/tags/$ref"
+            url=$(curl -fsSL "$rel" \
+              | python3 -c "import sys,json;print(next(a['browser_download_url'] for a in json.load(sys.stdin)['assets'] if a['name'].endswith('.apk')))")
+            curl -fsSL "$url" -o app.apk
+            echo "Meshtastic-Android APK: release ${ref:-latest}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Install the `android` dev CLI (UI-drive dependency)
+        # Google's `android` CLI (used by meshtastic_mcp.emulator.avd for run/layout/screen).
+        # Installs to ~/.local/bin; expose it to later steps incl. the emulator-runner script.
+        run: |
+          curl -fsSL https://dl.google.com/android/cli/latest/linux_x86_64/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/android" --version
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Emulator inbound loop
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          script: uv run --extra test python scripts/ci_android_app_loop.py --binary bin/meshtasticd --apk app.apk
+
+  # iOS-Simulator app loop (references/simulator-apple.md), on a macOS runner. Manual-only: the
+  # mesh needs the framework-portduino Darwin multicast fix (#75) + a native-macos UDP build
+  # (#10784) before a macOS runner can host the multicast mesh. The build + drive are wired so
+  # this runs as soon as those land (pin a fork via build_meshtasticd.sh --repo/--ref meanwhile).
+  apple-e2e:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-14
+    env:
+      SIM_NAME: "iPhone 16 Pro"
+      BUNDLE_ID: gvh.MeshtasticClient
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # --- Device plane: native-macos meshtasticd with UDP multicast (needs #75 + #10784) ---
+      - name: Native-macos build deps
+        run: brew install yaml-cpp argp-standalone pkg-config jsoncpp platformio
+      - name: Build meshtasticd (native-macos, UDP multicast)${{ inputs.firmware_ref && format(' @ {0}', inputs.firmware_ref) || '' }}
+        run: |
+          # When #75 lands, the upstream platform-native pin carries the Darwin multicast bind;
+          # until then the build flag is present but loopback won't mesh on Darwin.
+          sha=$(scripts/build_meshtasticd.sh --env native-macos --ref "${{ inputs.firmware_ref }}" \
+            --dest "$GITHUB_WORKSPACE/meshtasticd" | sed -n 's/^meshtasticd-sha=//p')
+          echo "meshtasticd: firmware ${{ inputs.firmware_ref || 'default' }} ($sha)" >> "$GITHUB_STEP_SUMMARY"
+
+      # --- App plane: build the iOS-Simulator app via the shared build script ---
+      - name: Checkout Meshtastic-Apple${{ inputs.apple_ref && format(' @ {0}', inputs.apple_ref) || '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: meshtastic/Meshtastic-Apple
+          ref: ${{ inputs.apple_ref }}
+          fetch-depth: 0
+          path: apple
+      - name: Build Meshtastic.app for the iOS Simulator
+        run: |
+          sha=$(scripts/build_apple.sh \
+            --source-dir apple \
+            --sim "$SIM_NAME" \
+            --dest "$GITHUB_WORKSPACE/Meshtastic.app" \
+            | sed -n 's/^apple-sha=//p')
+          echo "Meshtastic-Apple: ${{ inputs.apple_ref || 'default' }} ($sha)" >> "$GITHUB_STEP_SUMMARY"
+          echo "APP=$GITHUB_WORKSPACE/Meshtastic.app" >> "$GITHUB_ENV"
+      - name: Install idb (UI drive)
+        run: |
+          brew tap facebook/fb && brew trust facebook/fb && brew install facebook/fb/idb-companion
+          brew install python@3.12 && pipx install --python "$(brew --prefix)/bin/python3.12" fb-idb
+
+      - name: iOS Simulator inbound loop
+        run: |
+          uv run --extra test python scripts/ci_apple_app_loop.py \
+            --binary "$GITHUB_WORKSPACE/meshtasticd" --app "$APP" \
+            --bundle-id "$BUNDLE_ID" --sim "$SIM_NAME"

@@ -1,0 +1,21 @@
+# meshtastic-mcp
+
+> MCP server + agent skills for AI tooling to discover, drive, observe, and test Meshtastic
+> devices and the apps that talk to them. Portable core (serial/TCP device admin + recorder +
+> replay/simulated-device streaming with a synthetic-mesh generator and fuzzer), with optional
+> firmware (build/flash), emulator/apple (hardware-free e2e), and local-model offload capabilities.
+> Run `meshtastic-mcp doctor` (or the `doctor` tool) to see + acquire any missing dependencies.
+
+## Docs
+- [README](README.md): install, capabilities, hardware-free e2e overview
+- [AGENTS.md](AGENTS.md): architecture, capability model, rules
+- [CONTRIBUTING](CONTRIBUTING.md): setup + gates
+- [docs/local-models.md](docs/local-models.md): local-model offload (tools, backends, config)
+
+## Skills
+- [meshtastic-device-ops](src/meshtastic_mcp/skills/meshtastic-device-ops/SKILL.md): discover,
+  connect, configure, observe, recover, and flash devices via the MCP tool surface.
+- [meshtastic-e2e](src/meshtastic_mcp/skills/meshtastic-e2e/SKILL.md): closed-loop device<->app
+  testing; references/ has per-loop recipes and the emulator lab.
+- [meshtastic-org-knowledge](src/meshtastic_mcp/skills/meshtastic-org-knowledge/SKILL.md):
+  cross-repo questions about the Meshtastic GitHub org (status, docs, what changed).

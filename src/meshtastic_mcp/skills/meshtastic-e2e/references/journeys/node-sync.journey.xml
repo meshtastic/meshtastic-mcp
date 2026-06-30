@@ -1,0 +1,19 @@
+<!--
+SPDX-FileCopyrightText: Meshtastic contributors
+SPDX-License-Identifier: GPL-3.0-only
+
+Node-sync loop: a beaconed/seeded node must appear in the app's node list. The harness seeds
+or beacons a node with a known short name {NODE_SHORT} on the device plane before/!during this
+journey. {DUT_ADDR} as in inbound.
+-->
+<journey name="node-sync">
+  <description>
+    A node known to the mesh must appear in the app's Nodes list.
+  </description>
+  <actions>
+    <action>Complete onboarding if shown and connect to {DUT_ADDR} over TCP.</action>
+    <action>Open the Nodes screen.</action>
+    <action>Wait for a node whose short name is {NODE_SHORT} to appear in the list.</action>
+    <action>Verify the node {NODE_SHORT} is listed with a recent last-heard time.</action>
+  </actions>
+</journey>

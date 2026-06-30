@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Recorder data + test artifacts
+.mtlog/
+tests/report.html
+tests/junit.xml
+tests/reportlog.jsonl
+tests/fwlog.jsonl
+tests/flash.log
+tests/ui_captures/
+# generated at pytest_sessionfinish; run-varying counts
+tests/tool_coverage.json
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+.DS_Store
+
+# hatch-vcs generated
+src/meshtastic_mcp/_version.py
