@@ -39,6 +39,26 @@ from typing import Any
 EMULATOR_HOST_ALIAS = "10.0.2.2"
 DEFAULT_TCP_PORT = 4403
 
+# Known Meshtastic-Android applicationIds, most-specific first. The fdroid debug
+# build is preferred for e2e (no Play Services deps; TCP connect works everywhere).
+# See scripts/build_android_apk.sh's --variant default (assembleFdroidDebug).
+KNOWN_PACKAGES = (
+    "com.geeksville.mesh.fdroid.debug",
+    "com.geeksville.mesh.google.debug",
+    "com.geeksville.mesh",
+)
+
+# meshtastic://meshtastic/{path} and https://meshtastic.org/{path} both resolve
+# through the same in-app DeepLinkRouter (core/navigation). The custom scheme
+# needs no App Link verification and is the fastest way to drive navigation from
+# adb/automation. See docs/en/developer/navigation-and-deep-links.md.
+DEEPLINK_SCHEME = "meshtastic://meshtastic"
+
+# The app's internal "no device selected" sentinel — passing this as the
+# `?address=` value on the /connections deep link disconnects instead of
+# connecting (added alongside the connect-by-address deep link).
+NO_DEVICE_SELECTED = "n"
+
 
 class EmulatorError(RuntimeError):
     pass
@@ -306,6 +326,80 @@ def is_app_installed(package: str, serial: str | None = None) -> bool:
     return any(line.strip() == f"package:{package}" for line in out.splitlines())
 
 
+def resolve_package(serial: str | None = None) -> str | None:
+    """Find whichever Meshtastic-Android applicationId is installed on the device.
+
+    Tries `KNOWN_PACKAGES` in order (fdroid debug preferred). Returns None if
+    none are installed. Needed because the app ships under several
+    applicationIds depending on build variant/flavor (fdroid vs google, debug
+    vs release), and a single device may have more than one installed side by
+    side (they don't collide — different applicationIds).
+    """
+    for pkg in KNOWN_PACKAGES:
+        if is_app_installed(pkg, serial=serial):
+            return pkg
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Deep links (fast, version-resilient navigation — prefer over UI taps)
+# ---------------------------------------------------------------------------
+def deeplink(path: str, *, serial: str | None = None, package: str | None = None) -> None:
+    """Fire a Meshtastic-Android deep link via `am start -a VIEW`.
+
+    `path` is the part after the host, e.g. `connections?address=t192.168.1.1:4403`,
+    `nodes`, `map/3`, `settings/helpDocs`. See
+    docs/en/developer/navigation-and-deep-links.md (or `DeepLinkRouter.route()`
+    KDoc in the app source) for the full, current list of supported paths.
+
+    Targets the resolved package explicitly (`resolve_package()` if not given)
+    so the intent lands even when the app isn't already foregrounded. Safe to
+    call before the app has completed first-run onboarding: the app applies a
+    pending deep-link route once onboarding clears rather than dropping it
+    (verified live against 2.8.0 fdroid debug, 2026-07-01) — no need to dismiss
+    onboarding screens first.
+    """
+    pkg = package or resolve_package(serial=serial)
+    uri = f"{DEEPLINK_SCHEME}/{path.lstrip('/')}"
+    args = ["shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", uri]
+    if pkg:
+        args.append(pkg)
+    adb(*args, serial=serial, check=False)
+
+
+def connect_app_via_deeplink(
+    address: str, *, serial: str | None = None, package: str | None = None
+) -> None:
+    """Connect the app to a device by address via the `/connections?address=` deep link.
+
+    `address` is the app's internal transport-prefixed format:
+      - `t<host>:<port>` — TCP, e.g. `t192.168.1.168:4403` or `t127.0.0.1:4403`
+      - `x<AA:BB:CC:DD:EE:FF>` — BLE MAC
+      - `s<path>` — serial/USB, e.g. `s/dev/ttyUSB0`
+
+    Requires Meshtastic-Android built from `main` @ 60119ce9d (2026-07-01,
+    meshtastic/Meshtastic-Android#6036) or later. Older builds ignore the
+    `address` param (deep link still opens the Connections screen, just
+    doesn't auto-connect) — `connect_app_to_tcp()` falls back to UI taps in
+    that case, so prefer that entry point unless you know the app is new
+    enough.
+
+    One shell call, no UI-tree parsing, no dependency on button positions/
+    labels — use this instead of `connect_app_to_tcp`'s UI-tap fallback
+    whenever the app build is known to include the address param.
+    """
+    deeplink(f"connections?address={address}", serial=serial, package=package)
+
+
+def disconnect_app_via_deeplink(*, serial: str | None = None, package: str | None = None) -> None:
+    """Disconnect the app's current device via `/connections?address=n`.
+
+    `n` is the app's internal "no device selected" sentinel (`NO_DEVICE_SELECTED`).
+    Same version requirement as `connect_app_via_deeplink`.
+    """
+    deeplink(f"connections?address={NO_DEVICE_SELECTED}", serial=serial, package=package)
+
+
 # ---------------------------------------------------------------------------
 # TCP connectivity
 # ---------------------------------------------------------------------------
@@ -399,6 +493,14 @@ def _ui_dump_physical(serial: str) -> list[dict[str, Any]]:
         xml_start = out.find("<hierarchy")
     if xml_start > 0:
         out = out[xml_start:]
+    # Some uiautomator versions (observed live on Pixel 6a / Android 17) also
+    # append the same status message *after* the closing tag on the same line,
+    # with no separating newline ("...</hierarchy>UI hierchary dumped to: ..."),
+    # which trips ET.fromstring with "junk after document element". Truncate at
+    # the true end of the XML document rather than trusting EOF.
+    xml_end = out.rfind("</hierarchy>")
+    if xml_end != -1:
+        out = out[: xml_end + len("</hierarchy>")]
     return _parse_uiautomator_xml(out)
 
 
@@ -604,21 +706,74 @@ def connect_app_to_tcp(
     *,
     serial: str | None = None,
     settle_s: float = 1.5,
+    confirm_timeout_s: float = 20.0,
+    prefer_deeplink: bool = True,
+    force_reconnect: bool = False,
 ) -> bool:
-    """Drive Meshtastic-Android's "Add device → IP" flow to connect to a TCP node.
+    """Connect the app to a TCP node at `host:port`.
 
     For emulators, pass host=EMULATOR_HOST_ALIAS (default).
     For physical devices, call tcp_dut_address(serial=serial) first to set up the
-    adb reverse tunnel, then pass host="127.0.0.1".
+    adb reverse tunnel, then pass host="127.0.0.1" (or any LAN-reachable host the
+    phone can already route to — the reverse tunnel is only needed when the phone
+    can't otherwise reach the host, e.g. no shared Wi-Fi).
 
-    Codifies the navigation validated live 2026-06-24 against Meshtastic-Android 2.8:
+    Fast path (`prefer_deeplink=True`, default): fires the `/connections?address=`
+    deep link (meshtastic/Meshtastic-Android#6036, merged 2026-07-01) — one `adb
+    shell am start`, no UI-tree parsing, works even mid-onboarding, version-
+    resilient to layout changes. Falls back to the legacy UI-tap flow below if the
+    "Not connected" label doesn't clear within `confirm_timeout_s` (covers app
+    builds predating the deep link, or a slow/failed connection where the fallback
+    won't help either — caller should still verify the final result via the
+    device-plane oracle, e.g. `replay_status().connected`, which is authoritative;
+    UI text is a best-effort signal only). `confirm_timeout_s` defaults generously
+    (20s) because a real handshake + full NodeDB download over TCP visibly takes
+    longer than a UI-animation settle — verified live: ~10-30s for a 20-40 node
+    capture on a Pixel 6a, occasionally longer. Don't shrink this to `settle_s`-ish
+    values; that just makes the (slower, less reliable) UI-tap fallback fire while
+    the deep-link connect is still in flight. Note: the Connections screen's
+    "Disconnect" button label is present regardless of connection state — don't
+    use it as a connected signal, use the absence of "Not connected" instead
+    (what this does).
+
+    **Sticky address / auto-reconnect** (verified live 2026-07-01): once the app
+    has an address configured, it keeps retrying that address indefinitely on its
+    own — a dropped TCP session (e.g. the DUT/replay session restarting) gets
+    silently reconnected with no further deep link needed. The converse: re-firing
+    `?address=` with the *same* value the app is already using/retrying may be a
+    Compose no-op (`LaunchedEffect(key.address)` doesn't restart for an unchanged
+    key) — you can't tell from that call alone whether it did anything. Only an
+    explicit `/connections?address=n` disconnect (`disconnect_app_via_deeplink`)
+    stops the retries. Pass `force_reconnect=True` to disconnect first, guaranteeing
+    a fresh, observable handshake even when reconnecting to the same address
+    (e.g. after swapping which DUT/replay session is listening on that port).
+
+    Legacy UI-tap flow (`prefer_deeplink=False`, or deep-link confirm timeout):
+    codifies the navigation validated live 2026-06-24 against Meshtastic-Android 2.8:
       onboarding Skip ×3 → Connection screen → ensure TCP transport on →
       "Add device manually…" → type address (Port defaults to 4403) → Add.
-
     Best-effort + UI-driven; layout can shift between app versions, so callers should
     verify the result (e.g. `poll_for_text("Disconnect")` or the node short name).
-    Returns True if the Add action was issued.
+
+    Returns True if a connect action was issued (deep link fired, or the UI Add
+    action was issued) — not a guarantee of an established connection either way.
     """
+    if prefer_deeplink:
+        if force_reconnect:
+            disconnect_app_via_deeplink(serial=serial)
+            time.sleep(settle_s)
+        connect_app_via_deeplink(f"t{host}:{port}", serial=serial)
+        deadline = time.monotonic() + confirm_timeout_s
+        while time.monotonic() < deadline:
+            try:
+                if not find_text("Not connected", serial=serial):
+                    return True
+            except EmulatorError:
+                pass  # transient dump failure (mid-animation) — keep polling
+            time.sleep(0.5)
+        # Fall through to the UI-tap flow — either an old app build ignoring
+        # `?address=`, or a still-in-flight/failed connection the caller must
+        # verify regardless. Cheap to attempt; a harmless no-op if already wired.
     # 1. Dismiss onboarding permission pages (BLE/Location/Notifications) — Skip up to 4x.
     for _ in range(4):
         if not _tap_text("Skip", serial=serial):
