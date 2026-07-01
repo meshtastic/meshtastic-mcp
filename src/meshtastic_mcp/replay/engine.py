@@ -28,12 +28,30 @@ import struct
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from meshtastic.protobuf import channel_pb2, config_pb2, mesh_pb2
 
+from ..recorder.recorder import _default_dir as _recorder_default_dir
+from ..recorder.rotating import _RotatingJsonl
 from .capture import Capture, node_to_nodeinfo
 from .fuzz import FuzzConfig, Fuzzer
+
+
+def _replay_log_dir() -> Path:
+    """Per-session replay lifecycle logs, alongside the recorder's `.mtlog/`.
+
+    Every replay session gets its own append-only JSONL
+    (`<data_dir>/replay-logs/<session_id>.jsonl`) recording lifecycle events
+    (start/connect/disconnect/stop) and a final traffic+fuzz summary — so a
+    soak-test run can be analyzed after the fact without having had to poll
+    `replay_status()` live and capture it yourself. Shares the recorder's data
+    dir resolution (`$MESHTASTIC_MCP_DATA_DIR` override / platformdirs / cwd)
+    so both land under the same root.
+    """
+    return _recorder_default_dir().parent / "replay-logs"
+
 
 START1 = 0x94
 START2 = 0xC3
@@ -76,6 +94,38 @@ def local_ips() -> list[str]:
 # ── Frame helpers ────────────────────────────────────────────────────────────
 def _frame(payload: bytes) -> bytes:
     return bytes([START1, START2]) + struct.pack(">H", len(payload)) + payload
+
+
+def _set_send_timeout(sock: socket.socket, seconds: float) -> None:
+    """Bound only `send()`/`sendall()` on `sock`, leaving `recv()` blocking indefinitely.
+
+    Root-cause note (found 2026-07-01 investigating spurious ~10-290s disconnects
+    against a real Android app, reproduced with fuzz completely off): the old code
+    called `sock.settimeout(seconds)`, which in Python governs *every* blocking
+    call on the socket — recv() as well as send(). This protocol is push-mostly
+    (FromRadio flows server→client continuously; ToRadio flows client→server only
+    for user-initiated actions / occasional heartbeats), so idle gaps on the read
+    side of many seconds — or minutes — are completely normal, not a sign of a
+    stuck client. With a shared 10s timeout, `_read_toradio()`'s `sock.recv(1)`
+    would raise `TimeoutError("timed out")` the moment the client went 10s without
+    sending anything, and `_accept_loop` caught that as `(OSError, ConnectionError)`
+    and tore down an otherwise-healthy connection — misreported as the *app*
+    stalling when it was actually the server's own read-side timeout firing.
+    `SO_SNDTIMEO` is a genuine kernel-level option that only bounds send()s
+    (protects the server's push loop from a receiver that stops draining its
+    socket buffer, e.g. under `fuzz`'s flooder or a slow/backgrounded app) and
+    leaves recv() to block forever, matching this protocol's real traffic shape.
+    No-op (falls back to the old shared-timeout behavior) on platforms without
+    `SO_SNDTIMEO` (Windows) — fine since replay is a dev/CI tool, not prod.
+    """
+    if seconds <= 0:
+        return
+    if hasattr(socket, "SO_SNDTIMEO"):
+        secs = int(seconds)
+        usecs = int((seconds - secs) * 1_000_000)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, struct.pack("ll", secs, usecs))
+    else:  # pragma: no cover - Windows fallback
+        sock.settimeout(seconds)
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
@@ -139,7 +189,8 @@ class ReplayParams:
     # Replay Clock: post a kickoff + periodic "ETA — done/total" to the busiest
     # channel so you can see, from inside the app, that it's a replay. 0 = off.
     announce_interval: float = 0.0
-    send_timeout: float = 10.0  # SO_SNDTIMEO seconds; a stalled app can't hang us. 0 = none
+    # true SO_SNDTIMEO seconds; a stalled app can't hang our sends. 0 = none
+    send_timeout: float = 10.0
 
 
 @dataclass
@@ -175,12 +226,36 @@ class ReplaySession:
             started_at=time.time(),
         )
         self._srv: socket.socket | None = None
+        self._client: socket.socket | None = None  # currently-connected client, if any
         self._ch_index = {name: i for i, name in enumerate(capture.channels)}
         # live-injection queue: (MeshPacket, channel_name, fuzz) drained per client
         self._inject_q: queue.Queue[tuple[mesh_pb2.MeshPacket, str, bool]] = queue.Queue()
         self.fuzzer: Fuzzer | None = (
             Fuzzer(params.fuzz, capture.nodes, self._ch_index) if params.fuzz else None
         )
+        # Per-session lifecycle log — every session gets its own JSONL under
+        # `_replay_log_dir()` so a soak-test run can be analyzed after the fact
+        # (start/connect/disconnect/stop + a status snapshot at each transition)
+        # without having had to poll `replay_status()` live yourself.
+        self._log = _RotatingJsonl(_replay_log_dir() / f"{sid}.jsonl")
+        self._log_event(
+            "session_created",
+            capture=capture.label,
+            packets_total=len(window),
+            params={
+                "host": params.host,
+                "port": params.port,
+                "rate": params.rate,
+                "speed": params.speed,
+                "loop": params.loop,
+                "send_timeout": params.send_timeout,
+                "fuzz": params.fuzz.name if params.fuzz else None,
+            },
+        )
+
+    def _log_event(self, kind: str, **fields: Any) -> None:
+        with contextlib.suppress(Exception):  # logging must never break the session
+            self._log.write({"t": time.time(), "kind": kind, "session_id": self.state.id, **fields})
 
     # -- lifecycle --
     def start(self) -> None:
@@ -190,6 +265,7 @@ class ReplaySession:
             srv.bind((self.params.host, self.params.port))
         except OSError as exc:
             srv.close()
+            self._log_event("bind_failed", error=str(exc))
             raise PortInUseError(
                 f"cannot bind {self.params.host}:{self.params.port} ({exc}). "
                 f"Another server is using it — stop it (replay_stop), or pass port=0 "
@@ -203,14 +279,25 @@ class ReplaySession:
         t = threading.Thread(target=self._accept_loop, name=f"replay-{self.state.id}", daemon=True)
         self.state.thread = t
         t.start()
+        self._log_event("listening", host=self.params.host, port=self.params.port)
 
     def stop(self) -> None:
+        self._log_event("stop_requested")
         self.state.stop.set()
         if self._srv is not None:
             try:
                 self._srv.close()
             except OSError:
                 pass
+        # The client socket's recv() side is intentionally left blocking with no
+        # timeout (see `_set_send_timeout`) since idle read gaps are normal for
+        # this protocol — closing `_srv` alone won't unblock an already-accepted,
+        # idly-connected client's `_read_toradio()`. shutdown() reliably interrupts
+        # a blocking recv() from another thread (unlike close(), which risks an FD-
+        # reuse race); best-effort since the client may have already disconnected.
+        if self._client is not None:
+            with contextlib.suppress(OSError):
+                self._client.shutdown(socket.SHUT_RDWR)
 
     # -- server loop --
     def _accept_loop(self) -> None:
@@ -224,10 +311,13 @@ class ReplaySession:
                 except OSError:
                     break
                 client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                if self.params.send_timeout:
-                    client.settimeout(self.params.send_timeout)
+                _set_send_timeout(client, self.params.send_timeout)
                 self.state.client_addr = f"{addr[0]}:{addr[1]}"
                 self.state.connected = True
+                self._client = client
+                self.state.error = None  # clear any prior disconnect's error on a fresh connect
+                self._log_event("client_connected", client=self.state.client_addr)
+                packets_before = self.state.packets_sent
                 try:
                     self._serve_client(client)
                 except (OSError, ConnectionError) as exc:
@@ -238,6 +328,15 @@ class ReplaySession:
                     except OSError:
                         pass
                     self.state.connected = False
+                    self._client = None
+                    self._log_event(
+                        "client_disconnected",
+                        client=self.state.client_addr,
+                        error=self.state.error,
+                        packets_sent_this_connection=self.state.packets_sent - packets_before,
+                        packets_sent_total=self.state.packets_sent,
+                        fuzz=self.fuzzer.status() if self.fuzzer is not None else None,
+                    )
                 if not self.params.loop:
                     break
         finally:
@@ -246,6 +345,13 @@ class ReplaySession:
             except OSError:
                 pass
             self.state.ended = True
+            self._log_event(
+                "session_ended",
+                packets_sent_total=self.state.packets_sent,
+                error=self.state.error,
+                fuzz=self.fuzzer.status() if self.fuzzer is not None else None,
+            )
+            self._log.close()
 
     def _serve_client(self, client: socket.socket) -> None:
         send_lock = threading.Lock()
