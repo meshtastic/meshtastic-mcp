@@ -224,6 +224,40 @@ def _sdr_check() -> Check:
     )
 
 
+def _sdk_cli_check() -> Check:
+    """Kotlin-SDK device-IO bridge (`sdk_*` tools): needs the meshtastic-sdk sample
+    `cli` launcher resolvable via $MESHTASTIC_MCP_SDK_CLI or a $MESHTASTIC_SDK_ROOT
+    checkout with `:samples:cli:installDist` built. Experimental / opt-in.
+    """
+    from . import sdk_cli
+
+    path = sdk_cli.cli_path()
+    if path is None:
+        return Check(
+            "sdk-cli",
+            "sdk",
+            STATUS_MISSING,
+            "experimental Kotlin-SDK device-IO bridge (sdk_status / sdk_device_info / "
+            "sdk_list_nodes / sdk_send_text)",
+            detail="cli launcher not resolvable",
+            fix=(
+                "git clone https://github.com/meshtastic/meshtastic-sdk && "
+                "cd meshtastic-sdk && ./gradlew :samples:cli:installDist, then set "
+                "MESHTASTIC_SDK_ROOT to that checkout (or MESHTASTIC_MCP_SDK_CLI to the launcher)"
+            ),
+            env_override=sdk_cli.CLI_ENV,
+        )
+    return Check(
+        "sdk-cli",
+        "sdk",
+        STATUS_OK,
+        "experimental Kotlin-SDK device-IO bridge (sdk_status / sdk_device_info / "
+        "sdk_list_nodes / sdk_send_text)",
+        detail=path,
+        env_override=sdk_cli.CLI_ENV,
+    )
+
+
 def _pio_check() -> Check:
     try:
         path = config.pio_bin()
@@ -578,6 +612,8 @@ def run() -> DoctorReport:
         ),
         # sdr capability (RF compliance oracle)
         _sdr_check(),
+        # sdk capability (experimental Kotlin-SDK device-IO bridge)
+        _sdk_cli_check(),
     ]
     return DoctorReport(
         platform=f"{platform.system()} {platform.machine()} / Python {platform.python_version()}",

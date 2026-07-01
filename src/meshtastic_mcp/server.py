@@ -39,6 +39,7 @@ from . import (
 from . import (
     doctor as doctor_mod,
 )
+from . import sdk_cli as sdk_cli_mod
 from . import userprefs as userprefs_mod
 from .recorder import get_recorder
 from .replay import ReplayParams
@@ -148,6 +149,22 @@ def sdr_tool(*args: Any, **kwargs: Any):
 
     def deco(fn):
         if CAPS.sdr:
+            return app.tool(*args, **kwargs)(fn)
+        return fn
+
+    return deco
+
+
+def sdk_tool(*args: Any, **kwargs: Any):
+    """Like `@app.tool()` but only registers when the Kotlin SDK CLI is present.
+
+    Gates the experimental device-IO bridge tools that shell out to the
+    meshtastic-sdk headless JVM CLI (an alternative to the Python `meshtastic`
+    library); plain installs without the CLI are unaffected.
+    """
+
+    def deco(fn):
+        if CAPS.sdk_cli:
             return app.tool(*args, **kwargs)(fn)
         return fn
 
@@ -544,6 +561,58 @@ def local_model_serve_stop() -> dict[str, Any]:
     from . import llama_server
 
     return llama_server.stop()
+
+
+@sdk_tool()
+def sdk_status() -> dict[str, Any]:
+    """Report the Kotlin-SDK device-IO bridge: whether the CLI launcher resolves.
+
+    Experimental alternative device backend that shells out to the meshtastic-sdk
+    headless JVM CLI (BLE/TCP/serial engine) instead of the Python `meshtastic`
+    library. Set ``MESHTASTIC_MCP_SDK_CLI`` (or ``MESHTASTIC_SDK_ROOT``).
+    """
+    return sdk_cli_mod.status()
+
+
+@sdk_tool()
+def sdk_device_info(transport: str, timeout_ms: int = 15000) -> dict[str, Any]:
+    """One-shot device snapshot via the Kotlin SDK CLI (own node + node count).
+
+    ``transport`` accepts ``tcp:host[:port]`` / ``serial:port[:baud]`` /
+    ``ble:needle`` (or ``tcp://host`` / a serial device path). Returns the parsed
+    ``info`` envelope plus the full envelope stream; ``ok=False`` with ``error``
+    on a device-level failure. The Kotlin engine owns the link in a JVM subprocess.
+    """
+    return sdk_cli_mod.device_info(transport, timeout_ms=timeout_ms)
+
+
+@sdk_tool()
+def sdk_list_nodes(transport: str, timeout_ms: int = 15000) -> dict[str, Any]:
+    """Snapshot the device node DB via the Kotlin SDK CLI (read-only).
+
+    Returns each node's wire-JSON under ``nodes`` (from the CLI's ``node``
+    envelopes). ``transport`` syntax as in ``sdk_device_info``.
+    """
+    return sdk_cli_mod.list_nodes(transport, timeout_ms=timeout_ms)
+
+
+@sdk_tool()
+def sdk_send_text(
+    transport: str,
+    message: str,
+    to: str = "BROADCAST",
+    channel: int = 0,
+    await_ms: int = 30000,
+    timeout_ms: int = 15000,
+) -> dict[str, Any]:
+    """Transmit a text message via the Kotlin SDK CLI and await the outcome.
+
+    Device-mutating: injects a mesh packet. ``to`` is ``BROADCAST``, a decimal
+    node num, or ``0xHEX``. Waits up to ``await_ms`` for Acked/Delivered/Failed.
+    """
+    return sdk_cli_mod.send_text(
+        transport, message, to=to, channel=channel, await_ms=await_ms, timeout_ms=timeout_ms
+    )
 
 
 @app.tool()
@@ -2158,6 +2227,9 @@ _READ_ONLY = {
     "triage_window",  # reads device window (+optional screenshot); no mutation
     "local_model_status",  # reports backend/reachability; no mutation
     "rf_scan",  # passive SDR capture; no device/host mutation
+    "sdk_status",  # reports SDK-CLI bridge availability; no mutation
+    "sdk_device_info",  # reads device snapshot via the Kotlin SDK CLI; no mutation
+    "sdk_list_nodes",  # reads the device node DB via the Kotlin SDK CLI; no mutation
 }
 # Destructive: irreversible or device-state-mutating (most are confirm-gated too).
 _DESTRUCTIVE = {
@@ -2207,6 +2279,7 @@ _DESTRUCTIVE = {
     "replay_inject",  # emits packets onto the live connection
     "local_model_serve",  # spawns a detached llama-server process (and may install it)
     "local_model_serve_stop",  # terminates the managed llama-server process
+    "sdk_send_text",  # injects a mesh packet via the Kotlin SDK CLI; cannot be recalled
 }
 # Idempotent writes: calling with identical args leaves the device in identical
 # state. Clients can safely retry these on timeout without side-effects.

@@ -90,6 +90,18 @@ def has_llama_server() -> bool:
     return llama_server.available()
 
 
+def has_sdk_cli() -> bool:
+    """True when the Meshtastic Kotlin SDK ``cli`` launcher is resolvable.
+
+    Optional: enables the experimental device-IO tools that shell out to the
+    Kotlin SDK's headless JVM CLI (BLE/TCP/serial engine) as an alternative to
+    the Python ``meshtastic`` library. Resolution is path-only (no JVM spawn).
+    """
+    from . import sdk_cli
+
+    return sdk_cli.available()
+
+
 @dataclass(frozen=True)
 class Capabilities:
     firmware: bool
@@ -99,6 +111,7 @@ class Capabilities:
     local_model: bool
     llama_server: bool
     sdr: bool
+    sdk_cli: bool
 
     def summary(self) -> str:
         active = [
@@ -111,6 +124,7 @@ class Capabilities:
                 ("local_model", self.local_model),
                 ("llama_server", self.llama_server),
                 ("sdr", self.sdr),
+                ("sdk_cli", self.sdk_cli),
             )
             if on
         ]
@@ -126,4 +140,5 @@ def detect() -> Capabilities:
         local_model=has_local_model(),
         llama_server=has_llama_server(),
         sdr=has_sdr(),
+        sdk_cli=has_sdk_cli(),
     )
