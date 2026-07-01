@@ -51,6 +51,23 @@ def has_apple() -> bool:
     return shutil.which("xcrun") is not None
 
 
+def has_sdr() -> bool:
+    """True when `pyrtlsdr` is importable and at least one RTL-SDR is attached.
+
+    Gates the RF-compliance oracle tools (`rf_scan`, `rf_confirm_tx`): an
+    independent on-air check of a device's configured region/preset/frequency
+    against what it actually transmits. Needs the ``sdr`` extra
+    (``pip install 'meshtastic-mcp[sdr]'``) plus ``librtlsdr`` on the system
+    (e.g. ``apt install librtlsdr-dev rtl-sdr``).
+    """
+    from . import sdr
+
+    try:
+        return len(sdr.list_devices()) > 0
+    except sdr.SdrError:
+        return False
+
+
 def has_local_model() -> bool:
     """True when a local Ollama instance is reachable (offload tools are usable).
 
@@ -81,6 +98,7 @@ class Capabilities:
     apple: bool
     local_model: bool
     llama_server: bool
+    sdr: bool
 
     def summary(self) -> str:
         active = [
@@ -92,6 +110,7 @@ class Capabilities:
                 ("apple", self.apple),
                 ("local_model", self.local_model),
                 ("llama_server", self.llama_server),
+                ("sdr", self.sdr),
             )
             if on
         ]
@@ -106,4 +125,5 @@ def detect() -> Capabilities:
         apple=has_apple(),
         local_model=has_local_model(),
         llama_server=has_llama_server(),
+        sdr=has_sdr(),
     )
