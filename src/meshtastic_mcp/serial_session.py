@@ -15,6 +15,7 @@ thread draining stdout into a bounded ring buffer. Callers pull lines via
 from __future__ import annotations
 
 import collections
+import os
 import subprocess
 import threading
 import time
@@ -23,6 +24,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import boards, config
+
+try:  # POSIX only; pio/meshtastic-mcp targets Linux/macOS hosts.
+    import pty
+except ImportError:  # pragma: no cover - Windows fallback
+    pty = None  # type: ignore[assignment]
 
 _BUFFER_MAX_LINES = 10_000
 _POLL_NEW_PORT_TIMEOUT_S = 3.0
@@ -36,6 +42,11 @@ class SerialSession:
     filters: list[str]
     env: str | None
     proc: subprocess.Popen
+    # Master side of the pty we hand the subprocess as stdin (see open_session).
+    # Kept open for the session lifetime: closing it early sends SIGHUP to the
+    # child (it's holding the controlling terminal via the slave fd). None on
+    # platforms without pty support (Windows) or if pty setup failed.
+    _stdin_master_fd: int | None = None
     buffer: collections.deque = field(
         default_factory=lambda: collections.deque(maxlen=_BUFFER_MAX_LINES)
     )
@@ -155,14 +166,44 @@ def open_session(
     binary = str(config.pio_bin())
     work_dir = str(config.firmware_root())
 
-    proc = subprocess.Popen(
-        [binary, *args],
-        cwd=work_dir,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,  # line-buffered
-    )
+    # `pio device monitor` -> pyserial miniterm builds a `Console()` that calls
+    # termios.tcgetattr() on its stdin unconditionally (even though we never
+    # send it keystrokes). When this MCP server itself has no controlling tty
+    # (the normal case — it's driven over stdio JSON-RPC, not a terminal), the
+    # inherited stdin is a pipe/socket and tcgetattr raises
+    # `termios.error: (25, 'Inappropriate ioctl for device')`, crashing pio
+    # before it ever opens the serial port. Fix: hand the child a pty slave as
+    # stdin instead of inheriting ours — it satisfies tcgetattr without
+    # requiring a real interactive terminal. The master fd is kept open for
+    # the session's lifetime (closing it early delivers SIGHUP to the child,
+    # which owns the slave as its controlling terminal via start_new_session).
+    stdin_master_fd: int | None = None
+    popen_kwargs: dict[str, Any] = {}
+    if pty is not None:
+        try:
+            stdin_master_fd, slave_fd = pty.openpty()
+        except OSError:
+            stdin_master_fd = None
+    if stdin_master_fd is not None:
+        popen_kwargs["stdin"] = slave_fd
+        popen_kwargs["start_new_session"] = True  # slave becomes the child's controlling tty
+    else:
+        popen_kwargs["stdin"] = subprocess.DEVNULL
+
+    try:
+        proc = subprocess.Popen(
+            [binary, *args],
+            cwd=work_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # line-buffered
+            **popen_kwargs,
+        )
+    finally:
+        if stdin_master_fd is not None:
+            # Parent doesn't need the slave once the child has dup'd it onto fd 0.
+            os.close(slave_fd)
 
     session = SerialSession(
         id=uuid.uuid4().hex,
@@ -171,6 +212,7 @@ def open_session(
         filters=effective_filters,
         env=env,
         proc=proc,
+        _stdin_master_fd=stdin_master_fd,
     )
     t = threading.Thread(target=_drain, args=(session,), daemon=True)
     t.start()
@@ -235,6 +277,12 @@ def close_session(session: SerialSession) -> bool:
                 pass  # already SIGKILLed; reap will happen eventually
     if session._thread is not None:
         session._thread.join(timeout=3)
+    if session._stdin_master_fd is not None:
+        try:
+            os.close(session._stdin_master_fd)
+        except OSError:
+            pass
+        session._stdin_master_fd = None
     session.stopped_at = session.stopped_at or time.time()
     return True
 
