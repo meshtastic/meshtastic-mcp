@@ -23,14 +23,41 @@ request.
 
 from __future__ import annotations
 
+import logging
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 
 from . import devices, registry
 
+log = logging.getLogger("meshtastic_mcp.connection")
+
 DEFAULT_TCP_PORT = 4403
 TCP_SCHEME = "tcp://"
 TCP_HOST_ENV = "MESHTASTIC_MCP_TCP_HOST"
+
+# Upper bound on a graceful close. `iface.close()` sends a disconnect, and if the
+# device just rebooted (factory_reset / reboot / shutdown) the meshtastic library
+# loops forever waiting for TX-queue space that never frees — a 600s test hang in
+# the wild. We close on a daemon thread and abandon it after this long; the OS
+# reclaims the fd when the device re-enumerates or this process exits.
+_CLOSE_TIMEOUT_S = 5.0
+
+
+def _close_bounded(iface) -> None:
+    done = threading.Event()
+
+    def _close() -> None:
+        try:
+            iface.close()
+        except Exception:
+            pass
+        finally:
+            done.set()
+
+    threading.Thread(target=_close, daemon=True).start()
+    if not done.wait(_CLOSE_TIMEOUT_S):
+        log.warning("iface.close() did not return in %ss — abandoning it", _CLOSE_TIMEOUT_S)
 
 
 class ConnectionError(RuntimeError):
@@ -179,10 +206,7 @@ def connect(port: str | None = None, timeout_s: float = 8.0) -> Iterator:
             yield iface
         finally:
             if iface is not None:
-                try:
-                    iface.close()
-                except Exception:
-                    pass
+                _close_bounded(iface)
             try:
                 lock.release()
             except RuntimeError:
@@ -216,10 +240,7 @@ def connect(port: str | None = None, timeout_s: float = 8.0) -> Iterator:
         yield iface
     finally:
         if iface is not None:
-            try:
-                iface.close()
-            except Exception:
-                pass
+            _close_bounded(iface)
         try:
             lock.release()
         except RuntimeError:

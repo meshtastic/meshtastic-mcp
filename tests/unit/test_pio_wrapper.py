@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """`pio.py` subprocess wrapper: error paths, tailing, JSON parsing.
 
 Uses a real `pio` install only for the happy-path `--version`; error paths are
@@ -22,6 +25,7 @@ def test_tail_lines_handles_trailing_newline() -> None:
     assert pio.tail_lines("a\nb\nc\n", 2) == "b\nc"
 
 
+@pytest.mark.firmware
 def test_pio_version_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy path: `pio --version` exits 0 and prints a version string.
 
@@ -37,6 +41,7 @@ def test_pio_version_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.duration_s > 0
 
 
+@pytest.mark.firmware
 def test_pio_bad_command_raises_pio_error() -> None:
     """`pio` returning non-zero must surface as PioError with stderr captured."""
     with pytest.raises(pio.PioError) as excinfo:
@@ -45,6 +50,7 @@ def test_pio_bad_command_raises_pio_error() -> None:
     assert excinfo.value.returncode != 0
 
 
+@pytest.mark.firmware
 def test_pio_timeout_raises_pio_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """Extremely short timeout on a command that takes longer must raise PioTimeout."""
     # `pio` startup alone typically takes ~200-500ms; a 1ms timeout reliably trips.
@@ -52,6 +58,7 @@ def test_pio_timeout_raises_pio_timeout(monkeypatch: pytest.MonkeyPatch) -> None
         pio.run(["--help"], timeout=0.001)
 
 
+@pytest.mark.firmware
 def test_run_json_parses_device_list() -> None:
     """`pio device list --json-output` is a known-valid JSON producer."""
     try:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """`boards.py` filter and enumeration correctness.
 
 Runs against the real `pio project config` output of this firmware repo —
@@ -10,6 +13,8 @@ from __future__ import annotations
 import pytest
 
 from meshtastic_mcp import boards
+
+pytestmark = pytest.mark.firmware
 
 
 def test_list_boards_returns_many() -> None:

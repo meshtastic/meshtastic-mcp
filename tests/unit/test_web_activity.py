@@ -139,6 +139,7 @@ def test_flash_line_cb_filters_and_phases():
     assert act.phases == ["compiling", "compiling", "uploading", "uploading"]
 
 
+@pytest.mark.firmware
 def test_flash_forwards_filtered_lines_through_pio(monkeypatch):
     """flash.flash() wires progress_cb straight into pio.run's line_cb, so a
     streamed pio line reaches the caller's callback."""

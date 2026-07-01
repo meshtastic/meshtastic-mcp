@@ -60,9 +60,37 @@ from meshtastic_mcp import (
 from meshtastic_mcp import config as mcp_config
 from meshtastic_mcp import devices as devices_module
 
-from . import tool_coverage
+from . import (
+    _bench,
+    tool_coverage,
+)
 
 # ---------- CLI options ---------------------------------------------------
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Inject per-role bench pins into the environment so power/recovery
+    (`uhubctl.resolve_target`) and the bake can address each board
+    unambiguously.
+
+    Three of the four bench boards share the nRF52 VID 0x239a, so VID alone
+    can't tell them apart — the hub-slot LOCATION pins are what disambiguate.
+    `resolve_target` checks `MESHTASTIC_UHUBCTL_LOCATION_<ROLE>` /
+    `_PORT_<ROLE>` *before* its VID table, so setting them here makes recovery
+    work per board without touching production `uhubctl.ROLE_VIDS`.
+
+    Operator-set env vars win — we only fill blanks — so manual pins or a
+    `--hub-profile` still override.
+    """
+    for role, spec in _bench.BENCH_ROLES.items():
+        env = spec.get("env")
+        if env:
+            os.environ.setdefault(f"MESHTASTIC_MCP_ENV_{role.upper()}", env)
+        hubport = _bench.location_hub_port(spec.get("location"))
+        if hubport:
+            hub, port = hubport
+            os.environ.setdefault(f"MESHTASTIC_UHUBCTL_LOCATION_{role.upper()}", hub)
+            os.environ.setdefault(f"MESHTASTIC_UHUBCTL_PORT_{role.upper()}", str(port))
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -111,15 +139,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             if "test_00_bake" in item.nodeid:
                 item.add_marker(pytest.mark.skip(reason="skipped by --assume-baked"))
 
-    # Tiering: `firmware`-marked tests need a Meshtastic checkout (variants/pio/userprefs).
-    # Auto-skip them when no firmware tree is present so the portable unit tier stays green
-    # on a bare `pip install meshtastic-mcp`. Run them with MESHTASTIC_FIRMWARE_ROOT set.
-    if mcp_config.firmware_root_or_none() is None:
-        skip_fw = pytest.mark.skip(reason="firmware tier: MESHTASTIC_FIRMWARE_ROOT not set")
-        for item in items:
-            if item.get_closest_marker("firmware"):
-                item.add_marker(skip_fw)
-
     def sort_key(item: pytest.Item) -> tuple[int, str]:
         path = str(getattr(item, "fspath", "") or item.nodeid)
         # Session-start bake runs FIRST. `baked_mesh` only verifies state —
@@ -159,6 +178,15 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         return (9, item.nodeid)
 
     items.sort(key=sort_key)
+
+    # Tiering: `firmware`-marked tests need a Meshtastic checkout (variants/pio/userprefs).
+    # Auto-skip them when no firmware tree is present so the portable unit tier stays green
+    # on a bare `pip install meshtastic-mcp`. Run them with MESHTASTIC_FIRMWARE_ROOT set.
+    if mcp_config.firmware_root_or_none() is None:
+        skip_fw = pytest.mark.skip(reason="firmware tier: MESHTASTIC_FIRMWARE_ROOT not set")
+        for item in items:
+            if item.get_closest_marker("firmware"):
+                item.add_marker(skip_fw)
 
 
 # ---------- Session-scoped fixtures ---------------------------------------
@@ -378,14 +406,10 @@ def hub_profile(request: pytest.FixtureRequest) -> dict[str, dict[str, Any]]:
 
         with open(path, encoding="utf-8") as f:
             return yaml.safe_load(f)
-    return {
-        "nrf52": {"vid": 0x239A, "pid_contains": None},
-        # ESP32-S3 can enumerate under Espressif native USB (0x303a) or via a
-        # CP2102 USB-serial chip (0x10c4). Both should match for
-        # Meshtastic-compatible boards.
-        "esp32s3": {"vid": 0x303A, "pid_contains": None},
-        "esp32s3_alt": {"vid": 0x10C4, "pid_contains": None},
-    }
+    # Default: the reference bench, from the single source of truth in
+    # tests/_bench.py. Four distinct boards (three share VID 0x239a), each
+    # pinned to its hub-slot location so they're told apart unambiguously.
+    return _bench.hub_profile()
 
 
 def _hex_to_int(value: Any) -> int | None:
@@ -398,36 +422,64 @@ def _hex_to_int(value: Any) -> int | None:
     return None
 
 
+def _match_role_port(spec: dict[str, Any], found: list[dict]) -> str | None:
+    """Resolve one hub_profile role spec to a connected `/dev` path.
+
+    Prefers the role's pinned hub-slot ``location`` (stable across the
+    app↔bootloader USB PID flip and unambiguous when several boards share a
+    VID); falls back to VID (+ optional ``pid_contains``) for specs with no
+    location (e.g. a ``--hub-profile`` yaml). Returns None if absent.
+    """
+    location = spec.get("location")
+    vids = (spec["vid"], *tuple(spec.get("alt_vids", ())))
+    pid_contains = spec.get("pid_contains")
+    for dev in found:
+        port = dev.get("port")
+        if not port:
+            continue
+        if location is not None:
+            # Do NOT fall back to VID here — we want the board on THIS slot,
+            # not any same-VID sibling.
+            if _bench.device_location(port) == location:
+                return port
+            continue
+        if _hex_to_int(dev.get("vid")) not in vids:
+            continue
+        if pid_contains is not None:
+            pid_raw = dev.get("pid")
+            pid_hex = (
+                pid_raw
+                if isinstance(pid_raw, str)
+                else (hex(pid_raw) if isinstance(pid_raw, int) else None)
+            )
+            if pid_hex is None or pid_contains not in pid_hex:
+                continue
+        return port
+    return None
+
+
 @pytest.fixture(scope="session")
 def hub_devices(hub_profile: dict[str, dict[str, Any]]) -> dict[str, str]:
-    """Map of `role → port` for devices detected on the hub.
+    """Map of `role → port` for boards detected on the hub.
 
-    Excludes `*_alt` roles from the returned map (they're additional VID
-    matchers for the same logical role). If a role isn't detected, an entry is
-    absent from the return value; fixtures that require specific roles should
-    check presence and `pytest.skip` with an actionable message.
+    Each role is matched to a SPECIFIC physical board by hub-slot location
+    (see `_match_role_port`), so three same-VID nRF52 boards resolve to three
+    distinct roles instead of collapsing into one. If a role isn't detected,
+    it's simply absent; fixtures that require a role check presence and
+    `pytest.skip` with an actionable message.
     """
     # include_unknown=True so non-whitelisted VIDs (e.g. CP2102 at 0x10c4) that
-    # are configured as hub roles still match. The hub_profile itself gates
-    # which VIDs we consider — no risk of unrelated serial ports sneaking in.
+    # are configured as hub roles still match.
     found = devices_module.list_devices(include_unknown=True)
-    # Coalesce alt roles into their base name (esp32s3_alt → esp32s3)
     resolved: dict[str, str] = {}
     for role, spec in hub_profile.items():
-        target_vid = spec["vid"]
-        pid_contains = spec.get("pid_contains")
+        # Skip legacy `*_alt` aliases if a yaml profile still uses them.
         canonical = role.split("_alt", 1)[0]
         if canonical in resolved:
             continue
-        for dev in found:
-            vid = _hex_to_int(dev.get("vid"))
-            pid = _hex_to_int(dev.get("pid"))
-            if vid != target_vid:
-                continue
-            if pid_contains is not None and (pid is None or pid_contains not in pid):
-                continue
-            resolved[canonical] = dev["port"]
-            break
+        port = _match_role_port(spec, found)
+        if port is not None:
+            resolved[canonical] = port
     return resolved
 
 
@@ -437,14 +489,30 @@ def _reset_transmit_history_state(role: str, port: str) -> str:
     re-enumerates). Best-effort — errors log to stderr + return original
     port so a flaky start doesn't block the session.
     """
+    import threading
+
+    from meshtastic_mcp import port_recovery
+
     from ._port_discovery import resolve_port_by_role
 
+    # Recover the device before we talk to it: free a held port AND power-cycle a
+    # wedged/unresponsive one (a stale fd, or firmware that won't answer). On a
+    # bench with several same-role devices the slot is resolved per-device from
+    # USB topology, so this never cycles the wrong one. Best-effort.
     try:
+        port = port_recovery.ensure_port_responsive(port, role=role)
+    except Exception as exc:
+        print(
+            f"[transmit-history-reset] {role} @ {port} recovery skipped: {exc!r}",
+            file=sys.stderr,
+        )
+
+    def _clear(p: str) -> None:
         from meshtastic.protobuf import admin_pb2  # type: ignore[import-untyped]
 
         from meshtastic_mcp.connection import connect
 
-        with connect(port=port) as iface:
+        with connect(port=p) as iface:
             msg = admin_pb2.AdminMessage()
             msg.delete_file_request = "/prefs/transmit_history.dat"
             iface.localNode._sendAdmin(msg)
@@ -452,9 +520,43 @@ def _reset_transmit_history_state(role: str, port: str) -> str:
             # Reboot clears in-memory cache; otherwise the 5-min auto-flush
             # rewrites the file with pre-reset timestamps.
             iface.localNode.reboot(3)
-    except Exception as exc:
+            iface.noProto = True  # rebooting — don't block the close on the TX queue
+
+    # Bound the connect+send hard. meshtastic's `_sendToRadio` drains the TX queue
+    # with an UNBOUNDED `while not _queueHasFreeSpace(): sleep(0.5)` loop, so a
+    # single stuck send to an unresponsive device would otherwise hang this
+    # session-scoped autouse fixture for 600s (pytest-timeout) and ERROR every
+    # test in the run. Run it on a daemon thread and abandon after 45s — the
+    # bake's own ensure_port_free will recover the port if the leaked thread
+    # still holds it.
+    box: dict[str, BaseException] = {}
+
+    def _runner() -> None:
+        try:
+            _clear(port)
+        except BaseException as exc:
+            box["exc"] = exc
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout=45.0)
+    if t.is_alive():
+        # The abandoned thread is stuck inside connect() holding the port's
+        # registry lock and will never release it — drop the lock so later
+        # in-process connect()s (e.g. the bake's post-flash device_info) aren't
+        # blocked with "port is busy" for the whole session.
+        from meshtastic_mcp import registry
+
+        registry.clear_port_lock(port)
         print(
-            f"[transmit-history-reset] {role} @ {port} clear failed: {exc!r}",
+            f"[transmit-history-reset] {role} @ {port} did not finish in 45s — "
+            f"abandoning (device unresponsive); continuing session.",
+            file=sys.stderr,
+        )
+        return port
+    if "exc" in box:
+        print(
+            f"[transmit-history-reset] {role} @ {port} clear failed: {box['exc']!r}",
             file=sys.stderr,
         )
         return port
@@ -535,6 +637,15 @@ def baked_mesh(
     per_role_errors: dict[str, str] = {}
     for role in sorted(hub_devices):
         port = hub_devices[role]
+        # Recover a device left wedged by a prior tier (the CP210x esp32s3 goes
+        # EINVAL after the recovery-tier power-cycles) before we verify it —
+        # best-effort, same pattern as transmit-history-reset / baked_single.
+        try:
+            from meshtastic_mcp import port_recovery
+
+            port = port_recovery.ensure_port_responsive(port, role=role)
+        except Exception:
+            pass
         try:
             live = info.device_info(port=port, timeout_s=12.0)
         except Exception as exc:
@@ -624,19 +735,16 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     roles defined in the YAML are parametrized. (So e.g. a yaml with only
     `esp32s3` skips every `[nrf52]` variant at collection time.)
     """
-    # Resolve the role → VID map, honoring --hub-profile if passed
+    # Resolve the role → spec map, honoring --hub-profile if passed; otherwise
+    # the reference bench from tests/_bench.py.
     profile_path = metafunc.config.getoption("--hub-profile", default=None)
     if profile_path:
         import yaml
 
         with open(profile_path, encoding="utf-8") as f:
-            hub = yaml.safe_load(f) or {}
-        # Flatten _alt entries into canonical-role map (keep first occurrence)
-        default_roles: dict[str, int] = {}
-        for role, spec in hub.items():
-            default_roles[role] = spec["vid"]
+            profile = yaml.safe_load(f) or {}
     else:
-        default_roles = {"nrf52": 0x239A, "esp32s3": 0x303A, "esp32s3_alt": 0x10C4}
+        profile = _bench.hub_profile()
 
     try:
         from meshtastic_mcp import devices as _dev
@@ -645,29 +753,26 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     except Exception:
         found = []
 
+    # Detect each role by its SPECIFIC board (location, or VID for yaml specs
+    # with no location) — so three same-VID nRF52 boards parametrize as three
+    # distinct roles rather than one.
     detected: list[str] = []
-    for role, target_vid in default_roles.items():
+    for role, spec in profile.items():
         canonical = role.split("_alt", 1)[0]
         if canonical in detected:
             continue
-        for d in found:
-            vid = d.get("vid")
-            if isinstance(vid, str):
-                try:
-                    vid = int(vid, 16)
-                except ValueError:
-                    vid = None
-            if vid == target_vid:
-                detected.append(canonical)
-                break
+        if _match_role_port(spec, found) is not None:
+            detected.append(canonical)
 
-    # When --hub-profile is explicit, honor its role list even if detection
-    # failed (operator knows what they plugged in; let the fixture skip
-    # unbaked roles at runtime with an actionable message).
-    if profile_path:
-        roles = detected or [r.split("_alt", 1)[0] for r in default_roles]
-    else:
-        roles = detected or ["nrf52", "esp32s3"]
+    # Fall back to the full role set when nothing is detected, so the suite
+    # still COLLECTS cleanly off-bench (each variant skips at runtime via the
+    # hub_devices presence check).
+    fallback: list[str] = []
+    for role in profile:
+        canonical = role.split("_alt", 1)[0]
+        if canonical not in fallback:
+            fallback.append(canonical)
+    roles = detected or fallback
 
     if "baked_single_role" in metafunc.fixturenames:
         metafunc.parametrize("baked_single_role", roles, ids=roles, scope="function")
@@ -759,10 +864,8 @@ def power_cycle(
     return _cycle
 
 
-_DEFAULT_ROLE_ENVS = {
-    "nrf52": "rak4631",
-    "esp32s3": "heltec-v3",
-}
+# role → PlatformIO env, from the single source of truth in tests/_bench.py.
+_DEFAULT_ROLE_ENVS = _bench.role_envs()
 
 
 @pytest.fixture
@@ -1047,7 +1150,7 @@ def _run_with_timeout(fn: Callable[[], Any], timeout: float) -> Any:
     def _runner() -> None:
         try:
             box["result"] = fn()
-        except BaseException as exc:  # propagate to the caller below
+        except BaseException as exc:
             box["error"] = exc
 
     t = threading.Thread(target=_runner, daemon=True)

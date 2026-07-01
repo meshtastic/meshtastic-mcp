@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Unit tests for the `build_flags` injection on `flash.build()`.
 
 We don't actually run pio here — too slow, requires hardware-aware envs.
@@ -8,6 +11,8 @@ are threaded through pio.run correctly via mock.
 from __future__ import annotations
 
 from unittest.mock import patch
+
+import pytest
 
 from meshtastic_mcp import flash, pio
 
@@ -40,6 +45,7 @@ class TestBuildFlagsEnv:
         assert set(flags) == {"-DDEBUG_HEAP=1", "-DFOO=x", "-DBAR"}
 
 
+@pytest.mark.firmware
 class TestBuildPropagatesFlags:
     def test_extra_env_passed_to_pio_run(self) -> None:
         # Mock pio.run so we don't actually invoke pio. Capture extra_env.

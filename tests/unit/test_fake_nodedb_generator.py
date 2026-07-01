@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Tests for the fake-NodeDB fixture pipeline (bin/gen-fake-nodedb-seed.py
 + bin/seed-json-to-proto.py + mcp-server fixtures.push_fake_nodedb).
 
@@ -15,7 +18,13 @@ import time
 
 import pytest
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+from meshtastic_mcp import config
+
+pytestmark = pytest.mark.firmware
+
+# The fake-NodeDB pipeline lives in the firmware tree; firmware-marked so this module is
+# skipped without MESHTASTIC_FIRMWARE_ROOT.
+REPO_ROOT = config.firmware_root_or_none() or pathlib.Path(__file__).resolve().parents[2]
 SEED_GEN = REPO_ROOT / "bin" / "gen-fake-nodedb-seed.py"
 COMPILE = REPO_ROOT / "bin" / "seed-json-to-proto.py"
 FIXTURES_DIR = REPO_ROOT / "test" / "fixtures" / "nodedb"

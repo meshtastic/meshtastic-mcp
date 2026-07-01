@@ -22,6 +22,7 @@ class _StubResult:
     duration_s = 0.1
 
 
+@pytest.mark.firmware
 def test_flash_uploads_to_recovered_port() -> None:
     """A wedged device re-enumerates on a new path; pio must upload to it."""
     captured: dict = {}
@@ -168,6 +169,7 @@ class _DfuFailResult:
     duration_s = 32.5
 
 
+@pytest.mark.firmware
 def test_flash_fails_on_silent_dfu_failure() -> None:
     """pio exits 0 but nrfutil's DFU upload actually failed — flash() must NOT
     report success, or the bake/flash/recover paths record a phantom flash and
@@ -182,6 +184,7 @@ def test_flash_fails_on_silent_dfu_failure() -> None:
     assert out["upload_error"] == "Failed to upgrade target"
 
 
+@pytest.mark.firmware
 def test_flash_clean_upload_still_succeeds() -> None:
     """A normal upload (no failure markers) stays exit 0 with no upload_error —
     the detector must not false-positive on healthy output."""
