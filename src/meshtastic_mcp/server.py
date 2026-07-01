@@ -30,6 +30,7 @@ from . import (
     info,
     log_query,
     registry,
+    rf_oracle,
     serial_session,
 )
 from . import (
@@ -138,6 +139,21 @@ def local_serve_tool(*args: Any, **kwargs: Any):
     return deco
 
 
+def sdr_tool(*args: Any, **kwargs: Any):
+    """Like `@app.tool()` but only registers when the sdr capability is active.
+
+    Without `pyrtlsdr` + an attached RTL-SDR, the RF-compliance oracle tools
+    (`rf_scan`, `rf_confirm_tx`) are not advertised. See `doctor` for what's missing.
+    """
+
+    def deco(fn):
+        if CAPS.sdr:
+            return app.tool(*args, **kwargs)(fn)
+        return fn
+
+    return deco
+
+
 def _start_recorder() -> None:
     # Persistent device-log capture. Starts on first import — pubsub fan-out
     # is process-global, so subscribing here captures every active interface
@@ -160,6 +176,12 @@ _ANDROID_TOOLS = (
     "android_docs_fetch",
     "android_version_lookup",
     "android_render_compose_preview",
+)
+
+# SDR-coupled tools, gated by `sdr_tool` on the sdr capability.
+_SDR_TOOLS = (
+    "rf_scan",
+    "rf_confirm_tx",
 )
 
 # Firmware-coupled tools, gated by `firmware_tool` on the firmware capability.
@@ -199,6 +221,13 @@ def _log_capabilities() -> None:
                 "(set MESHTASTIC_FIRMWARE_ROOT to enable): %s",
                 len(_FIRMWARE_TOOLS),
                 ", ".join(_FIRMWARE_TOOLS),
+            )
+        if not CAPS.sdr:
+            log.info(
+                "sdr capability inactive: %d RF-compliance tools not registered "
+                "(install the 'sdr' extra + librtlsdr + an RTL-SDR to enable): %s",
+                len(_SDR_TOOLS),
+                ", ".join(_SDR_TOOLS),
             )
     except Exception as exc:  # never fail startup over a capability probe
         log.warning("capability detection failed: %s", exc)
@@ -1253,6 +1282,107 @@ def reboot(port: str | None = None, confirm: bool = False, seconds: int = 10) ->
     return admin.reboot(port=port, confirm=confirm, seconds=seconds)
 
 
+# ---------- RF compliance oracle (RTL-SDR) ---------------------------------
+
+
+@sdr_tool()
+def rf_scan(
+    center_freq_hz: float,
+    span_khz: float = 1000.0,
+    duration_s: float = 2.0,
+    gain: float | str = "auto",
+    device_index: int = 0,
+) -> dict[str, Any]:
+    """Capture and characterize RF activity at a frequency with an RTL-SDR. No
+    Meshtastic device involved — use for a pre-test channel-occupancy check
+    ("is this band already busy") or to probe a frequency by hand. See
+    `rf_confirm_tx` for cross-checking a live device's actual TX against its
+    own configured region/preset.
+
+    Returns:
+        {center_hz, sample_rate_hz, duration_s, active_windows: [{start_s, duration_s}],
+         duty_cycle_pct_in_capture, occupied_bandwidth_hz, peak_freq_offset_hz,
+         peak_power_db, noise_floor_db_estimate}
+    """
+    return rf_oracle.scan(
+        center_freq_hz,
+        span_khz=span_khz,
+        duration_s=duration_s,
+        gain=gain,
+        device_index=device_index,
+    )
+
+
+@sdr_tool()
+def rf_confirm_tx(
+    text: str,
+    channel_index: int = 0,
+    port: str | None = None,
+    window_s: float = 5.0,
+    gain: float | str = "auto",
+    device_index: int = 0,
+    tx_confirm_lookback_s: float = 60.0,
+) -> dict[str, Any]:
+    """Send a text message while an RTL-SDR captures the frequency the device's
+    *own configured* region/preset/channel predict it should transmit on —
+    independent ground truth, not the device's self-reported packet log.
+
+    Catches the class of bug firmware can never self-report: TX reported as
+    queued OK (`send_result.ok`) but no RF actually left the antenna (dead PA,
+    disconnected antenna, a region/frequency miscalculation). Also flags
+    off-frequency or off-region emission and reports the measured occupied
+    bandwidth alongside the regulatory duty-cycle/power limit for the
+    device's region.
+
+    **Delayed TX under airtime pressure looks identical to a dropped send.**
+    Firmware enforces its own channel-utilization budget; a queued packet can
+    sit for tens of seconds before actually transmitting if you (or the mesh)
+    have been generating a lot of recent traffic — empirically observed here
+    as 40-70s delays after back-to-back test calls. A single `ok=False` /
+    `silent_tx_suspected=True` result right after a burst of test sends is NOT
+    conclusive; space calls out, or re-check with `rf_scan` shortly after,
+    before concluding TX is actually broken.
+
+    `firmware_self_reported_tx` in the result is best-effort only, NOT a
+    reliable cross-check: the `meshtastic` library discards the local echo of
+    a packet you just sent (firmware omits the redundant `from` field on that
+    echo, and the library drops anything missing it rather than publishing a
+    pubsub event) — so for a plain broadcast this is `False` almost always,
+    regardless of whether the send worked. `ok` / `measured.rf_observed` (the
+    SDR evidence) is what `silent_tx_suspected` is actually based on.
+    `tx_confirm_lookback_s` (default 60s) controls how far back this best-
+    effort check searches the packet log — deliberately much longer than
+    `window_s` since checking the log is cheap, unlike extending the live SDR
+    capture. For a real independent cross-node check, use a second Meshtastic
+    device on the same channel and inspect its own recorder — that receive
+    event is never suppressed since `from` is genuinely populated there (same
+    delayed-TX caveat still applies: watch long enough).
+
+    Needs an RTL-SDR (`doctor` shows whether the sdr capability is active).
+    Coverage is limited to ~24MHz-1766MHz (R820T/R820T2 tuner range) —
+    LORA_24 (2.4GHz) can't be checked with an RTL-SDR. This is a dev-loop
+    regression check with an uncalibrated power reference, not a substitute
+    for certified EMC-lab compliance testing.
+
+    Returns:
+        {ok: bool, silent_tx_suspected: bool, predicted: {region, freq_mhz, bw_khz,
+         sf, cr, duty_cycle_limit_pct, power_limit_dbm}, measured: {rf_observed,
+         matched_window, occupied_bandwidth_hz, freq_offset_from_predicted_hz,
+         in_region_band_fraction, all_active_windows_in_capture,
+         duty_cycle_pct_in_capture}, firmware_self_reported_tx (best-effort,
+         see above), send_result, capture, caveat}
+    """
+    return rf_oracle.confirm_tx(
+        text,
+        channel_index=channel_index,
+        port=port,
+        window_s=window_s,
+        gain=gain,
+        device_index=device_index,
+        tx_confirm_lookback_s=tx_confirm_lookback_s,
+    )
+
+
 @app.tool()
 def shutdown(port: str | None = None, confirm: bool = False, seconds: int = 10) -> dict[str, Any]:
     """Shut down the connected node in `seconds` seconds. Requires confirm=True.
@@ -2027,6 +2157,7 @@ _READ_ONLY = {
     "vision_oracle",  # reads a screenshot, asks the local model; no mutation
     "triage_window",  # reads device window (+optional screenshot); no mutation
     "local_model_status",  # reports backend/reachability; no mutation
+    "rf_scan",  # passive SDR capture; no device/host mutation
 }
 # Destructive: irreversible or device-state-mutating (most are confirm-gated too).
 _DESTRUCTIVE = {
@@ -2043,6 +2174,7 @@ _DESTRUCTIVE = {
     "set_channel_url",
     "set_debug_log_api",
     "send_text",  # injects a mesh packet; cannot be recalled
+    "rf_confirm_tx",  # calls send_text internally; injects a mesh packet
     "send_input_event",  # drives device button/GPIO; side-effect on hardware
     "reboot",
     "shutdown",
