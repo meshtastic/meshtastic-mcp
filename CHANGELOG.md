@@ -6,6 +6,12 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Replay answers `get_owner_request`** — the simulated device now emulates the firmware's owner
+  admin round-trip (replies with the owner `User` + a session passkey, echoing the request id), so
+  strict clients that block their post-NodeDB "seeding" step on it can reach a ready/connected
+  state. Previously the replay device only handled `want_config_id`, so such a client drained
+  config + the full NodeDB and then timed out. Read-only still holds: mutating admin writes are
+  not honored (replay has tx disabled).
 - **Local-model offload** (`summarize_window` / `vision_oracle` / `triage_window`, plus
   `local_model_status` / `local_model_serve` / `local_model_serve_stop`) — an optional capability
   that pushes token-heavy work onto a local GPU: distill a recorder window, a first-pass

@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from meshtastic.protobuf import channel_pb2, config_pb2, mesh_pb2
+from meshtastic.protobuf import admin_pb2, channel_pb2, config_pb2, mesh_pb2, portnums_pb2
 
 from ..recorder.recorder import _default_dir as _recorder_default_dir
 from ..recorder.rotating import _RotatingJsonl
@@ -62,6 +62,10 @@ NONCE_DB = 69421
 
 # Synthetic observer node the app connects "as" (must not collide with capture).
 OBSERVER_NUM = 0x42524331  # "BRC1"
+# Opaque 8-byte admin session passkey the replay device hands a client in its
+# get_owner_response. Value is irrelevant (replay is read-only / tx disabled);
+# strict clients only need *a* passkey to finish their post-NodeDB seeding step.
+OWNER_SESSION_PASSKEY = b"replay01"
 
 
 class PortInUseError(RuntimeError):
@@ -391,6 +395,8 @@ class ReplaySession:
                         ).start()
                 else:
                     self._send_config_phase(send, nonce)
+            elif tr.HasField("packet"):
+                self._handle_client_packet(tr.packet, send)
             # heartbeats / other ToRadio: drain and ignore
 
     # -- handshake phases --
@@ -477,6 +483,49 @@ class ReplaySession:
                 time.sleep(self.params.node_delay)
         fr = mesh_pb2.FromRadio()
         fr.config_complete_id = nonce
+        send(fr)
+
+    def _handle_client_packet(self, pkt: mesh_pb2.MeshPacket, send: Any) -> None:
+        """Answer the admin round-trips a strict client issues during the handshake.
+
+        Real firmware replies to ``get_owner_request`` with the device owner and a
+        session passkey; the replay device emulates that one round-trip so strict
+        clients (e.g. the Kotlin SDK, which blocks ``Connected`` on a post-NodeDB
+        "seeding" step) can reach a ready state. Everything else is drained and
+        ignored — replay is read-only (tx disabled), so mutating admin writes are
+        never honored.
+        """
+        if pkt.decoded.portnum != portnums_pb2.PortNum.ADMIN_APP:
+            return
+        try:
+            req = admin_pb2.AdminMessage()
+            req.ParseFromString(pkt.decoded.payload)
+        except Exception:  # malformed admin payload: ignore, like firmware
+            return
+        if req.WhichOneof("payload_variant") != "get_owner_request":
+            return
+
+        requester = getattr(pkt, "from", 0) or OBSERVER_NUM
+        resp = admin_pb2.AdminMessage()
+        owner = resp.get_owner_response
+        owner.id = f"!{OBSERVER_NUM:08x}"
+        owner.long_name = "Replay Observer"
+        owner.short_name = "RPLY"
+        owner.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
+        owner.role = config_pb2.Config.DeviceConfig.Role.CLIENT
+        resp.session_passkey = OWNER_SESSION_PASSKEY
+
+        fr = mesh_pb2.FromRadio()
+        mp = fr.packet
+        setattr(mp, "from", OBSERVER_NUM)  # responder identity; client keys the passkey on this
+        mp.to = requester & 0xFFFFFFFF
+        mp.id = int(time.time() * 1000) & 0x7FFFFFFF
+        mp.rx_time = int(time.time())
+        mp.channel = 0
+        mp.decoded.portnum = portnums_pb2.PortNum.ADMIN_APP
+        if pkt.id:
+            mp.decoded.request_id = pkt.id
+        mp.decoded.payload = resp.SerializeToString()
         send(fr)
 
     def _observer_nodeinfo(self) -> mesh_pb2.FromRadio:
