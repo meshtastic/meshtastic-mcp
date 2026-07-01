@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 from meshtastic_mcp.emulator import avd
 
 
@@ -52,6 +54,78 @@ def test_find_text(monkeypatch) -> None:
     monkeypatch.setattr(avd, "android", lambda *a, **k: _cp('[{"text": "E2E-123"}]'))
     assert avd.find_text("E2E-123") is True
     assert avd.find_text("nope") is False
+
+
+# ---------------------------------------------------------------------------
+# Fresh-install launch (meshtastic/Meshtastic-Android#6044, skip_onboarding)
+# ---------------------------------------------------------------------------
+def test_grant_runtime_permissions_grants_full_set(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        avd, "resolve_package", lambda serial=None: "com.geeksville.mesh.fdroid.debug"
+    )
+    monkeypatch.setattr(avd, "adb", lambda *a, **k: calls.append(a) or _cp(""))
+    avd.grant_runtime_permissions()
+    granted = [a[-1] for a in calls]
+    assert granted == list(avd.ONBOARDING_PERMISSIONS)
+    assert all(a[0:3] == ("shell", "pm", "grant") for a in calls)
+    # package is the 4th token: pm grant <pkg> <perm>
+    assert all(a[3] == "com.geeksville.mesh.fdroid.debug" for a in calls)
+
+
+def test_grant_runtime_permissions_noop_when_no_package(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(avd, "resolve_package", lambda serial=None: None)
+    monkeypatch.setattr(avd, "adb", lambda *a, **k: calls.append(a) or _cp(""))
+    avd.grant_runtime_permissions()
+    assert calls == []  # nothing to grant against
+
+
+def test_launch_app_with_skip_onboarding_adds_extra(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        avd, "resolve_package", lambda serial=None: "com.geeksville.mesh.fdroid.debug"
+    )
+    monkeypatch.setattr(avd, "adb", lambda *a, **k: calls.append(a) or _cp(""))
+    avd.launch_app(skip_onboarding=True)
+    assert len(calls) == 1
+    args = calls[0]
+    assert args[0:4] == ("shell", "am", "start", "-n")
+    assert args[4] == f"com.geeksville.mesh.fdroid.debug/{avd.MAIN_ACTIVITY}"
+    assert "--ez" in args
+    assert args[-2:] == (avd.EXTRA_SKIP_ONBOARDING, "true")
+
+
+def test_launch_app_without_skip_omits_extra(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        avd, "resolve_package", lambda serial=None: "com.geeksville.mesh.fdroid.debug"
+    )
+    monkeypatch.setattr(avd, "adb", lambda *a, **k: calls.append(a) or _cp(""))
+    avd.launch_app()
+    assert avd.EXTRA_SKIP_ONBOARDING not in calls[0]
+
+
+def test_launch_app_raises_when_no_package(monkeypatch) -> None:
+    monkeypatch.setattr(avd, "resolve_package", lambda serial=None: None)
+    with pytest.raises(avd.EmulatorError):
+        avd.launch_app()
+
+
+def test_prepare_fresh_install_grants_then_launches(monkeypatch) -> None:
+    order = []
+    monkeypatch.setattr(
+        avd, "grant_runtime_permissions", lambda pkg=None, serial=None: order.append("grant")
+    )
+    monkeypatch.setattr(
+        avd,
+        "launch_app",
+        lambda pkg=None, serial=None, skip_onboarding=False, **k: order.append(
+            ("launch", skip_onboarding)
+        ),
+    )
+    avd.prepare_fresh_install()
+    assert order == ["grant", ("launch", True)]  # permissions first, then skip-onboarding launch
 
 
 # ---------------------------------------------------------------------------

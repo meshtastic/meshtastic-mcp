@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,29 @@ DEEPLINK_SCHEME = "meshtastic://meshtastic"
 # `?address=` value on the /connections deep link disconnects instead of
 # connecting (added alongside the connect-by-address deep link).
 NO_DEVICE_SELECTED = "n"
+
+# Fully-qualified launcher activity — needed for `am start -n <pkg>/<activity>`
+# with intent extras (the onboarding-skip affordance below). Stable across the
+# applicationId variants in KNOWN_PACKAGES (they share one app module).
+MAIN_ACTIVITY = "org.meshtastic.app.MainActivity"
+
+# Debug-build intent extra that skips the first-run intro flow on a fresh install
+# (Meshtastic-Android#6044): `am start -n <pkg>/<activity> --ez skip_onboarding true`
+# calls onAppIntroCompleted() straight away. BuildConfig.DEBUG-gated in the app —
+# a no-op on release/Play builds. Pair with grant_runtime_permissions() to also
+# skip the permission dialogs. Requires an app built at or after that PR.
+EXTRA_SKIP_ONBOARDING = "skip_onboarding"
+
+# Runtime permissions the app requests during onboarding. Pre-granting them with
+# `pm grant` (native Android, no app code) pre-accepts the permission dialogs so a
+# fresh-install automation run lands straight on the main screen. POST_NOTIFICATIONS
+# is API 33+ (a no-op / error on older devices — grant is best-effort).
+ONBOARDING_PERMISSIONS = (
+    "android.permission.BLUETOOTH_SCAN",
+    "android.permission.BLUETOOTH_CONNECT",
+    "android.permission.ACCESS_FINE_LOCATION",
+    "android.permission.POST_NOTIFICATIONS",
+)
 
 
 class EmulatorError(RuntimeError):
@@ -339,6 +363,75 @@ def resolve_package(serial: str | None = None) -> str | None:
         if is_app_installed(pkg, serial=serial):
             return pkg
     return None
+
+
+# ---------------------------------------------------------------------------
+# Fresh-install launch (skip onboarding + pre-grant permissions)
+# ---------------------------------------------------------------------------
+def grant_runtime_permissions(
+    package: str | None = None,
+    *,
+    serial: str | None = None,
+    permissions: Sequence[str] = ONBOARDING_PERMISSIONS,
+) -> None:
+    """Pre-grant the app's runtime permissions via `pm grant` (native, no app code).
+
+    Pre-accepts the permission dialogs the app would otherwise raise during
+    onboarding, so a fresh-install automation run isn't blocked on them. Each
+    grant is best-effort (check=False): POST_NOTIFICATIONS only exists on API
+    33+, and a permission the manifest doesn't declare errors out — neither
+    should abort the rest. Pairs with `launch_app(skip_onboarding=True)`.
+    """
+    pkg = package or resolve_package(serial=serial)
+    if not pkg:
+        return
+    for perm in permissions:
+        adb("shell", "pm", "grant", pkg, perm, serial=serial, check=False)
+
+
+def launch_app(
+    package: str | None = None,
+    *,
+    serial: str | None = None,
+    skip_onboarding: bool = False,
+    activity: str = MAIN_ACTIVITY,
+) -> None:
+    """Launch the app's main activity via `am start -n <pkg>/<activity>`.
+
+    `skip_onboarding=True` adds the debug-only `--ez skip_onboarding true` extra
+    (Meshtastic-Android#6044), which calls onAppIntroCompleted() so a fresh
+    install lands straight on the main Connection screen instead of the intro
+    flow. That extra is BuildConfig.DEBUG-gated in the app — a harmless no-op on
+    release/Play builds or on app versions predating the PR (they just show the
+    intro, and the UI-tap 'Skip' fallback in connect_app_to_tcp still handles
+    it). Pre-grant the permission dialogs with grant_runtime_permissions() for a
+    fully hands-free fresh-install bring-up.
+    """
+    pkg = package or resolve_package(serial=serial)
+    if not pkg:
+        raise EmulatorError("no Meshtastic app installed to launch (see resolve_package)")
+    args = ["shell", "am", "start", "-n", f"{pkg}/{activity}"]
+    if skip_onboarding:
+        args += ["--ez", EXTRA_SKIP_ONBOARDING, "true"]
+    adb(*args, serial=serial, check=False)
+
+
+def prepare_fresh_install(
+    package: str | None = None,
+    *,
+    serial: str | None = None,
+) -> None:
+    """One call to make a freshly-installed app automation-ready.
+
+    Pre-grants runtime permissions, then launches skipping onboarding — the
+    hands-free equivalent of clicking through the intro + accepting every
+    permission dialog. After this, drive the app normally (e.g.
+    connect_app_to_tcp / deeplink). Both steps are best-effort and degrade
+    gracefully on app builds predating Meshtastic-Android#6044 (the UI-tap
+    onboarding-skip in connect_app_to_tcp remains the fallback).
+    """
+    grant_runtime_permissions(package, serial=serial)
+    launch_app(package, serial=serial, skip_onboarding=True)
 
 
 # ---------------------------------------------------------------------------
