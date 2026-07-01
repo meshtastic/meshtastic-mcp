@@ -610,5 +610,128 @@ def test_inject_through_fuzzer_mutates():
     assert outs[0].decoded.payload != before  # garbage_payload mutated it
 
 
+def test_idle_reader_does_not_trip_send_timeout():
+    """Regression for the `client.settimeout()` bug (found 2026-07-01 against a real
+    Android app): a shared socket timeout bounded *both* send() and recv(), so a
+    client that legitimately went quiet for `send_timeout` seconds (normal for this
+    push-mostly protocol — the client only sends ToRadio for user actions/heartbeats)
+    got its connection killed and misreported as "timed out", as if the client itself
+    had stalled. Fixed via real SO_SNDTIMEO (`_set_send_timeout`), which only bounds
+    sends. This test connects, completes the handshake, then goes idle on the client
+    side for longer than `send_timeout` — the session must still be connected
+    afterward, with no error, and still able to deliver stream packets.
+    """
+    cap = sim.generate(nodes=10, days=1, seed=5, start=1_700_000_000)
+    params = ReplayParams(host="127.0.0.1", port=0, rate=50, node_delay=0, send_timeout=0.3)
+    sess = ReplaySession("idle-reader", cap, params)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess.params.port = port
+    sess.start()
+    try:
+        deadline = time.time() + 5
+        client = None
+        while time.time() < deadline:
+            try:
+                client = socket.create_connection(("127.0.0.1", port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        assert client is not None
+
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+        # drain the handshake burst so nothing lingers in the socket buffer
+        t0 = time.time()
+        while time.time() - t0 < 2:
+            _read_frame(client)
+            if sess.state.connected:
+                break
+
+        # Now go idle on the client side for > send_timeout (0.3s) — the old code
+        # would have the server's recv() time out here and tear the connection down.
+        time.sleep(1.0)
+
+        assert sess.state.connected is True
+        assert sess.state.error is None
+
+        # and the connection must still be usable afterward
+        fr = _read_frame(client)
+        assert fr.WhichOneof("payload_variant") is not None
+        client.close()
+    finally:
+        sess.stop()
+
+
+def test_stop_unblocks_idle_client_thread():
+    """`stop()` must shutdown() the connected client socket, not just close the
+    listening socket — otherwise, since recv() is now intentionally left blocking
+    with no timeout (see above), an idly-connected client's serve thread would
+    never notice `state.stop` and `ended` would never become True.
+    """
+    cap = sim.generate(nodes=5, days=1, seed=2, start=1_700_000_000)
+    params = ReplayParams(host="127.0.0.1", port=0, rate=50, node_delay=0, loop=False)
+    sess = ReplaySession("stop-unblock", cap, params)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess.params.port = port
+    sess.start()
+    client = socket.create_connection(("127.0.0.1", port), timeout=2)
+    try:
+        _send_toradio(client, want_config_id=69420)
+        _read_frame(client)  # at least one reply -> handshake under way
+        sess.stop()
+        deadline = time.time() + 3
+        while time.time() < deadline and not sess.state.ended:
+            time.sleep(0.05)
+        assert sess.state.ended is True
+    finally:
+        client.close()
+
+
+def test_replay_session_writes_lifecycle_log(tmp_path, monkeypatch):
+    """Every session gets its own append-only JSONL for post-run analysis —
+    lifecycle events (create/listen/connect/disconnect/end), not just whatever a
+    caller happened to poll live via `replay_status()`.
+    """
+    monkeypatch.setenv("MESHTASTIC_MCP_DATA_DIR", str(tmp_path))
+    cap = sim.generate(nodes=5, days=1, seed=1, start=1_700_000_000)
+    params = ReplayParams(host="127.0.0.1", port=0, rate=50, node_delay=0, loop=False)
+    sess = ReplaySession("log-test", cap, params)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess.params.port = port
+    sess.start()
+    client = socket.create_connection(("127.0.0.1", port), timeout=2)
+    try:
+        _send_toradio(client, want_config_id=69420)
+        _read_frame(client)
+    finally:
+        client.close()
+        sess.stop()
+        deadline = time.time() + 3
+        while time.time() < deadline and not sess.state.ended:
+            time.sleep(0.05)
+
+    import json
+
+    # _replay_log_dir() = _recorder_default_dir().parent / "replay-logs", and
+    # _recorder_default_dir() = $MESHTASTIC_MCP_DATA_DIR/.mtlog, so both land
+    # as siblings directly under tmp_path.
+    log_path = tmp_path / "replay-logs" / "log-test.jsonl"
+    assert log_path.is_file(), f"expected lifecycle log at {log_path}"
+    kinds = [json.loads(line)["kind"] for line in log_path.read_text().splitlines()]
+    assert "session_created" in kinds
+    assert "listening" in kinds
+    assert "client_connected" in kinds
+    assert kinds[-1] in ("session_ended",)  # always the last event written
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
