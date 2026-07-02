@@ -10,8 +10,17 @@ that is explicitly NOT stable.
 from __future__ import annotations
 
 import hashlib
+import logging
 
 from meshtastic_mcp import boards
+from meshtastic_mcp.config import ConfigError
+
+log = logging.getLogger("meshtastic_mcp.web.identity")
+
+# One-time note when env resolution degrades because there's no firmware
+# checkout — enrichment retries per device per poll, so per-call logging
+# would flood the log with the same fact.
+_warned_no_firmware_root = False
 
 # USB vendor IDs we recognise → coarse role. Case-insensitive; compared as the
 # lowercased hex string (e.g. "0x239a").
@@ -62,9 +71,24 @@ def env_for_hw_model(hw_model: str | None) -> str | None:
     if not hw_model:
         return None
     target = hw_model.upper()
+    try:
+        all_boards = boards.list_boards()
+    except ConfigError:
+        # No firmware checkout — the exact-env lookup needs the firmware
+        # tree's board table. Degrade to "unknown env" instead of raising:
+        # callers (auto-enrichment, POST /devices/{serial}/refresh) must
+        # still be able to record fw/hw/region without a firmware root.
+        global _warned_no_firmware_root
+        if not _warned_no_firmware_root:
+            _warned_no_firmware_root = True
+            log.info(
+                "no firmware root (MESHTASTIC_FIRMWARE_ROOT) — device pio envs "
+                "will stay unresolved; fw/hw enrichment still works"
+            )
+        return None
     candidates = [
         b["env"]
-        for b in boards.list_boards()
+        for b in all_boards
         if (b.get("hw_model_slug") or "").upper() == target and b.get("env")
     ]
     if not candidates:

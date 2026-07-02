@@ -281,6 +281,48 @@ def test_env_resolves_from_hw_model_not_just_role(monkeypatch):
     assert control.env_for_device({"role": "esp32s3", "env": None}) == "heltec-v3"
 
 
+def test_env_resolution_degrades_without_firmware_root(monkeypatch):
+    """No firmware checkout → env_for_hw_model returns None instead of letting
+    boards.list_boards()'s ConfigError escape. Regression for the two findings
+    from the first live bring-up: auto-enrichment silently aborted (fleet stuck
+    with fw=None) and POST /devices/{serial}/refresh 500'd, both because env
+    resolution raised when MESHTASTIC_FIRMWARE_ROOT wasn't set."""
+    import meshtastic_mcp.boards as boards_mod
+    from meshtastic_mcp.config import ConfigError
+
+    def _no_root(*a, **k):
+        raise ConfigError("Could not locate Meshtastic firmware root.")
+
+    monkeypatch.setattr(boards_mod, "list_boards", _no_root)
+
+    assert identity.env_for_hw_model("RAK4631") is None
+    assert identity.env_for_hw_model("HELTEC_V3") is None  # repeats stay quiet too
+    # The trivial guards still short-circuit before the catalog is consulted.
+    assert identity.env_for_hw_model(None) is None
+
+
+def test_boards_endpoint_409_without_firmware_root(monkeypatch):
+    """GET /api/boards answers 409 + the ConfigError detail when there is no
+    firmware checkout, instead of a raw 500 traceback."""
+    from starlette.testclient import TestClient
+
+    import meshtastic_mcp.boards as boards_mod
+    from meshtastic_mcp.config import ConfigError
+    from meshtastic_mcp.web.app import create_app
+
+    def _no_root(*a, **k):
+        raise ConfigError("Could not locate Meshtastic firmware root.")
+
+    monkeypatch.setattr(boards_mod, "list_boards", _no_root)
+
+    # No `with` block: the lifespan (discovery/cameras/keepalive) must stay
+    # down — /api/boards doesn't touch app.state, so requests work without it.
+    client = TestClient(create_app())
+    resp = client.get("/api/boards")
+    assert resp.status_code == 409
+    assert "firmware root" in resp.json()["detail"]
+
+
 def test_suite_env_overrides_from_connected_boards(tmp_path):
     """The test runner bakes the variant resolved per connected board: an online
     Heltec V4 → MESHTASTIC_MCP_ENV_ESP32S3=heltec-v4 (not the heltec-v3 default).

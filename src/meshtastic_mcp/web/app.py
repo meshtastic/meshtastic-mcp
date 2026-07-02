@@ -29,6 +29,7 @@ from meshtastic_mcp import (
 from meshtastic_mcp import (
     info as mt_info,
 )
+from meshtastic_mcp.config import ConfigError
 
 from .db import repo_builds as rb
 from .db import repo_cameras as rc
@@ -897,7 +898,11 @@ def _mount_native(api: APIRouter) -> None:
 def _mount_boards(api: APIRouter) -> None:
     @api.get("/boards")
     async def list_boards(query: str | None = None, architecture: str | None = None):
-        return await asyncio.to_thread(boards.list_boards, architecture, False, query, None)
+        try:
+            return await asyncio.to_thread(boards.list_boards, architecture, False, query, None)
+        except ConfigError as exc:
+            # No firmware checkout — a config precondition, not a server bug.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # --- screen keep-alive -----------------------------------------------------
