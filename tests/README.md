@@ -41,7 +41,8 @@ pytest tests/ --force-bake --html=report.html
   current state matches the session profile.
 - `--assume-baked` — skip `test_00_bake.py` entirely. Use when you know the
   devices are already baked and want a fast dev loop.
-- `--hub-profile=<yaml>` — point at a YAML file for non-default hub hardware.
+- `--hub-profile=<yaml>` — point at a YAML file for non-default hub hardware
+  (see [docs/bench-setup.md](../docs/bench-setup.md) for a walkthrough).
   Default targets VID `0x239a` (nRF52) and `0x303a`/`0x10c4` (ESP32-S3).
 - `--no-teardown-rebake` — skip the session-end rebake that `provisioning/`
   and `fleet/` tests perform. Useful in rapid iteration.

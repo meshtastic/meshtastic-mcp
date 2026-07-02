@@ -262,6 +262,7 @@ it FleetSuite still discovers, enriches, and drives devices.
 USB-hub bench with per-board roles keyed by hub slot (reference bench: T-Echo, Heltec T114,
 RAK4631, ESP32-S3 — see `tests/_bench.py` and [tests/README.md](tests/README.md)). Drive it
 via `run-tests.sh`, the `meshtastic-mcp-test-tui` terminal UI, or FleetSuite's test runner.
+**Setting up your own bench** (any boards, any hub): [docs/bench-setup.md](docs/bench-setup.md).
 
 ## License
 

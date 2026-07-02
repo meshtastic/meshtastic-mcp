@@ -15,6 +15,7 @@
 - [docs/local-models.md](docs/local-models.md): local-model offload (tools, backends, config)
 - [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md): experimental Kotlin-SDK device-IO backend
 - [tests/README.md](tests/README.md): tiered hardware test suite + bench roles
+- [docs/bench-setup.md](docs/bench-setup.md): set up your own hardware bench
 - [web-ui/README.md](web-ui/README.md): FleetSuite SPA development
 
 ## Skills
