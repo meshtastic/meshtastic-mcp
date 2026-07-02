@@ -1,9 +1,12 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
+"""UI-tier fixtures: per-node camera lifecycle, OCR warmup, per-test frame
+capture, and a `ui_home_state` autouse guard that resets to the home frame
+before every test (prevents state bleed if a prior test exited inside a menu).
 
-"""UI-tier fixtures: camera lifecycle, OCR warmup, per-test frame capture,
-and a `ui_home_state` autouse guard that resets to the home frame before
-every test (prevents state bleed if a prior test exited inside a menu).
+The tier is **parametrized per screen-bearing node** (`ui_role`): every UI test
+runs once per role present on the hub (esp32s3 / t_echo / heltec_t114), driving
+that node's port and asserting on the camera FleetSuite has bound to it (the
+binding + rotation come from the registry DB). rak4631 has no display and is
+excluded.
 
 The camera + OCR modules live in `meshtastic_mcp/{camera,ocr}.py` (production
 code, so the `capture_screen` MCP tool can share them). These fixtures wire
@@ -14,6 +17,8 @@ from __future__ import annotations
 
 import re
 import shutil
+import sqlite3
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -26,11 +31,18 @@ from meshtastic_mcp import camera as camera_mod
 from meshtastic_mcp import ocr as ocr_mod
 from meshtastic_mcp.input_events import InputEventCode
 
-from ._screen_log import FrameEvent, get_current_frame, wait_for_frame
+from ._screen_log import FrameEvent, get_current_frame, wait_for_frame, wait_for_reason
 
-# Roles that carry a screen the UI tier can drive. Only esp32s3 (heltec-v3
-# SSD1306) qualifies today — nrf52 (rak4631) has no display.
-UI_CAPABLE_ROLES = ("esp32s3",)
+# Roles that carry a screen the UI tier can drive. esp32s3 (heltec-v3 SSD1306),
+# t_echo (LilyGO e-ink), heltec_t114 (TFT). rak4631 is a bare WisBlock module
+# with no display, so it's excluded.
+UI_CAPABLE_ROLES = ("esp32s3", "t_echo", "heltec_t114")
+
+# Per-role settle (seconds) to wait after an input event before capturing the
+# camera frame. e-ink does a slow full refresh, so it needs much longer than an
+# OLED/TFT for the drawn frame to actually be on the glass.
+_POST_EVENT_SETTLE_S = {"t_echo": 2.0}
+_DEFAULT_SETTLE_S = 0.4
 
 # Where per-test captures land. One subdirectory per session seed, then per
 # sanitized test nodeid — identical pattern to other pytest artifacts.
@@ -41,67 +53,142 @@ def _sanitize_nodeid(nodeid: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", nodeid)
 
 
-# ---------- Role gating ----------------------------------------------------
+def _port_of(entry: Any) -> str | None:
+    return entry.get("port") if isinstance(entry, dict) else entry
 
 
-@pytest.fixture
-def ui_capable_role(request: pytest.FixtureRequest, hub_devices: dict[str, Any]) -> str:
-    """Resolve the single role the UI tier drives.
+def post_event_settle(role: str) -> float:
+    """Seconds to wait after an input event before a camera capture, by role."""
+    return _POST_EVENT_SETTLE_S.get(role, _DEFAULT_SETTLE_S)
 
-    Today that's `esp32s3`. Skips if the hub doesn't have one. A future
-    multi-screen hub could pick a role per parametrization.
+
+# ---------- Per-node parametrization ---------------------------------------
+
+
+def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    """Run every UI test once per screen-bearing role.
+
+    Parametrizes `ui_role` over `UI_CAPABLE_ROLES` (the autouse fixtures pull it
+    in, so the whole tier is covered). We parametrize over the full set the bench
+    *defines* (so collection is stable off-bench) and skip at runtime for roles
+    not physically present — mirrors the root conftest's `baked_single_role`.
     """
-    for role in UI_CAPABLE_ROLES:
-        if role in hub_devices:
-            return role
-    pytest.skip(
-        f"no UI-capable role on hub; need one of {UI_CAPABLE_ROLES} in {sorted(hub_devices)}"
-    )
+    if "ui_role" not in metafunc.fixturenames:
+        return
+    from .. import _bench
+
+    bench_roles = set(_bench.roles())
+    roles = [r for r in UI_CAPABLE_ROLES if r in bench_roles] or list(UI_CAPABLE_ROLES)
+    metafunc.parametrize("ui_role", roles, ids=roles, scope="function")
 
 
 @pytest.fixture
-def ui_port(ui_capable_role: str, hub_devices: dict[str, Any]) -> str:
-    port = (
-        hub_devices[ui_capable_role].get("port")
-        if isinstance(hub_devices[ui_capable_role], dict)
-        else hub_devices[ui_capable_role]
-    )
+def ui_port(ui_role: str, hub_devices: dict[str, Any]) -> str:
+    if ui_role not in hub_devices:
+        pytest.skip(f"role {ui_role!r} not present on the hub")
+    port = _port_of(hub_devices[ui_role])
     if not port:
-        pytest.skip(f"{ui_capable_role!r} has no usable port")
+        pytest.skip(f"{ui_role!r} has no usable port")
     return port
 
 
-# ---------- Camera + OCR session fixtures ---------------------------------
-
-
 @pytest.fixture(scope="session")
-def camera(ui_capable_role_session: str | None) -> Iterator[camera_mod.CameraBackend]:
-    """Session-scoped camera backend. Closed at teardown.
+def ui_roles_present_session(hub_devices: dict[str, Any]) -> list[str]:
+    """Non-skipping list of screen-bearing roles on the hub (for session setup)."""
+    return [r for r in UI_CAPABLE_ROLES if r in hub_devices]
 
-    Backend + device selected by env vars (see `meshtastic_mcp.camera`).
-    Falls through to `NullBackend` when no camera is configured, so the
-    tests run end-to-end on machines without hardware; they just won't
-    have useful images.
-    """
-    role = ui_capable_role_session or "esp32s3"
-    cam = camera_mod.get_camera(role)
+
+# ---------- Per-node camera resolution (DB-backed) -------------------------
+
+
+def _fleetsuite_db_path() -> Path:
+    """Path to the FleetSuite registry DB that holds camera↔device bindings."""
     try:
-        yield cam
-    finally:
-        cam.close()
+        from meshtastic_mcp.web.db.database import default_db_path
+
+        return default_db_path()
+    except Exception:
+        import os
+
+        env = os.environ.get("MESHTASTIC_MCP_WEB_DB")
+        return Path(env) if env else Path.home() / ".meshtastic_mcp" / "fleetsuite.db"
+
+
+def camera_binding_for_role(role: str) -> dict[str, Any] | None:
+    """Resolve the camera FleetSuite has bound to ``role``'s node, by hub slot.
+
+    role → bench hub slot (tests/_bench.py) → the device on that slot in the
+    registry → the enabled camera assigned to that device's serial. Returns
+    ``{device_index, rotation, mirror}`` or None when nothing's bound (caller
+    then falls back to env-var / null). Read-only; never mutates the DB.
+    """
+    from .. import _bench
+
+    hp = _bench.location_hub_port(_bench.role_location(role))
+    if not hp:
+        return None
+    db_path = _fleetsuite_db_path()
+    if not db_path.exists():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            row = con.execute(
+                "SELECT c.device_index, c.rotation, c.mirror "
+                "FROM cameras c JOIN devices d ON c.device_serial = d.serial_number "
+                "WHERE d.hub_location=? AND d.hub_port=? AND c.enabled=1 "
+                "ORDER BY c.id LIMIT 1",
+                (hp[0], hp[1]),
+            ).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    if not row or row[0] is None:
+        return None
+    return {"device_index": row[0], "rotation": int(row[1] or 0), "mirror": bool(row[2])}
 
 
 @pytest.fixture(scope="session")
-def ui_capable_role_session(hub_devices: dict[str, Any]) -> str | None:
-    """Session-scoped lookup mirroring `ui_capable_role` but non-skipping.
+def _node_cameras() -> Iterator[dict[str, camera_mod.CameraBackend]]:
+    """Session cache of opened camera backends, keyed by role. Opening a cv2
+    capture (with warmup) is slow, so reuse one per node across the tier."""
+    cams: dict[str, camera_mod.CameraBackend] = {}
+    try:
+        yield cams
+    finally:
+        for cam in cams.values():
+            try:
+                cam.close()
+            except Exception:
+                pass
 
-    Used by the `camera` session fixture so it doesn't depend on a
-    test-scoped skip.
+
+@pytest.fixture
+def node_camera(
+    ui_role: str, _node_cameras: dict[str, camera_mod.CameraBackend]
+) -> camera_mod.CameraBackend:
+    """The camera bound to the node under test, oriented per the DB rotation.
+
+    Falls back to the env-var-configured camera (then NullBackend) when the role
+    has no DB binding, so the tier still runs end-to-end without hardware.
     """
-    for role in UI_CAPABLE_ROLES:
-        if role in hub_devices:
-            return role
-    return None
+    if ui_role not in _node_cameras:
+        binding = camera_binding_for_role(ui_role)
+        if binding is not None:
+            cam = camera_mod.get_camera(
+                ui_role,
+                device=binding["device_index"],
+                rotation=binding["rotation"],
+                mirror=binding["mirror"],
+            )
+        else:
+            cam = camera_mod.get_camera(ui_role)
+        _node_cameras[ui_role] = cam
+    return _node_cameras[ui_role]
+
+
+# ---------- OCR warmup -----------------------------------------------------
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -117,57 +204,47 @@ def _ocr_warm() -> None:
         pass
 
 
-@pytest.fixture(scope="session")
-def _ui_screen_kept_on(
-    ui_capable_role_session: str | None, hub_devices: dict[str, Any]
-) -> Iterator[None]:
-    """Keep the OLED on throughout the UI tier so input events aren't dropped.
+# ---------- Per-node firmware-log view (port-filtered) ---------------------
 
-    Why: `InputBroker::handleInputEvent` (src/input/InputBroker.cpp:118-122)
-    silently DROPS any event that arrives while the screen is off — it just
-    wakes the screen and returns. Every first event in each test would
-    disappear. We set `display.screen_on_secs = 86400` at session start
-    (effectively "always on" for the test window) and restore the prior
-    value at teardown.
+
+@pytest.fixture(autouse=True)
+def node_log_lines(
+    request: pytest.FixtureRequest, ui_port: str, _debug_log_buffer: Any
+) -> Iterator[list[str]]:
+    """A per-node view of the firmware log: only `meshtastic.log.line` events
+    from the node under test's port.
+
+    The root `_debug_log_buffer` captures EVERY port's lines unfiltered, which
+    would let one node's `Screen: frame …` logs bleed into another node's test.
+    We subscribe our own port-filtered handler and OVERWRITE
+    `request.node._debug_log_buffer` with the filtered list, so existing tests
+    (and `frame_capture`) that read that attribute transparently get the
+    node-scoped view. Depends on `_debug_log_buffer` so we always run after it.
     """
-    if ui_capable_role_session is None:
-        yield
-        return
+    from pubsub import pub  # type: ignore[import-untyped]
 
-    hub_entry = hub_devices[ui_capable_role_session]
-    port = hub_entry.get("port") if isinstance(hub_entry, dict) else hub_entry
-    if not port:
-        yield
-        return
+    lines: list[str] = []
+    lock = threading.Lock()
+    want = str(ui_port)
 
-    original: int | None = None
+    def handler(line: str, interface: Any = None) -> None:
+        dev = getattr(interface, "devPath", None)
+        # Keep lines from this node's port; keep un-attributable lines too (the
+        # only interface open during a UI test is this node's transient connect).
+        if dev is None or str(dev) == want:
+            with lock:
+                lines.append(line)
+
+    pub.subscribe(handler, "meshtastic.log.line")
+    request.node._debug_log_buffer = lines  # type: ignore[attr-defined]
+    request.node._ui_node_log_handler_ref = handler  # type: ignore[attr-defined]
     try:
-        current = admin_mod.get_config(section="display", port=port)
-        original = int(current.get("config", {}).get("display", {}).get("screen_on_secs") or 0)
-    except Exception:
-        pass
-
-    try:
-        admin_mod.set_config("display.screen_on_secs", 86400, port=port)
-        # Send one wake event so the screen is actually ON going into the
-        # first test. The event itself gets dropped (screenWasOff), but the
-        # wake side-effect sticks.
+        yield lines
+    finally:
         try:
-            admin_mod.send_input_event(event_code=int(InputEventCode.FN_F1), port=port)
+            pub.unsubscribe(handler, "meshtastic.log.line")
         except Exception:
             pass
-        time.sleep(1.5)  # Let the screen finish its wake transition.
-    except Exception:
-        pass
-
-    try:
-        yield
-    finally:
-        if original is not None:
-            try:
-                admin_mod.set_config("display.screen_on_secs", original, port=port)
-            except Exception:
-                pass
 
 
 # ---------- Per-test capture + transcript ----------------------------------
@@ -249,7 +326,7 @@ class FrameCapture:
 @pytest.fixture
 def frame_capture(
     request: pytest.FixtureRequest,
-    camera: camera_mod.CameraBackend,
+    node_camera: camera_mod.CameraBackend,
     session_seed: str,
 ) -> Iterator[FrameCapture]:
     nodeid = _sanitize_nodeid(request.node.nodeid)
@@ -259,13 +336,68 @@ def frame_capture(
         shutil.rmtree(dir_path)
 
     lines = getattr(request.node, "_debug_log_buffer", [])
-    fc = FrameCapture(camera, dir_path, lines, nodeid)
+    fc = FrameCapture(node_camera, dir_path, lines, nodeid)
     # Stash so pytest_runtest_makereport can embed captures in HTML extras.
     request.node._ui_captures = fc.captures  # type: ignore[attr-defined]
     yield fc
 
 
-# ---------- Pre-test home-state reset --------------------------------------
+# ---------- Session screen-on + per-node home reset ------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ui_screen_kept_on(
+    ui_roles_present_session: list[str], hub_devices: dict[str, Any]
+) -> Iterator[None]:
+    """Keep every screen-bearing node's display on for the UI tier, and ensure
+    its firmware streams the frame log.
+
+    Why screen-on: `InputBroker::handleInputEvent` (src/input/InputBroker.cpp)
+    silently DROPS any event that arrives while the screen is off — it just
+    wakes the screen and returns. We set `display.screen_on_secs = 86400` per
+    node at session start and restore the prior value at teardown.
+
+    Why debug-log: the `Screen: frame …` lines the tier asserts on only reach us
+    when `security.debug_log_api_enabled=True`; enable it per node (idempotent).
+    """
+    originals: dict[str, tuple[str, int | None]] = {}
+    for role in ui_roles_present_session:
+        port = _port_of(hub_devices[role])
+        if not port:
+            continue
+        prior: int | None = None
+        try:
+            current = admin_mod.get_config(section="display", port=port)
+            prior = int(current.get("config", {}).get("display", {}).get("screen_on_secs") or 0)
+        except Exception:
+            pass
+        originals[role] = (port, prior)
+        try:
+            admin_mod.set_config("display.screen_on_secs", 86400, port=port)
+        except Exception:
+            pass
+        try:
+            admin_mod.set_debug_log_api(True, port=port)
+        except Exception:
+            pass
+        # Wake the screen so the first test's first event isn't eaten.
+        try:
+            admin_mod.send_input_event(event_code=int(InputEventCode.FN_F1), port=port)
+        except Exception:
+            pass
+
+    if originals:
+        time.sleep(1.5)  # let the wake transitions finish
+
+    try:
+        yield
+    finally:
+        for _role, (port, prior) in originals.items():
+            if prior is not None:
+                try:
+                    admin_mod.set_config("display.screen_on_secs", prior, port=port)
+                except Exception:
+                    pass
 
 
 def _send_event(port: str, event: InputEventCode) -> None:
@@ -280,76 +412,51 @@ def _send_event(port: str, event: InputEventCode) -> None:
 @pytest.fixture(autouse=True)
 def ui_home_state(
     request: pytest.FixtureRequest,
-    hub_devices: dict[str, Any],
+    ui_role: str,
+    ui_port: str,
+    node_log_lines: list[str],
     _ui_screen_kept_on: None,
 ) -> Iterator[None]:
-    """Before every UI test, jump to frame 0 (usually `home`) via FN_F1 and
-    confirm the device emitted the expected frame log.
+    """Before every UI test, jump the node under test to frame 0 (usually
+    `home`) via FN_F1 and confirm it emitted the expected frame log.
 
-    Why FN_F1 (not BACK): FN_F1 maps to `switchToFrame(0)` and ALWAYS
-    produces a `reason=fn_f1` log line, regardless of whatever frame the
-    prior test left us on. BACK is context-sensitive (dismisses overlays
-    on some frames, no-op on others) and can silently fail to transition.
+    Why FN_F1 (not BACK): FN_F1 maps to `switchToFrame(0)` and ALWAYS produces a
+    `reason=fn_f1` log line regardless of the frame the prior test left us on.
+    BACK is context-sensitive and can silently fail to transition.
 
-    This fixture doubles as the macro-presence detector: if no `fn_f1`
-    log arrives within 5 s, the firmware almost certainly wasn't baked
-    with `USERPREFS_UI_TEST_LOG`. Skip the tier with an actionable hint
-    instead of letting every test body fail with a confusing assertion.
-
-    Autouse scope is restricted to `tests/ui/` by virtue of this fixture
-    living in that directory's conftest.py — no explicit nodeid guard
-    needed (and earlier attempts at one were wrong, matching `/tests/ui/`
-    against a nodeid that has no leading slash).
+    Doubles as the per-node capability detector: if no `fn_f1` log arrives in
+    5 s, the firmware wasn't baked with `USERPREFS_UI_TEST_LOG`, or this display
+    (e.g. e-ink t_echo) doesn't drive the carousel frame log — skip this node's
+    case with an actionable hint instead of a confusing assertion failure.
     """
-    role = next((r for r in UI_CAPABLE_ROLES if r in hub_devices), None)
-    if role is None:
-        yield
-        return
-
-    hub_entry = hub_devices[role]
-    port = hub_entry.get("port") if isinstance(hub_entry, dict) else hub_entry
-    lines: list[str] = getattr(request.node, "_debug_log_buffer", [])
+    lines = node_log_lines
     start_len = len(lines)
 
-    # First: a wake event. The screen should already be kept on by
-    # `_ui_screen_kept_on`, but belt + suspenders — if it somehow
-    # powered off (sleep after factory_reset, etc.), this first FN_F1
-    # gets dropped by InputBroker's screenWasOff guard. That's fine;
-    # the second FN_F1 below lands cleanly.
-    _send_event(port, InputEventCode.FN_F1)
+    # First FN_F1 may be eaten by the screenWasOff guard; the second lands.
+    _send_event(ui_port, InputEventCode.FN_F1)
     time.sleep(0.4)
-    _send_event(port, InputEventCode.FN_F1)
-
-    # Wait for the fn_f1 transition log. Any new `reason=fn_f1` line
-    # after call-start counts — we don't care about the name (it should
-    # be `home` or `deviceFocused` depending on board-specific frame order).
-    from ._screen_log import wait_for_reason
+    _send_event(ui_port, InputEventCode.FN_F1)
 
     try:
         wait_for_reason(lines, "fn_f1", timeout_s=5.0)
     except TimeoutError:
-        # One more try — FreeRTOS queue may be draining slowly.
-        _send_event(port, InputEventCode.FN_F1)
+        _send_event(ui_port, InputEventCode.FN_F1)
         try:
             wait_for_reason(lines, "fn_f1", timeout_s=5.0)
         except TimeoutError:
-            # Look at what the _debug_log_buffer actually contains to
-            # disambiguate "macro off" from "macro on but event lost".
             frame_lines = [ln for ln in lines[start_len:] if "Screen: frame" in ln]
-            processing_lines = [ln for ln in lines[start_len:] if "Processing input event" in ln]
             if frame_lines:
                 pytest.skip(
-                    f"ui_home_state: events fire but none reach Screen "
-                    f"(saw {len(frame_lines)} frame line(s), "
-                    f"{len(processing_lines)} admin inject(s)). "
-                    f"Device may be in an unusual state — try `--force-bake`."
+                    f"ui_home_state[{ui_role}]: events fire but none reach Screen "
+                    f"(saw {len(frame_lines)} frame line(s)). Device may be in an "
+                    f"unusual state — try `--force-bake`."
                 )
             else:
                 pytest.skip(
-                    "ui_home_state: no `Screen: frame` log after FN_F1. "
-                    "Firmware not baked with USERPREFS_UI_TEST_LOG — "
-                    "run with `--force-bake` to reflash, or verify the "
-                    "macro is active in the bake."
+                    f"ui_home_state[{ui_role}]: no `Screen: frame` log after FN_F1. "
+                    f"Firmware not baked with USERPREFS_UI_TEST_LOG, this node is "
+                    f"unresponsive, or this display doesn't drive the carousel "
+                    f"frame log. Run with `--force-bake` to reflash."
                 )
     yield
 
@@ -366,11 +473,8 @@ __all__ = [
     "UI_CAPABLE_ROLES",
     "FrameCapture",
     "FrameEvent",
+    "camera_binding_for_role",
+    "post_event_settle",
     "send_event",
     "wait_for_frame",
 ]
-
-
-# Make the helpers discoverable to test modules via `from .conftest import …`.
-# pytest auto-loads conftest.py, but the symbols above are also re-exported
-# for readability in the test files.

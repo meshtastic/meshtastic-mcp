@@ -28,7 +28,7 @@ import os
 import subprocess
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
@@ -95,6 +95,7 @@ def _run_capturing(
     timeout: float | None = None,
     tee_header: str | None = None,
     extra_env: dict[str, str] | None = None,
+    line_cb: Callable[[str], None] | None = None,
 ) -> tuple[int, str, str, float]:
     """Run a subprocess, capture stdout+stderr, optionally tee to the flash log.
 
@@ -120,7 +121,7 @@ def _run_capturing(
     if extra_env:
         env = {**os.environ, **extra_env}
 
-    if log_path is None:
+    if log_path is None and line_cb is None:
         # Fast path — unchanged.
         completed = subprocess.run(
             list(argv),
@@ -137,14 +138,17 @@ def _run_capturing(
             time.monotonic() - t0,
         )
 
-    # Streaming path: line-buffered Popen, threaded readers, tee to file.
-    # Ensure parent directory exists so the first tee write doesn't fail.
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Streaming path: line-buffered Popen, threaded readers — tee to the flash
+    # log file (when `MESHTASTIC_MCP_FLASH_LOG` is set) AND/OR invoke `line_cb`
+    # for live progress (FleetSuite's per-line flash/build streaming).
     log_fh: TextIO | None = None
-    try:
-        log_fh = log_path.open("a", encoding="utf-8")
-    except OSError:
-        pass
+    if log_path is not None:
+        # Ensure parent directory exists so the first tee write doesn't fail.
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            log_fh = log_path.open("a", encoding="utf-8")
+        except OSError:
+            pass
     # Append mode: the TUI truncates on startup, the session may produce
     # many tee'd commands (erase + flash + factory-reset response), and
     # we want all of them chronologically in one log.
@@ -187,6 +191,11 @@ def _run_capturing(
             for line in stream:
                 sink.append(line)
                 _append_log(line)
+                if line_cb is not None:
+                    try:
+                        line_cb(line.rstrip("\n"))
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -240,6 +249,7 @@ def run(
     timeout: float | None = TIMEOUT_DEFAULT,
     check: bool = True,
     extra_env: dict[str, str] | None = None,
+    line_cb: Callable[[str], None] | None = None,
 ) -> PioResult:
     """Invoke `pio <args>` and return captured output.
 
@@ -263,6 +273,7 @@ def run(
             timeout=timeout,
             tee_header=f"pio {' '.join(args)}",
             extra_env=extra_env,
+            line_cb=line_cb,
         )
     except subprocess.TimeoutExpired as exc:
         raise PioTimeout(f"pio {' '.join(args)} timed out after {timeout}s") from exc

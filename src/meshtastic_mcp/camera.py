@@ -51,13 +51,48 @@ class CameraBackend(Protocol):
     def close(self) -> None: ...
 
 
+# ---------- frame orientation ----------------------------------------------
+
+
+def orient_frame(frame, rotation: int = 0, mirror: bool = False):
+    """Rotate/mirror a decoded BGR frame to match the FleetSuite UI's camera
+    orientation, so OCR sees an upright image.
+
+    ``rotation`` is degrees CLOCKWISE (snapped to 0/90/180/270, matching the
+    DB's per-camera value); ``mirror`` flips horizontally. Pure transform on a
+    numpy array — no capture/IO — so it's unit-testable with a synthetic frame.
+    Returns the (possibly new) array; a no-op rotation/mirror returns it as-is.
+    """
+    import cv2  # type: ignore[import-untyped]
+
+    rot = min((0, 90, 180, 270), key=lambda r: abs(r - (int(rotation) % 360)))
+    if rot == 90:
+        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    elif rot == 180:
+        frame = cv2.rotate(frame, cv2.ROTATE_180)
+    elif rot == 270:
+        frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if mirror:
+        frame = cv2.flip(frame, 1)  # 1 = horizontal flip
+    return frame
+
+
 # ---------- OpenCV backend -------------------------------------------------
 
 
 class OpenCVBackend:
     name = "opencv"
 
-    def __init__(self, device: int | str, warmup_frames: int = 5) -> None:
+    def __init__(
+        self,
+        device: int | str,
+        warmup_frames: int = 5,
+        *,
+        rotation: int = 0,
+        mirror: bool = False,
+    ) -> None:
+        self._rotation = rotation
+        self._mirror = mirror
         try:
             import cv2  # type: ignore[import-untyped]
         except ImportError as exc:
@@ -94,6 +129,8 @@ class OpenCVBackend:
         ok, frame = self._cap.read()
         if not ok or frame is None:
             raise CameraError("cv2.VideoCapture.read() returned no frame")
+        if self._rotation or self._mirror:
+            frame = orient_frame(frame, self._rotation, self._mirror)
         success, buf = cv2.imencode(".png", frame)
         if not success:
             raise CameraError("cv2.imencode('.png', ...) failed")
@@ -192,15 +229,28 @@ def _resolve_device(role: str | None) -> str | None:
     return os.environ.get("MESHTASTIC_UI_CAMERA_DEVICE")
 
 
-def get_camera(role: str | None = None) -> CameraBackend:
+def get_camera(
+    role: str | None = None,
+    *,
+    device: int | str | None = None,
+    rotation: int = 0,
+    mirror: bool = False,
+) -> CameraBackend:
     """Return a CameraBackend for the given device role (e.g. `"esp32s3"`).
+
+    ``device`` (an explicit OpenCV index or path) overrides the env-var
+    resolution — used by the UI tier to bind a node to the camera the operator
+    assigned it in FleetSuite. ``rotation``/``mirror`` orient the captured frame
+    (clockwise degrees + horizontal flip) so OCR sees it upright; they apply to
+    the opencv backend only (ffmpeg/null treat them as a no-op).
 
     Falls back to `NullBackend` if no camera is configured or the selected
     backend fails to init — tests should treat captures as best-effort
     evidence, not a blocker.
     """
     backend = os.environ.get("MESHTASTIC_UI_CAMERA_BACKEND", "auto").lower()
-    device = _resolve_device(role)
+    if device is None:
+        device = _resolve_device(role)
 
     if backend in ("null", "none") or device is None:
         return NullBackend()
@@ -216,7 +266,7 @@ def get_camera(role: str | None = None) -> CameraBackend:
 
     if backend == "opencv":
         try:
-            return OpenCVBackend(device)
+            return OpenCVBackend(device, rotation=rotation, mirror=mirror)
         except CameraError as exc:
             warnings.warn(
                 f"camera backend {backend!r} failed to initialize for device "
@@ -277,6 +327,7 @@ __all__ = [
     "OpenCVBackend",
     "capture_to_file",
     "get_camera",
+    "orient_frame",
     "save_capture",
 ]
 

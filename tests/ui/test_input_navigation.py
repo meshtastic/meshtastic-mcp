@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """INPUT_BROKER_RIGHT cycles forward through frames; INPUT_BROKER_LEFT backs.
 
 The simplest UI test: fire N RIGHT events and assert the frame index

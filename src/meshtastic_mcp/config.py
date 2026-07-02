@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -114,14 +115,21 @@ def _ensure_wrapper(name: str, cmd: str) -> Path:
     return wrapper
 
 
-def _hw_tool(env_var: str, names: tuple[str, ...], install_hint: str) -> Path:
+def _hw_tool(
+    env_var: str,
+    names: tuple[str, ...],
+    install_hint: str,
+    pio_pkg: str | None = None,
+) -> Path:
     """Shared resolver for esptool / nrfutil / picotool.
 
     Resolution order:
       1. Explicit env var override (MESHTASTIC_ESPTOOL_BIN etc.)
-      2. Firmware repo .venv/bin/<name>
+      2. Firmware repo .venv/bin/<name>, then the running interpreter's own bin
+         dir (so `pip install <tool>` into the active venv just works)
       3. System PATH
       4. PlatformIO penv: `python -m <module>` wrapper (esptool only)
+      5. PlatformIO package dir `~/.platformio/packages/<pio_pkg>/<name>`
     """
     env = os.environ.get(env_var)
     if env:
@@ -130,14 +138,16 @@ def _hw_tool(env_var: str, names: tuple[str, ...], install_hint: str) -> Path:
             return p
         raise ConfigError(f"{env_var}={env!r} is not an executable file")
 
+    bin_dirs: list[Path] = []
     try:
-        venv_bin = firmware_root() / ".venv" / "bin"
+        bin_dirs.append(firmware_root() / ".venv" / "bin")
     except ConfigError:
-        venv_bin = None
+        pass
+    bin_dirs.append(Path(sys.executable).parent)  # the venv running the harness
 
-    for name in names:
-        if venv_bin is not None:
-            p = venv_bin / name
+    for bin_dir in bin_dirs:
+        for name in names:
+            p = bin_dir / name
             if p.is_file() and os.access(p, os.X_OK):
                 return p
 
@@ -165,6 +175,13 @@ def _hw_tool(env_var: str, names: tuple[str, ...], install_hint: str) -> Path:
             except Exception:
                 pass
 
+    if pio_pkg:
+        pio_dir = Path.home() / ".platformio" / "packages" / pio_pkg
+        for name in names:
+            p = pio_dir / name
+            if p.is_file() and os.access(p, os.X_OK):
+                return p
+
     raise ConfigError(
         f"Could not find `{names[0]}`. {install_hint} Or set {env_var} to an absolute path."
     )
@@ -175,6 +192,7 @@ def esptool_bin() -> Path:
         "MESHTASTIC_ESPTOOL_BIN",
         ("esptool", "esptool.py"),
         "Install via `pip install esptool`.",
+        pio_pkg="tool-esptoolpy",
     )
 
 

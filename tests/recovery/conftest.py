@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Recovery-tier gating + shared helpers.
 
 Session-scoped guard skips the whole tier when uhubctl isn't installed.

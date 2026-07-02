@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Mesh: broadcast text from TX arrives at RX.
 
 Uses `meshtastic.SerialInterface` pubsub on RX to detect the decoded text

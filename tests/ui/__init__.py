@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """UI tier — input-broker-driven screen navigation tests.
 
 Only runs when a screen-bearing role (esp32s3/heltec-v3) is present on the

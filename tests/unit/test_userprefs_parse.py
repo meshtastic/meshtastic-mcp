@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Unit tests for `userprefs.py`: jsonc parse, type inference, round-trip
 write, and the `temporary_overrides` context manager's byte-for-byte restore.
 

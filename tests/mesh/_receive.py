@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Shared helper for mesh receive tests.
 
 `pio device monitor` captures firmware log output, which does NOT include

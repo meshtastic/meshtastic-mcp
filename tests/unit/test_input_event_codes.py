@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Pin `InputEventCode` values to the firmware `input_broker_event` enum.
 
 If this test fails, someone changed the firmware enum (or this Python

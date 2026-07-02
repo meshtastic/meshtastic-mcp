@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """FN_F1..F5 directly jumps to frame 0..4 via Screen::handleInputEvent.
 
 Parametrized over the 5 function keys. Each expects a

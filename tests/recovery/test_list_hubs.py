@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Smoke test: `uhubctl_list` returns a well-formed structure.
 
 No destructive action. Runs first in the tier as a sanity check that the

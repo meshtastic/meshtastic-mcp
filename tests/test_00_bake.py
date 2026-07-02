@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Session-bake module — runs first in the tier order to flash both hub roles
 with the session `test_profile`.
 
@@ -15,9 +12,9 @@ tests either depend on `baked_mesh` (which verifies state) or do their own
 per-test bake (provisioning/fleet tiers), so failing here gives one clear
 actionable failure instead of a cascade of mismatches.
 
-Hardware-specific env names live in a small role→env map at the top of this
-file; override by setting `MESHTASTIC_MCP_ENV_<ROLE>` env vars (e.g.
-`MESHTASTIC_MCP_ENV_NRF52=heltec-mesh-node-t114`).
+Hardware-specific env names live in the per-board `BENCH_ROLES` map in
+`tests/_bench.py`; override per board by setting `MESHTASTIC_MCP_ENV_<ROLE>` env
+vars (e.g. `MESHTASTIC_MCP_ENV_HELTEC_T114=heltec-mesh-node-t114`).
 """
 
 from __future__ import annotations
@@ -27,15 +24,27 @@ import time
 from typing import Any
 
 import pytest
-import serial  # type: ignore[import-untyped]
 
-from meshtastic_mcp import admin, boards, flash, hw_tools, info
+from meshtastic_mcp import admin, boards, flash, hw_tools, info, port_recovery
 
-# Default envs for a common lab setup. Override per-role via env var.
-_DEFAULT_ENVS = {
-    "nrf52": "rak4631",
-    "esp32s3": "heltec-v3",
-}
+from . import _bench
+
+# Role → PlatformIO env, from the single source of truth in tests/_bench.py.
+# Override per-role via `MESHTASTIC_MCP_ENV_<ROLE>`.
+_DEFAULT_ENVS = _bench.role_envs()
+
+
+# Heap-status logging is gated on the firmware build flag `-DDEBUG_HEAP=1`
+# (src/Power.cpp), NOT a USERPREFS key — so it rides the build, not the
+# userprefs profile. Baked into the test build by default so the e2e
+# mesh/message runs always capture heap telemetry; set
+# `MESHTASTIC_MCP_NO_HEAP_DEBUG=1` to drop it (e.g. if an image runs tight on
+# flash).
+def _test_build_flags() -> dict[str, Any] | None:
+    if os.environ.get("MESHTASTIC_MCP_NO_HEAP_DEBUG"):
+        return None
+    return {"DEBUG_HEAP": 1}
+
 
 _ESP32_ARCHES = {
     "esp32",
@@ -51,49 +60,31 @@ _ESP32_ARCHES = {
 _NRF52_ARCHES = {"nrf52", "nrf52840"}
 
 
-def _wait_port_free(port: str, *, timeout_s: float = 15.0, role: str = "") -> None:
-    """Block until `port` can be exclusively opened, or raise after `timeout_s`.
+def _wait_port_free(
+    port: str, *, timeout_s: float = 15.0, role: str = "", unwedge: bool = True
+) -> str:
+    """Return a serial path that opens EXCLUSIVELY (the lock esptool/nrfutil/pio
+    take), auto-unwedging the device if it's held or hung. The returned path MAY
+    differ from ``port`` — a power-cycle re-enumerates the device on a (possibly)
+    new ``/dev`` path, so callers MUST use the return value.
 
-    Root cause for the retry loop: esptool / nrfutil / pio all take an
-    *exclusive* serial port lock (fcntl LOCK_EX on macOS, EAGAIN otherwise).
-    Anything that held the port recently — the TUI's startup `DevicePollerWorker._poll_once()`,
-    a prior `device_info` call, a lingering `meshtastic-mcp` subprocess
-    spawned by the operator's MCP host, or a stale `pio device monitor` —
-    can still be holding it when `test_00_bake` reaches the flash step. The
-    result is esptool exiting 2 in ~0.1s with `[Errno 35] Resource
-    temporarily unavailable`.
-
-    `pyserial.Serial(exclusive=True)` probes the same lock esptool takes;
-    a brief open/close cycle is the cleanest way to verify the port is
-    genuinely free before handing it to a subprocess we can't easily
-    retry. 200 ms poll interval keeps the failure fast while giving the
-    kernel time to release a just-closed descriptor.
-
-    Raises AssertionError (rather than a generic TimeoutError) so the
-    pytest summary shows the role + port + a hint at `lsof`.
-    """
-    role_prefix = f"{role}: " if role else ""
-    deadline = time.monotonic() + timeout_s
-    last_exc: BaseException | None = None
-    while time.monotonic() < deadline:
-        try:
-            s = serial.Serial(port=port, exclusive=True, timeout=0.5)
-        except Exception as exc:
-            last_exc = exc
-            time.sleep(0.2)
-            continue
-        try:
-            s.close()
-        except Exception:
-            pass
-        return
-    raise AssertionError(
-        f"{role_prefix}port {port} still busy after {timeout_s:.0f}s — "
-        f"something else holds an exclusive lock. Last error: {last_exc!r}. "
-        f"Identify the holder with `lsof {port}` and kill it; common "
-        f"culprits are a lingering `meshtastic-mcp` subprocess from the "
-        f"MCP host (.mcp.json) or a stale `pio device monitor`."
-    )
+    Escalation lives in :mod:`meshtastic_mcp.port_recovery`: probe → wait →
+    diagnose holder (lsof) → uhubctl power-cycle the device's own hub slot →
+    re-resolve. ``unwedge=False`` keeps it a passive settle-wait (e.g. mid-erase,
+    where a power-cycle would be wrong) and raises with an ``lsof`` hint on
+    timeout."""
+    try:
+        return port_recovery.ensure_port_free(
+            port, role=role, wait_s=timeout_s, allow_power_cycle=unwedge
+        )
+    except port_recovery.PortRecoveryError as exc:
+        holders = port_recovery.who_holds_port(port)
+        raise AssertionError(
+            f"{exc!s}\nHolders ({port}): "
+            f"{holders or 'none — a wedged device (EINVAL); needs USB re-enumerate'}. "
+            f"Common culprits: a lingering `meshtastic-mcp` subprocess (.mcp.json) "
+            f"or a stale `pio device monitor`."
+        ) from exc
 
 
 def _prepare_nrf52_for_upload(port: str) -> str:
@@ -109,6 +100,11 @@ def _prepare_nrf52_for_upload(port: str) -> str:
     Fails loudly if the device doesn't enter DFU — no point trying pio
     upload against an app-mode device, it'll just hang.
     """
+    # Remember this board's physical hub slot before the touch. With several
+    # nRF52 boards present (one may already be sitting in DFU), the global
+    # bootloader scan in `touch_1200bps` can return a DIFFERENT board's
+    # bootloader — so after the touch we re-pin to whatever is on THIS slot.
+    hub, slot = port_recovery.hub_slot_for_port(port)
     result = flash.touch_1200bps(port=port, settle_ms=500, retries=2)
     if not result.get("ok"):
         raise AssertionError(
@@ -118,6 +114,12 @@ def _prepare_nrf52_for_upload(port: str) -> str:
             f"Detected port set before/after touch was unchanged."
         )
     new_port = result["new_port"]
+    if hub is not None and slot is not None:
+        # The touched board re-enumerates (bootloader VID/PID) on its OWN slot;
+        # prefer that path so we never upload to a different nRF52.
+        on_slot = port_recovery.port_on_slot(hub, slot)
+        if on_slot:
+            new_port = on_slot
     # Small settle so pio/nrfutil sees a fully-ready CDC endpoint.
     time.sleep(1.0)
     return new_port
@@ -181,7 +183,9 @@ def _bake_role(
     # Make sure nothing else (TUI startup poll, MCP-host zombie, pio monitor)
     # is holding the port before we hand it to a subprocess. Self-heals the
     # [Errno 35] port-busy flake that otherwise fails the bake in ~0.1s.
-    _wait_port_free(port, role=role)
+    # Auto-unwedge a held/hung port before we hand it to a flash subprocess.
+    # May return a NEW path (power-cycle re-enumerates the device).
+    port = _wait_port_free(port, role=role)
     if arch in _NRF52_ARCHES:
         upload_port = _prepare_nrf52_for_upload(port)
     elif arch in _ESP32_ARCHES:
@@ -199,7 +203,9 @@ def _bake_role(
     # Wait for the port to settle before pio reopens it for upload —
     # otherwise a fast machine can race and hit the same errno 35.
     if arch in _ESP32_ARCHES:
-        _wait_port_free(upload_port, role=role, timeout_s=10.0)
+        # Mid-erase the CDC drops briefly — settle-wait only, do NOT power-cycle
+        # (that would interrupt the erase). unwedge=False.
+        upload_port = _wait_port_free(upload_port, role=role, timeout_s=10.0, unwedge=False)
 
     # NOTE: no `userprefs_overrides=` here. The session-scoped
     # `_session_userprefs` autouse fixture in conftest.py has already baked
@@ -212,6 +218,7 @@ def _bake_role(
         env=env,
         port=upload_port,
         confirm=True,
+        build_flags=_test_build_flags(),
     )
     assert result["exit_code"] == 0, (
         f"{role} bake failed: exit={result['exit_code']}\n"
@@ -230,6 +237,19 @@ def _bake_role(
     if arch in _NRF52_ARCHES:
         # Give the device time to come up from DFU.
         time.sleep(8.0)
+        # nRF52 DFU re-enumerates the device to a fresh /dev/cu.usbmodem* path,
+        # so the pre-flash `port` is stale — re-resolve it (and clear any leaked
+        # registry lock on the old path) before polling. Both the loop below and
+        # the factory_reset that follows must target the live path.
+        from meshtastic_mcp import registry
+
+        from ._port_discovery import resolve_port_by_role
+
+        registry.clear_port_lock(port)
+        try:
+            port = resolve_port_by_role(role, timeout_s=45.0)
+        except Exception:
+            pass  # fall back to the original port; the loop below will surface it
         # Wait for meshtastic to be responsive; `device_info` may take a
         # few seconds on the first post-flash boot.
         for _ in range(20):
@@ -258,34 +278,26 @@ def _bake_role(
 
 
 @pytest.mark.timeout(600)
-def test_bake_nrf52(
+def test_bake(
+    baked_single_role: str,
     hub_devices: dict[str, str],
     test_profile: dict[str, Any],
     request: pytest.FixtureRequest,
 ) -> None:
-    """Flash the nRF52840 role with the session test profile."""
-    if "nrf52" not in hub_devices:
-        pytest.skip("nRF52 not detected on hub")
-    _bake_role(
-        role="nrf52",
-        port=hub_devices["nrf52"],
-        test_profile=test_profile,
-        force_bake=request.config.getoption("--force-bake"),
-    )
+    """Flash one bench role with the session test profile.
 
-
-@pytest.mark.timeout(600)
-def test_bake_esp32s3(
-    hub_devices: dict[str, str],
-    test_profile: dict[str, Any],
-    request: pytest.FixtureRequest,
-) -> None:
-    """Flash the ESP32-S3 role with the session test profile."""
-    if "esp32s3" not in hub_devices:
-        pytest.skip("ESP32-S3 not detected on hub")
+    Auto-parametrized by `pytest_generate_tests` over every detected role, so
+    each connected board is provisioned with ITS correct firmware (the env is
+    resolved per role from `tests/_bench.py`) — instead of the old model that
+    flashed one hard-coded env onto whichever same-VID board enumerated first
+    and left the rest unprovisioned.
+    """
+    role = baked_single_role
+    if role not in hub_devices:
+        pytest.skip(f"role {role!r} not detected on hub")
     _bake_role(
-        role="esp32s3",
-        port=hub_devices["esp32s3"],
+        role=role,
+        port=hub_devices[role],
         test_profile=test_profile,
         force_bake=request.config.getoption("--force-bake"),
     )

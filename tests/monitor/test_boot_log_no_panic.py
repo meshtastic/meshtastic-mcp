@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Monitor: boot log is clean — no panic markers in the first 60 seconds.
 
 This is the single highest-signal test for catching firmware regressions.
@@ -46,12 +43,12 @@ def test_boot_log_no_panic(
     port = baked_single["port"]
     env = role_env(role)
 
-    # Start monitor BEFORE reboot so we catch the reset banner + early boot
-    cap = serial_capture(role, env=env)
-    time.sleep(1.0)
-
-    # Trigger reboot
+    # Reboot FIRST, then start the monitor. admin.reboot() opens the port with
+    # an exclusive lock; if the capture (a `pio device monitor`) already held the
+    # port, the reboot would fail with [Errno 35]. The device reboots in `seconds`,
+    # so the capture comes up before the actual reset banner + early boot.
     admin.reboot(port=port, confirm=True, seconds=3)
+    cap = serial_capture(role, env=env)
     # Wait through the reboot+boot window
     time.sleep(60.0)
 

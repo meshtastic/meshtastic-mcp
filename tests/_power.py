@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """USB hub power control for tests — thin composition of the `uhubctl`
 module + `_port_discovery.resolve_port_by_role`.
 
@@ -20,6 +17,8 @@ failure.
 
 from __future__ import annotations
 
+import os
+import sys
 import time
 from typing import Any
 
@@ -45,19 +44,23 @@ def is_uhubctl_available() -> bool:
     return True
 
 
-def power_on(role: str) -> dict[str, Any]:
+def power_on(role: str, *, resolved: tuple[str, int] | None = None) -> dict[str, Any]:
     """Power on the hub port hosting `role`. Does NOT wait for re-enumeration.
     Use `power_cycle` or follow with `resolve_port_by_role` to block on readiness.
+
+    Pass `resolved=(location, port)` to skip the VID lookup — essential when the
+    device is currently powered OFF (and so invisible to `resolve_target`, which
+    would raise). Resolve once while it's still up and reuse it for on/off.
     """
-    loc, port = uhubctl_mod.resolve_target(role)
+    loc, port = resolved or uhubctl_mod.resolve_target(role)
     return uhubctl_mod.power_on(loc, port)
 
 
-def power_off(role: str) -> dict[str, Any]:
+def power_off(role: str, *, resolved: tuple[str, int] | None = None) -> dict[str, Any]:
     """Power off the hub port hosting `role`. The device disappears from
-    `list_devices` immediately.
-    """
-    loc, port = uhubctl_mod.resolve_target(role)
+    `list_devices` immediately. Pass `resolved=(location, port)` to skip the VID
+    lookup (see `power_on`)."""
+    loc, port = resolved or uhubctl_mod.resolve_target(role)
     return uhubctl_mod.power_off(loc, port)
 
 
@@ -84,10 +87,20 @@ def power_cycle(
     return resolve_port_by_role(role, timeout_s=rediscover_timeout_s)
 
 
-def wait_for_absence(role: str, *, timeout_s: float = 10.0) -> None:
-    """Block until a device matching `role` is NOT in `list_devices`.
+def wait_for_absence(
+    role: str, *, timeout_s: float = 20.0, expected_port: str | None = None
+) -> None:
+    """Block until the device under test is NOT in `list_devices`.
 
-    Used by the recovery tier to assert power_off actually took effect.
+    Used by the recovery tier to assert `power_off` actually took effect.
+
+    Pass `expected_port` (the exact `/dev` path) to key absence on THAT node
+    disappearing — strictly tighter than the VID-set test, and immune to a second
+    same-VID adapter (e.g. another CP210x) spoofing presence. Without it, falls
+    back to "no listed device carries this role's VID" for callers that don't have
+    a specific path. The default window is generous because, after a VBUS cut,
+    macOS only reaps the USB-serial node once the last client fd closes.
+
     Raises TimeoutError on failure.
     """
     from meshtastic_mcp import devices as devices_mod
@@ -100,13 +113,61 @@ def wait_for_absence(role: str, *, timeout_s: float = 10.0) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         found = devices_mod.list_devices(include_unknown=True)
-        if not any(_coerce_vid(d.get("vid")) in wanted for d in found):
+        if expected_port is not None:
+            if not any(d.get("port") == expected_port for d in found):
+                return
+        elif not any(_coerce_vid(d.get("vid")) in wanted for d in found):
             return
         time.sleep(0.3)
-    raise TimeoutError(f"role {role!r} still visible after {timeout_s}s of power_off")
+    raise TimeoutError(
+        f"role {role!r} (port {expected_port}) still visible after {timeout_s}s of power_off"
+    )
+
+
+def drain_port_fd(port: str, *, timeout_s: float = 8.0) -> bool:
+    """Best-effort: wait for any lingering serial fd on `port` to close, and clear
+    any leaked in-process port lock, so a following VBUS cut can actually tear down
+    the device's CDC node.
+
+    A meshtastic `device_info`/`connect` can leave an fd open on a daemon
+    close-thread (`connection._close_bounded` abandons a slow close after 5s). On
+    macOS a held fd pins the USB-serial node in the IORegistry, so the device keeps
+    showing up in `list_devices` even after its hub slot loses power — which is
+    exactly what makes `wait_for_absence` time out. Draining the fd first lets
+    `power_off` + `wait_for_absence` behave as intended.
+
+    Returns True once the port opens exclusively (nothing holds it), False on
+    timeout. Never raises — purely advisory.
+    """
+    from meshtastic_mcp import registry
+    from meshtastic_mcp.port_recovery import port_openable, who_holds_port
+
+    # Drop any leaked in-process per-port lock (e.g. an abandoned connect thread).
+    try:
+        registry.clear_port_lock(port)
+    except Exception:
+        pass
+
+    deadline = time.monotonic() + timeout_s
+    warned = False
+    while time.monotonic() < deadline:
+        ok, _ = port_openable(port, exclusive=True, timeout=0.5)
+        if ok:
+            return True
+        if not warned and any(pid == str(os.getpid()) for _cmd, pid in who_holds_port(port)):
+            warned = True  # log the diagnostic once, not every poll
+            print(
+                f"[power-cycle-test] {port}: our own process still holds an fd "
+                f"(lingering close-thread) — waiting for it to drain…",
+                file=sys.stderr,
+                flush=True,
+            )
+        time.sleep(0.3)
+    return False
 
 
 __all__ = [
+    "drain_port_fd",
     "is_uhubctl_available",
     "power_cycle",
     "power_off",

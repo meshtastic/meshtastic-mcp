@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Meshtastic contributors
-# SPDX-License-Identifier: GPL-3.0-only
-
 """Telemetry: on-demand device-metrics request gets a prompt reply.
 
 Complementary to ``test_device_telemetry_broadcast`` — that one witnesses the

@@ -92,6 +92,20 @@ def port_lock(port: str) -> threading.Lock:
         return lock
 
 
+def clear_port_lock(port: str) -> None:
+    """Drop a port's lock so the next ``port_lock(port)`` mints a fresh, unheld
+    one. Recovers from a LEAKED lock: if an operation holding it was abandoned —
+    e.g. a bounded ``connect()`` whose thread is stuck in meshtastic's unbounded
+    TX-queue drain and never reached its ``finally`` release — the Lock stays
+    acquired forever and blocks every later in-process ``connect()`` on that
+    port. Popping the entry orphans that stuck Lock (GC reclaims it once the dead
+    thread is) and lets new callers proceed. We deliberately do NOT call
+    ``lock.release()`` here — releasing a Lock from a non-owner thread is
+    undefined behaviour."""
+    with _LOCK:
+        _port_locks.pop(port, None)
+
+
 def snapshot() -> dict[str, Any]:
     """Debug dump: session count, port lock count."""
     with _LOCK:
