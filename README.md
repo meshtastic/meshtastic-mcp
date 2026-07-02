@@ -249,7 +249,9 @@ meshtastic-mcp-web --browser    # serve only (headless / open it yourself)
 ```
 
 Binds to `127.0.0.1` by default. Destructive actions (reflash / factory-reset) require an
-explicit confirmation. From a source checkout, `./scripts/fleetsuite.sh` bootstraps
+explicit confirmation. While FleetSuite runs it owns the bench's serial ports (monitors +
+enrichment) — pause it or use its own controls rather than pointing a second tool at the same
+ports; its test runner already suspends the monitors for the duration of a run. From a source checkout, `./scripts/fleetsuite.sh` bootstraps
 everything (venv + npm + SPA build) in one command; `./scripts/web-dev.sh` runs the
 backend + Vite dev server with HMR. Point `MESHTASTIC_FIRMWARE_ROOT` at a firmware checkout
 to enable builds, reflash recovery, and exact per-board PlatformIO env resolution — without

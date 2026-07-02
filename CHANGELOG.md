@@ -3,7 +3,7 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com); versions follow SemVer.
 
-## [0.1.0] — Unreleased (first public release)
+## [0.1.0] — 2026-07-02 (first public release)
 
 ### Added
 - **FleetSuite — web control plane + hardware bench harness** (#9) — a FastAPI backend

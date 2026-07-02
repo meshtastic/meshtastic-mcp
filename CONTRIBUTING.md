@@ -12,11 +12,14 @@ uv sync --extra test --extra dev      # or: python -m venv .venv && .venv/bin/pi
 ## Gates (run before every PR)
 
 ```bash
-ruff check .            # lint
-ruff format --check .   # formatting
-mypy                    # types (no per-module ignore_errors — fix types, don't exclude)
-pytest tests/unit       # portable tier (hardware- and firmware-free)
+ruff check .                  # lint
+ruff format --check .         # formatting
+mypy                          # types (no per-module ignore_errors — fix types, don't exclude)
+python scripts/check_spdx.py  # SPDX headers on every source file
+pytest tests/unit             # portable tier (hardware- and firmware-free)
 ```
+
+Touching the FleetSuite SPA? Also run `cd web-ui && npx vue-tsc --noEmit && npm run build`.
 
 The firmware tier needs `MESHTASTIC_FIRMWARE_ROOT`; hardware tiers need real radios. See
 `run-tests.sh` and the test tiering in `tests/`.
@@ -28,4 +31,5 @@ The firmware tier needs `MESHTASTIC_FIRMWARE_ROOT`; hardware tiers need real rad
 - **Tool annotations:** new MCP tools get `readOnlyHint`/`destructiveHint`/`openWorldHint` via
   the maps in `server.py`; destructive tools also take a `confirm` arg.
 - **Commits:** Conventional Commits, signed off with DCO (`git commit -s`).
-- **License:** GPL-3.0-only.
+- **License:** GPL-3.0-only. Every source file carries the SPDX header (CI enforces it):
+  `SPDX-FileCopyrightText: Meshtastic contributors` + `SPDX-License-Identifier: GPL-3.0-only`.
