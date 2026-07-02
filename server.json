@@ -6,12 +6,12 @@
     "url": "https://github.com/meshtastic/meshtastic-mcp",
     "source": "github"
   },
-  "version": "0.2.0",
+  "version": "0.1.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "meshtastic-mcp",
-      "version": "0.2.0",
+      "version": "0.1.0",
       "transport": { "type": "stdio" },
       "environmentVariables": [
         {

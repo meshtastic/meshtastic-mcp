@@ -3,7 +3,7 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com); versions follow SemVer.
 
-## [Unreleased]
+## [0.1.0] — Unreleased (first public release)
 
 ### Added
 - **FleetSuite — web control plane + hardware bench harness** (#9) — a FastAPI backend
@@ -130,7 +130,7 @@ All notable changes are documented here. Format loosely follows
   (`0x2886`, TinyUSB-CDC) as likely, and bases the flag on the VID directly rather than the upstream
   `findPorts` filter (which hid a bridge-chip board whenever a native-USB board was also attached).
 
-## [0.1.0] — 2026-06-25
+## [0.1.0-pre] — 2026-06-25 (internal extraction milestone, never published)
 
 Initial release.
 
