@@ -43,9 +43,10 @@ jobs:
         with:
           enable-cache: true
       - name: Ruff lint
-        run: uvx ruff check --output-format=github .
+        # via the dev extra so CI lints with the same pinned ruff as local dev
+        run: uv run --extra dev ruff check --output-format=github .
       - name: Ruff format
-        run: uvx ruff format --check .
+        run: uv run --extra dev ruff format --check .
 
   types:
     runs-on: ubuntu-latest

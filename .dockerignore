@@ -13,3 +13,6 @@ tests
 docs
 *.md
 !README.md
+web-ui/node_modules
+*.db
+.claude
