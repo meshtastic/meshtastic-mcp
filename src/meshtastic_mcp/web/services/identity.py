@@ -12,8 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from meshtastic_mcp import boards
-from meshtastic_mcp.config import ConfigError
+from meshtastic_mcp import boards, config
 
 log = logging.getLogger("meshtastic_mcp.web.identity")
 
@@ -71,9 +70,7 @@ def env_for_hw_model(hw_model: str | None) -> str | None:
     if not hw_model:
         return None
     target = hw_model.upper()
-    try:
-        all_boards = boards.list_boards()
-    except ConfigError:
+    if config.firmware_root_or_none() is None:
         # No firmware checkout — the exact-env lookup needs the firmware
         # tree's board table. Degrade to "unknown env" instead of raising:
         # callers (auto-enrichment, POST /devices/{serial}/refresh) must
@@ -88,7 +85,7 @@ def env_for_hw_model(hw_model: str | None) -> str | None:
         return None
     candidates = [
         b["env"]
-        for b in all_boards
+        for b in boards.list_boards()
         if (b.get("hw_model_slug") or "").upper() == target and b.get("env")
     ]
     if not candidates:

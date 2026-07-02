@@ -258,8 +258,15 @@ def test_flash_timing_comparison(tmp_path):
 def test_env_resolves_from_hw_model_not_just_role(monkeypatch):
     """A Heltec V4 (HELTEC_V4) must resolve to env heltec-v4, NOT the coarse
     esp32s3→heltec-v3 role default. Regression for the wrong-variant flash risk
-    surfaced by real-hardware testing. Stubs the board catalog (no pio needed)."""
+    surfaced by real-hardware testing. Stubs the board catalog (no pio needed)
+    and pins a firmware root so the no-root guard doesn't short-circuit the
+    lookup off-bench."""
+    import pathlib
+
     import meshtastic_mcp.boards as boards_mod
+    import meshtastic_mcp.config as config_mod
+
+    monkeypatch.setattr(config_mod, "firmware_root_or_none", lambda: pathlib.Path("/fw"))
 
     fake_catalog = [
         {"env": "heltec-v3", "hw_model_slug": "HELTEC_V3"},
@@ -288,16 +295,21 @@ def test_env_resolution_degrades_without_firmware_root(monkeypatch):
     with fw=None) and POST /devices/{serial}/refresh 500'd, both because env
     resolution raised when MESHTASTIC_FIRMWARE_ROOT wasn't set."""
     import meshtastic_mcp.boards as boards_mod
+    import meshtastic_mcp.config as config_mod
     from meshtastic_mcp.config import ConfigError
 
-    def _no_root(*a, **k):
+    monkeypatch.setattr(config_mod, "firmware_root_or_none", lambda: None)
+
+    # Sentinel: with the proactive guard in place the board catalog must never
+    # be consulted — if it were, this raise would escape and fail the test.
+    def _must_not_reach(*a, **k):
         raise ConfigError("Could not locate Meshtastic firmware root.")
 
-    monkeypatch.setattr(boards_mod, "list_boards", _no_root)
+    monkeypatch.setattr(boards_mod, "list_boards", _must_not_reach)
 
     assert identity.env_for_hw_model("RAK4631") is None
     assert identity.env_for_hw_model("HELTEC_V3") is None  # repeats stay quiet too
-    # The trivial guards still short-circuit before the catalog is consulted.
+    # The trivial guards still short-circuit before the root is even checked.
     assert identity.env_for_hw_model(None) is None
 
 
