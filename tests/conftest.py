@@ -68,6 +68,24 @@ from . import (
 # ---------- CLI options ---------------------------------------------------
 
 
+def _load_hub_profile(path: str) -> dict:
+    """Load and shape-check a ``--hub-profile`` YAML: must be a mapping of
+    role name -> spec mapping. Fails fast with a clear UsageError instead of
+    an AttributeError deep inside a fixture when handed a scalar/list YAML."""
+    import yaml
+
+    with open(path, encoding="utf-8") as f:
+        profile = yaml.safe_load(f) or {}
+    if not isinstance(profile, dict) or not all(
+        isinstance(role, str) and isinstance(spec, dict) for role, spec in profile.items()
+    ):
+        raise pytest.UsageError(
+            f"--hub-profile {path}: expected a YAML mapping of role name -> "
+            f"spec (location/env/vid/...), got {type(profile).__name__}"
+        )
+    return profile
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Inject per-role bench pins into the environment so power/recovery
     (`uhubctl.resolve_target`) and the bake can address each board
@@ -85,10 +103,7 @@ def pytest_configure(config: pytest.Config) -> None:
     """
     profile_path = config.getoption("--hub-profile", default=None)
     if profile_path:
-        import yaml
-
-        with open(profile_path, encoding="utf-8") as f:
-            profile = yaml.safe_load(f) or {}
+        profile = _load_hub_profile(profile_path)
     else:
         profile = _bench.BENCH_ROLES
     for role, spec in profile.items():
@@ -411,10 +426,7 @@ def hub_profile(request: pytest.FixtureRequest) -> dict[str, dict[str, Any]]:
     """
     path = request.config.getoption("--hub-profile")
     if path:
-        import yaml
-
-        with open(path, encoding="utf-8") as f:
-            return yaml.safe_load(f)
+        return _load_hub_profile(path)
     # Default: the reference bench, from the single source of truth in
     # tests/_bench.py. Four distinct boards (three share VID 0x239a), each
     # pinned to its hub-slot location so they're told apart unambiguously.
@@ -748,10 +760,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # the reference bench from tests/_bench.py.
     profile_path = metafunc.config.getoption("--hub-profile", default=None)
     if profile_path:
-        import yaml
-
-        with open(profile_path, encoding="utf-8") as f:
-            profile = yaml.safe_load(f) or {}
+        profile = _load_hub_profile(profile_path)
     else:
         profile = _bench.hub_profile()
 

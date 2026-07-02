@@ -7,18 +7,18 @@ harness. Replaces the old Textual TUI. It talks to the FastAPI backend in
 ## Develop
 
 ```bash
-# from mcp-server/: runs the backend + this dev server together (HMR)
+# from the repo root: runs the backend + this dev server together (HMR)
 ./scripts/web-dev.sh
 ```
 
 or manually:
 
 ```bash
-# terminal 1 — backend
-cd mcp-server && .venv/bin/python -m uvicorn meshtastic_mcp.web.app:create_app \
+# terminal 1 — backend (from the repo root)
+.venv/bin/python -m uvicorn meshtastic_mcp.web.app:create_app \
   --factory --port 8765 --reload
 # terminal 2 — frontend (proxies /api + /ws → :8765)
-cd mcp-server/web-ui && npm install && npm run dev
+cd web-ui && npm install && npm run dev
 ```
 
 ## Build (production)

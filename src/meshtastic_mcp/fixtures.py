@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import logging
 import pathlib
 import queue
 import shutil
@@ -46,6 +47,19 @@ from typing import Any, Literal
 
 from . import config
 from .connection import connect, is_tcp_port
+
+log = logging.getLogger("meshtastic_mcp.fixtures")
+
+
+def _safe_progress(progress_cb: Callable[[str], None] | None, msg: str) -> None:
+    """Invoke a caller-supplied progress callback without letting it abort the
+    transfer: a raising callback must never CAN a healthy XModem upload."""
+    if progress_cb is None:
+        return
+    try:
+        progress_cb(msg)
+    except Exception:
+        log.debug("progress callback failed for %r", msg, exc_info=True)
 
 
 # The fake-NodeDB pipeline (gen-fake-nodedb-seed.py / seed-json-to-proto.py + committed
@@ -211,8 +225,7 @@ def _push_hardware(
         )
 
     # Compile the fixture to a temp file with fresh timestamps.
-    if progress_cb:
-        progress_cb("compiling proto")
+    _safe_progress(progress_cb, "compiling proto")
     with tempfile.NamedTemporaryFile(suffix=".proto", delete=False) as tf:
         proto_path = pathlib.Path(tf.name)
     try:
@@ -287,8 +300,7 @@ def _push_hardware(
                     ack = _wait_for_response(response_q, _ACK_TIMEOUT_CHUNK_S)
                     if ack.control == XMC.Value("ACK"):
                         chunks_sent += 1
-                        if progress_cb:
-                            progress_cb(f"xmodem {(offset // _XMODEM_CHUNK) + 1}/{total_chunks}")
+                        _safe_progress(progress_cb, f"xmodem {chunks_sent}/{total_chunks}")
                         break
                     if ack.control == XMC.Value("NAK"):
                         attempts += 1
@@ -318,8 +330,7 @@ def _push_hardware(
 
             # 4) Reboot so loadFromDisk picks up the new file.
             if reboot_after:
-                if progress_cb:
-                    progress_cb("rebooting")
+                _safe_progress(progress_cb, "rebooting")
                 iface.localNode.reboot(secs=1)
                 rebooted = True
     finally:

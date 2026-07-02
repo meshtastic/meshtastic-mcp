@@ -72,11 +72,13 @@ class RecoveryService:
         hub_port = device.get("hub_port")
 
         self._active.add(serial)
-        await self.hub.publish(
-            "recovery.update",
-            {"serial": serial, "state": "started", "ladder": ladder},
-        )
         try:
+            # The "started" publish sits inside the try so a failing hub can't
+            # leak `serial` in `_active` and wedge future recoveries.
+            await self.hub.publish(
+                "recovery.update",
+                {"serial": serial, "state": "started", "ladder": ladder},
+            )
             # Exclusive device access for the whole sweep; the serial monitor is
             # suspended and enrichment/keep-alive/control wait on the same guard.
             async with self.portlocks.guard(serial):

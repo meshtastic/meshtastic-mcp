@@ -18,10 +18,10 @@ concerns rather than generic "unit vs hardware".
 ## Quick start
 
 ```bash
-cd mcp-server
+# from the repo root
 pip install -e ".[test]"
 
-# No hardware — 33 unit tests, ~3 seconds
+# No hardware — unit tier only
 pytest tests/unit -v
 
 # Hub attached (nRF52840 + ESP32-S3) — first run bakes, then exercises everything
