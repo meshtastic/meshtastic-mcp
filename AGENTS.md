@@ -24,12 +24,20 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   `llama` binary to start one): `local_model.py` offload client + `llama_server.py`. Gates the
   offload tools (`summarize_window` / `vision_oracle` / `triage_window`) and backend bootstrap
   (`local_model_status` / `local_model_serve` / `local_model_serve_stop`).
+- **sdr capability** (needs the `[sdr]` extra + `librtlsdr` + an attached RTL-SDR): `sdr.py` +
+  `rf_oracle.py` RF-compliance oracle (`rf_scan` / `rf_confirm_tx`).
+- **sdk-cli capability** (experimental; needs the Kotlin SDK headless CLI): `sdk_cli.py`
+  device-IO backend via the JVM CLI — see `docs/sdk-cli-bridge.md`.
+- **FleetSuite web control plane** (the `[web]` extra, separate `meshtastic-mcp-web` entrypoint,
+  not an MCP capability): `web/` FastAPI backend + `web-ui/` Vue SPA — device registry,
+  build/flash queue, recovery ladder, camera streams, bench test runner, Datadog shipping.
 
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
 decorator (`_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled tools only when
-`CAPS.firmware` is active — 53 tools active without firmware (49 always-on + 4 android), 70 with
-the full firmware tree; a reachable local-model backend adds 6 (3 offload + 3 bootstrap).
+`CAPS.firmware` is active — 57 always-on tools; +4 android, +17 firmware, +2 sdr, and the
+apple/sdk-cli/local-model gates on top (≈84 with everything active). Counts drift — `doctor`
+and the startup log are the source of truth.
 
 **Provisioning:** `doctor.py` (the `doctor` MCP tool / `meshtastic-mcp doctor` CLI) probes every
 external dependency and emits the exact, platform-aware acquisition command for anything missing

@@ -3,7 +3,9 @@
 > MCP server + agent skills for AI tooling to discover, drive, observe, and test Meshtastic
 > devices and the apps that talk to them. Portable core (serial/TCP device admin + recorder +
 > replay/simulated-device streaming with a synthetic-mesh generator and fuzzer), with optional
-> firmware (build/flash), emulator/apple (hardware-free e2e), and local-model offload capabilities.
+> firmware (build/flash), android/apple emulator (hardware-free e2e), local-model offload, and
+> RTL-SDR RF-compliance capabilities — plus FleetSuite, a local web control plane for a
+> multi-board hardware bench ([web] extra, `meshtastic-mcp-web`).
 > Run `meshtastic-mcp doctor` (or the `doctor` tool) to see + acquire any missing dependencies.
 
 ## Docs
@@ -11,6 +13,9 @@
 - [AGENTS.md](AGENTS.md): architecture, capability model, rules
 - [CONTRIBUTING](CONTRIBUTING.md): setup + gates
 - [docs/local-models.md](docs/local-models.md): local-model offload (tools, backends, config)
+- [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md): experimental Kotlin-SDK device-IO backend
+- [tests/README.md](tests/README.md): tiered hardware test suite + bench roles
+- [web-ui/README.md](web-ui/README.md): FleetSuite SPA development
 
 ## Skills
 - [meshtastic-device-ops](src/meshtastic_mcp/skills/meshtastic-device-ops/SKILL.md): discover,

@@ -1,7 +1,8 @@
 # FleetSuite — web UI
 
 Vue 3 + Vite + Tailwind v4 + Pinia single-page app for the Meshtastic test
-harness. Replaces the old Textual TUI. It talks to the FastAPI backend in
+harness (the graphical alternative to the `meshtastic-mcp-test-tui` terminal UI).
+It talks to the FastAPI backend in
 `../src/meshtastic_mcp/web` over REST + a single `/ws` WebSocket.
 
 ## Develop
