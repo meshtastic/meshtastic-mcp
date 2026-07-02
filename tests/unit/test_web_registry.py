@@ -258,8 +258,15 @@ def test_flash_timing_comparison(tmp_path):
 def test_env_resolves_from_hw_model_not_just_role(monkeypatch):
     """A Heltec V4 (HELTEC_V4) must resolve to env heltec-v4, NOT the coarse
     esp32s3→heltec-v3 role default. Regression for the wrong-variant flash risk
-    surfaced by real-hardware testing. Stubs the board catalog (no pio needed)."""
+    surfaced by real-hardware testing. Stubs the board catalog (no pio needed)
+    and pins a firmware root so the no-root guard doesn't short-circuit the
+    lookup off-bench."""
+    import pathlib
+
     import meshtastic_mcp.boards as boards_mod
+    import meshtastic_mcp.config as config_mod
+
+    monkeypatch.setattr(config_mod, "firmware_root_or_none", lambda: pathlib.Path("/fw"))
 
     fake_catalog = [
         {"env": "heltec-v3", "hw_model_slug": "HELTEC_V3"},
@@ -279,6 +286,53 @@ def test_env_resolves_from_hw_model_not_just_role(monkeypatch):
     assert control.env_for_device({"role": "esp32s3", "env": "heltec-v4"}) == "heltec-v4"
     # No resolved env → falls back to the role default.
     assert control.env_for_device({"role": "esp32s3", "env": None}) == "heltec-v3"
+
+
+def test_env_resolution_degrades_without_firmware_root(monkeypatch):
+    """No firmware checkout → env_for_hw_model returns None instead of letting
+    boards.list_boards()'s ConfigError escape. Regression for the two findings
+    from the first live bring-up: auto-enrichment silently aborted (fleet stuck
+    with fw=None) and POST /devices/{serial}/refresh 500'd, both because env
+    resolution raised when MESHTASTIC_FIRMWARE_ROOT wasn't set."""
+    import meshtastic_mcp.boards as boards_mod
+    import meshtastic_mcp.config as config_mod
+    from meshtastic_mcp.config import ConfigError
+
+    monkeypatch.setattr(config_mod, "firmware_root_or_none", lambda: None)
+
+    # Sentinel: with the proactive guard in place the board catalog must never
+    # be consulted — if it were, this raise would escape and fail the test.
+    def _must_not_reach(*a, **k):
+        raise ConfigError("Could not locate Meshtastic firmware root.")
+
+    monkeypatch.setattr(boards_mod, "list_boards", _must_not_reach)
+
+    assert identity.env_for_hw_model("RAK4631") is None
+    assert identity.env_for_hw_model("HELTEC_V3") is None  # repeats stay quiet too
+    # The trivial guards still short-circuit before the root is even checked.
+    assert identity.env_for_hw_model(None) is None
+
+
+def test_boards_endpoint_409_without_firmware_root(monkeypatch):
+    """GET /api/boards answers 409 + the ConfigError detail when there is no
+    firmware checkout, instead of a raw 500 traceback."""
+    from starlette.testclient import TestClient
+
+    import meshtastic_mcp.boards as boards_mod
+    from meshtastic_mcp.config import ConfigError
+    from meshtastic_mcp.web.app import create_app
+
+    def _no_root(*a, **k):
+        raise ConfigError("Could not locate Meshtastic firmware root.")
+
+    monkeypatch.setattr(boards_mod, "list_boards", _no_root)
+
+    # No `with` block: the lifespan (discovery/cameras/keepalive) must stay
+    # down — /api/boards doesn't touch app.state, so requests work without it.
+    client = TestClient(create_app())
+    resp = client.get("/api/boards")
+    assert resp.status_code == 409
+    assert "firmware root" in resp.json()["detail"]
 
 
 def test_suite_env_overrides_from_connected_boards(tmp_path):

@@ -29,6 +29,7 @@ from meshtastic_mcp import (
 from meshtastic_mcp import (
     info as mt_info,
 )
+from meshtastic_mcp.config import ConfigError
 
 from .db import repo_builds as rb
 from .db import repo_cameras as rc
@@ -150,6 +151,13 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(ControlBusy)
     async def _busy(_req: Request, exc: ControlBusy):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(ConfigError)
+    async def _config_precondition(_req: Request, exc: ConfigError):
+        # A missing/invalid firmware checkout is a config precondition, not a
+        # server bug — any firmware-dependent lookup that raises ConfigError
+        # answers 409 + the message app-wide instead of a raw 500 traceback.
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     if STATIC_DIR.is_dir():
@@ -897,6 +905,7 @@ def _mount_native(api: APIRouter) -> None:
 def _mount_boards(api: APIRouter) -> None:
     @api.get("/boards")
     async def list_boards(query: str | None = None, architecture: str | None = None):
+        # ConfigError (no firmware checkout) → 409 via the app-wide handler.
         return await asyncio.to_thread(boards.list_boards, architecture, False, query, None)
 
 
