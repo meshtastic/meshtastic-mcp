@@ -167,3 +167,38 @@ def test_flash_forwards_filtered_lines_through_pio(monkeypatch):
     monkeypatch.setattr(port_recovery, "ensure_port_free", lambda port, **kw: port)
     flash_lib.flash("heltec-v3", "/dev/cu.x", confirm=True, progress_cb=seen.append)
     assert seen == ["Compiling foo.cpp", "noise -DBAR", "Writing at 0x1000 (5 %)"]
+
+
+def test_inject_forwards_progress_cb_through_push_fake_nodedb(monkeypatch, tmp_path):
+    """The inject-nodedb endpoint runs webapp._inject with wants_lines=True, so
+    _port_action always passes progress_cb=act.line — the kwarg must survive the
+    whole real-signature chain (_inject → push_fake_nodedb → _push_hardware) or
+    every POST /devices/{serial}/inject-nodedb dies with a TypeError."""
+    import inspect
+
+    from meshtastic_mcp import fixtures
+
+    # The real hardware uploader accepts progress_cb (second hop of the chain).
+    assert "progress_cb" in inspect.signature(fixtures._push_hardware).parameters
+
+    seed = tmp_path / "seed_v25_0500.jsonl"
+    seed.write_text("{}\n")
+    monkeypatch.setattr(fixtures, "_resolve_seed_jsonl", lambda size, custom: seed)
+
+    seen: list[str] = []
+
+    def fake_push_hardware(size, jsonl, port, reboot_after, progress_cb=None):
+        # Emulate the real uploader's coarse progress stream.
+        for msg in ("compiling proto", "xmodem 1/40", "rebooting"):
+            if progress_cb:
+                progress_cb(msg)
+        return {"transport": "hardware", "port": port, "bytes": 0}
+
+    monkeypatch.setattr(fixtures, "_push_hardware", fake_push_hardware)
+
+    # Through the REAL push_fake_nodedb signature — this is the call that used
+    # to raise TypeError: push_fake_nodedb() got an unexpected keyword argument.
+    out = webapp._inject(500, "/dev/cu.x", progress_cb=seen.append)
+
+    assert out["transport"] == "hardware"
+    assert seen == ["compiling proto", "xmodem 1/40", "rebooting"]

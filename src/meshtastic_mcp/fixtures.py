@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from typing import Any, Literal
 
 from . import config
@@ -191,6 +192,7 @@ def _push_hardware(
     jsonl: pathlib.Path,
     port: str | None,
     reboot_after: bool,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     # Lazy imports so the module loads even when the meshtastic deps aren't
     # available (e.g. CI in a Python env without the package installed).
@@ -209,6 +211,8 @@ def _push_hardware(
         )
 
     # Compile the fixture to a temp file with fresh timestamps.
+    if progress_cb:
+        progress_cb("compiling proto")
     with tempfile.NamedTemporaryFile(suffix=".proto", delete=False) as tf:
         proto_path = pathlib.Path(tf.name)
     try:
@@ -219,6 +223,7 @@ def _push_hardware(
 
     sha256 = hashlib.sha256(payload).hexdigest()
     total_bytes = len(payload)
+    total_chunks = (total_bytes + _XMODEM_CHUNK - 1) // _XMODEM_CHUNK
 
     # Subscribe to XModem responses BEFORE we open the interface, so we don't
     # race the first ACK that arrives during the SOH/seq=0 handshake.
@@ -282,6 +287,8 @@ def _push_hardware(
                     ack = _wait_for_response(response_q, _ACK_TIMEOUT_CHUNK_S)
                     if ack.control == XMC.Value("ACK"):
                         chunks_sent += 1
+                        if progress_cb:
+                            progress_cb(f"xmodem {(offset // _XMODEM_CHUNK) + 1}/{total_chunks}")
                         break
                     if ack.control == XMC.Value("NAK"):
                         attempts += 1
@@ -311,6 +318,8 @@ def _push_hardware(
 
             # 4) Reboot so loadFromDisk picks up the new file.
             if reboot_after:
+                if progress_cb:
+                    progress_cb("rebooting")
                 iface.localNode.reboot(secs=1)
                 rebooted = True
     finally:
@@ -345,6 +354,7 @@ def push_fake_nodedb(
     confirm: bool = False,
     reboot_after: bool = True,
     custom_seed_jsonl: str | None = None,
+    progress_cb: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Compile a fresh-timestamp NodeDatabase fixture and push it to a device.
 
@@ -363,6 +373,9 @@ def push_fake_nodedb(
                     final ACK so loadFromDisk picks up the new file at next boot.
       custom_seed_jsonl: override the committed JSONL. Use to push a hand-edited
                          test scenario.
+      progress_cb: hardware only. Invoked with coarse progress strings
+                   ("compiling proto", "xmodem N/total", "rebooting") so a
+                   caller can stream live push progress.
 
     Returns:
         dict with transport, bytes, sha256, etc. — depends on target.
@@ -386,6 +399,6 @@ def push_fake_nodedb(
             )
         if not port:
             raise FixtureError("target='hardware' requires a port (e.g. /dev/cu.usbmodemXXXX).")
-        return _push_hardware(size, jsonl, port, reboot_after)
+        return _push_hardware(size, jsonl, port, reboot_after, progress_cb=progress_cb)
 
     raise FixtureError(f"unknown target {target!r}; expected 'portduino' or 'hardware'")
