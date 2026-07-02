@@ -42,6 +42,21 @@ def test_fbidb_hint_pins_python_312() -> None:
         assert "3.12" in fbidb.fix
 
 
+def test_sdk_cli_check_present_and_actionable(monkeypatch) -> None:
+    # With no launcher resolvable, the sdk-cli check must be MISSING and tell the
+    # caller how to build/point at the meshtastic-sdk sample CLI.
+    import meshtastic_mcp.sdk_cli as sdk_cli
+
+    monkeypatch.delenv(sdk_cli.CLI_ENV, raising=False)
+    monkeypatch.delenv(sdk_cli.ROOT_ENV, raising=False)
+    monkeypatch.setattr(sdk_cli.shutil, "which", lambda _: None)
+    rep = doctor.run()
+    sdk = next(c for c in rep.checks if c.name == "sdk-cli")
+    assert sdk.status == doctor.STATUS_MISSING
+    assert "installDist" in sdk.fix
+    assert sdk.env_override == sdk_cli.CLI_ENV
+
+
 def test_report_renders_text() -> None:
     text = doctor.report()
     assert "meshtastic-mcp doctor" in text

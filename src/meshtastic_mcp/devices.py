@@ -8,6 +8,13 @@ the richer metadata (`serial.tools.list_ports.comports()`) so callers see
 VID/PID, descriptions, and manufacturer strings alongside the "is this likely
 a Meshtastic device" signal.
 
+The upstream allowlist is narrow (`0x239a` Adafruit/nRF, `0x303a` Espressif
+native-USB / USB-Serial-JTAG), so it misses the USB-UART bridge chips that the
+majority of ESP32 Meshtastic boards ship with. `_MESHTASTIC_USB_VIDS` extends it
+with those well-known bridge/board VIDs. They are generic chips (a non-Meshtastic
+gadget on the same bridge would also match), but this is a Meshtastic-specific
+tool, so flagging the standard board chips as likely is the right default.
+
 If `MESHTASTIC_MCP_TCP_HOST=<host[:port]>` is set, a synthetic entry for the
 `meshtasticd` daemon at that endpoint is prepended to the result, so
 `resolve_port(None)` auto-selects it like a USB candidate.
@@ -19,6 +26,17 @@ import os
 from typing import Any
 
 from serial.tools import list_ports
+
+# USB VIDs commonly used by ESP32/nRF Meshtastic boards, supplementing the
+# narrow upstream ``meshtastic.util.whitelistVids``. Keyed by VID -> chip label.
+_MESHTASTIC_USB_VIDS: dict[int, str] = {
+    0x239A: "Adafruit / nRF native USB",  # already in upstream allowlist
+    0x303A: "Espressif native USB / USB-Serial-JTAG",  # already in upstream allowlist
+    0x10C4: "Silicon Labs CP210x (Heltec, most ESP32 boards)",
+    0x1A86: "QinHeng CH340/CH9102 (common ESP32 boards)",
+    0x0403: "FTDI FT232 (some ESP32 boards)",
+    0x2886: "Seeed Studio (XIAO ESP32-S3/-C3, TinyUSB-CDC)",
+}
 
 
 def _to_hex(value: int | None) -> str | None:
@@ -70,9 +88,12 @@ def list_devices(include_unknown: bool = False) -> list[dict[str, Any]]:
     """Return enriched info for serial ports, flagging Meshtastic candidates.
 
     `likely_meshtastic` is True when the port's USB VID matches the Meshtastic
-    allowlist (`0x239a` Adafruit/RAK, `0x303a` Espressif). When no allowlisted
-    ports are present, ports whose VID is NOT in the blocklist (J-Link, ST-LINK,
-    PPK2, etc.) are surfaced as `likely_meshtastic=False` candidates.
+    allowlist — the upstream set (`0x239a` Adafruit/RAK, `0x303a` Espressif
+    native-USB) plus `_MESHTASTIC_USB_VIDS` (CP210x, CH340, FTDI, Seeed XIAO),
+    which covers the USB-UART bridges that most ESP32 boards ship with. When no
+    allowlisted ports are present, ports whose VID is NOT in the blocklist
+    (J-Link, ST-LINK, PPK2, etc.) are surfaced as `likely_meshtastic=False`
+    candidates.
 
     With `include_unknown=False` (default), we return only ports that are
     plausibly Meshtastic. With `include_unknown=True`, every serial port the
@@ -84,7 +105,8 @@ def list_devices(include_unknown: bool = False) -> list[dict[str, Any]]:
     from meshtastic import util as mt_util  # type: ignore[import-untyped]
 
     meshtastic_ports: set[str] = set(mt_util.findPorts(eliminate_duplicates=True))
-    whitelist = getattr(mt_util, "whitelistVids", {})
+    upstream = getattr(mt_util, "whitelistVids", {})
+    whitelist = set(upstream) | set(_MESHTASTIC_USB_VIDS)
     blacklist = getattr(mt_util, "blacklistVids", {})
 
     results: list[dict[str, Any]] = []
@@ -94,11 +116,14 @@ def list_devices(include_unknown: bool = False) -> list[dict[str, Any]]:
         in_whitelist = vid is not None and vid in whitelist
         in_blacklist = vid is not None and vid in blacklist
 
-        likely = port_path in meshtastic_ports and in_whitelist
-        # If no allowlisted ports were found, findPorts falls back to
-        # everything-not-in-blacklist; treat those as plausible candidates
-        # but not "likely".
-        fallback_candidate = port_path in meshtastic_ports and not in_whitelist
+        # "Likely" is driven by the (expanded) VID allowlist directly, not by the
+        # upstream findPorts filter — findPorts returns only native-USB-allowlisted
+        # ports when any are attached, which would otherwise hide a CP210x/CH340
+        # board sitting next to a native-USB one.
+        likely = in_whitelist and not in_blacklist
+        # Surfaced by findPorts but not in our allowlist (an unknown serial device
+        # that isn't a debug probe): plausible but unconfirmed.
+        fallback_candidate = port_path in meshtastic_ports and not in_whitelist and not in_blacklist
 
         if not likely and not fallback_candidate and not include_unknown:
             continue

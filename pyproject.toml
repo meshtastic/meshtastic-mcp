@@ -61,6 +61,11 @@ web = [
   "pywebview>=5.0",
   "requests>=2.31",
 ]
+# The `sdr` capability is the RF-compliance oracle (rf_scan/rf_confirm_tx): captures
+# raw IQ from an RTL-SDR and checks it against lora_compliance's prediction of what
+# the device's configured region/preset should produce on air. Also needs librtlsdr
+# on the system (not pip-installable) — e.g. `apt install librtlsdr-dev rtl-sdr`.
+sdr = ["pyrtlsdr>=0.3", "numpy>=1.26"]
 # The `firmware` capability needs a Meshtastic firmware checkout + PlatformIO `pio`
 # on PATH (not pip-installable) — set MESHTASTIC_FIRMWARE_ROOT.
 # The `emulator` capability needs the `android` CLI + `adb` on PATH (not pip-installable).

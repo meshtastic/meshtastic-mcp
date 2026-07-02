@@ -173,6 +173,91 @@ def _firmware_check() -> Check:
     )
 
 
+def _sdr_check() -> Check:
+    """RF-compliance oracle (`rf_scan`/`rf_confirm_tx`): needs `pyrtlsdr` importable
+    (the `sdr` extra) *and* librtlsdr on the system *and* an RTL-SDR attached.
+    Reports the most specific missing piece rather than a generic "not available".
+    """
+    from . import sdr as sdr_mod
+
+    try:
+        from rtlsdr import RtlSdr  # noqa: F401
+    except ImportError:
+        return Check(
+            "pyrtlsdr",
+            "sdr",
+            STATUS_MISSING,
+            "RF-compliance oracle (rf_scan / rf_confirm_tx)",
+            detail="pyrtlsdr not importable",
+            fix="pip install 'meshtastic-mcp[sdr]'  # also needs librtlsdr: "
+            + _pkg("brew install librtlsdr", "apt install librtlsdr-dev rtl-sdr"),
+        )
+    try:
+        devices = sdr_mod.list_devices()
+    except sdr_mod.SdrError as exc:
+        return Check(
+            "rtl-sdr-device",
+            "sdr",
+            STATUS_MISSING,
+            "RF-compliance oracle (rf_scan / rf_confirm_tx)",
+            detail=str(exc),
+            fix=_pkg(
+                "brew install librtlsdr",
+                "apt install librtlsdr-dev rtl-sdr  # then plug in an RTL-SDR",
+            ),
+        )
+    if not devices:
+        return Check(
+            "rtl-sdr-device",
+            "sdr",
+            STATUS_MISSING,
+            "RF-compliance oracle (rf_scan / rf_confirm_tx)",
+            detail="pyrtlsdr + librtlsdr present, but no RTL-SDR attached",
+            fix="plug in an RTL-SDR (e.g. a NooElec NESDR) and retry",
+        )
+    return Check(
+        "rtl-sdr-device",
+        "sdr",
+        STATUS_OK,
+        "RF-compliance oracle (rf_scan / rf_confirm_tx)",
+        detail=f"{len(devices)} device(s): {', '.join(devices)}",
+    )
+
+
+def _sdk_cli_check() -> Check:
+    """Kotlin-SDK device-IO bridge (`sdk_*` tools): needs the meshtastic-sdk sample
+    `cli` launcher resolvable via $MESHTASTIC_MCP_SDK_CLI or a $MESHTASTIC_SDK_ROOT
+    checkout with `:samples:cli:installDist` built. Experimental / opt-in.
+    """
+    from . import sdk_cli
+
+    path = sdk_cli.cli_path()
+    if path is None:
+        return Check(
+            "sdk-cli",
+            "sdk",
+            STATUS_MISSING,
+            "experimental Kotlin-SDK device-IO bridge (sdk_status / sdk_device_info / "
+            "sdk_list_nodes / sdk_send_text)",
+            detail="cli launcher not resolvable",
+            fix=(
+                "git clone https://github.com/meshtastic/meshtastic-sdk && "
+                "cd meshtastic-sdk && ./gradlew :samples:cli:installDist, then set "
+                "MESHTASTIC_SDK_ROOT to that checkout (or MESHTASTIC_MCP_SDK_CLI to the launcher)"
+            ),
+            env_override=sdk_cli.CLI_ENV,
+        )
+    return Check(
+        "sdk-cli",
+        "sdk",
+        STATUS_OK,
+        "experimental Kotlin-SDK device-IO bridge (sdk_status / sdk_device_info / "
+        "sdk_list_nodes / sdk_send_text)",
+        detail=path,
+        env_override=sdk_cli.CLI_ENV,
+    )
+
+
 def _pio_check() -> Check:
     try:
         path = config.pio_bin()
@@ -525,6 +610,10 @@ def run() -> DoctorReport:
             "meshtastic-org-knowledge skill — repo/issue/PR/release queries via gh CLI",
             _pkg("brew install gh", "apt install gh  # or: https://cli.github.com"),
         ),
+        # sdr capability (RF compliance oracle)
+        _sdr_check(),
+        # sdk capability (experimental Kotlin-SDK device-IO bridge)
+        _sdk_cli_check(),
     ]
     return DoctorReport(
         platform=f"{platform.system()} {platform.machine()} / Python {platform.python_version()}",

@@ -54,6 +54,28 @@ def test_parse_uiautomator_malformed_raises():
         avd._parse_uiautomator_xml("<hierarchy><node bounds=")
 
 
+def test_ui_dump_physical_strips_trailing_status_line(monkeypatch):
+    # Regression (found live 2026-07-01 against a Pixel 6a / Android 17): some
+    # uiautomator versions append "UI hierchary dumped to: /dev/tty" *after*
+    # </hierarchy> on the same line with no separating newline, which used to
+    # blow up ET.fromstring with "junk after document element" and break every
+    # UI-tree-dependent helper on physical devices.
+    raw = (
+        '<?xml version="1.0" encoding="UTF-8"?><hierarchy rotation="0">'
+        '<node text="Disconnect" clickable="true" bounds="[0,0][200,60]"/>'
+        "</hierarchy>UI hierchary dumped to: /dev/tty\n"
+    )
+    monkeypatch.setattr(avd, "adb", lambda *a, **k: _cp_stdout(raw))
+    els = avd._ui_dump_physical("R5CT80ABCDE")
+    assert any(e["text"] == "Disconnect" for e in els)
+
+
+def _cp_stdout(stdout: str):
+    import subprocess
+
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+
+
 def test_tcp_dut_address_emulator_uses_host_alias():
     assert avd.tcp_dut_address(4403, serial="emulator-5554") == "10.0.2.2:4403"
     assert avd.tcp_dut_address(4403) == "10.0.2.2:4403"  # no serial → emulator default

@@ -6,6 +6,20 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Replay answers `get_owner_request`** — the simulated device now emulates the firmware's owner
+  admin round-trip (replies with the owner `User` + a session passkey, echoing the request id), so
+  strict clients that block their post-NodeDB "seeding" step on it can reach a ready/connected
+  state. Previously the replay device only handled `want_config_id`, so such a client drained
+  config + the full NodeDB and then timed out. Read-only still holds: mutating admin writes are
+  not honored (replay has tx disabled).
+- **Kotlin-SDK device-IO bridge (experimental)** — an optional capability that drives a device
+  through the Meshtastic Kotlin SDK's headless JVM sample CLI instead of the Python `meshtastic`
+  library, by shelling out to it in `--json` (NDJSON) mode — the same pattern the MCP already uses
+  for `pio`/`adb`/`idb`/`esptool`. Tools `sdk_status` / `sdk_device_info` / `sdk_list_nodes`
+  (read-only) + `sdk_send_text` (destructive), gated on a resolvable `cli` launcher
+  (`MESHTASTIC_MCP_SDK_CLI` or `MESHTASTIC_SDK_ROOT`). Proof-of-concept for evaluating the SDK
+  engine (BLE/TCP/serial, handshake, NodeDB, ACK correlation) as an alternative backend. See
+  `docs/sdk-cli-bridge.md`.
 - **Local-model offload** (`summarize_window` / `vision_oracle` / `triage_window`, plus
   `local_model_status` / `local_model_serve` / `local_model_serve_stop`) — an optional capability
   that pushes token-heavy work onto a local GPU: distill a recorder window, a first-pass
@@ -80,6 +94,12 @@ All notable changes are documented here. Format loosely follows
 - Tool annotations: full coverage (every tool classified), `_IDEMPOTENT_WRITES`,
   android/apple capability gating, lethal-trifecta `openWorldHint` on `logs_window`/`packets_window`.
 - `doctor` now detects uhubctl udev-permission issues on Linux with the exact fix command.
+- **Device discovery recognizes common board chips.** The upstream allowlist is only `0x239a`
+  (Adafruit/nRF) + `0x303a` (Espressif native-USB / USB-Serial-JTAG), so it flagged the USB-UART
+  bridges most ESP32 boards ship with as `likely_meshtastic=False`. `list_devices` now also treats
+  CP210x (`0x10c4`, Heltec/most ESP32), CH340/CH9102 (`0x1a86`), FTDI (`0x0403`), and Seeed XIAO
+  (`0x2886`, TinyUSB-CDC) as likely, and bases the flag on the VID directly rather than the upstream
+  `findPorts` filter (which hid a bridge-chip board whenever a native-USB board was also attached).
 
 ## [0.1.0] — 2026-06-25
 
