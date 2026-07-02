@@ -76,7 +76,9 @@ jobs:
         with:
           enable-cache: true
       - name: Portable unit tier (hardware- and firmware-free)
-        run: uv run --python ${{ matrix.python-version }} --extra test
+        # All extras: the unit tier covers the web (fastapi/aiosqlite) and sdr
+          # (numpy) modules too; those tests importorskip on partial installs.
+        run: uv run --python ${{ matrix.python-version }} --all-extras
           python -m pytest tests/unit -q --cov=meshtastic_mcp --cov-report=xml
       - name: Upload coverage
         if: matrix.python-version == '3.12'

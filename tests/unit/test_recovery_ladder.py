@@ -97,6 +97,9 @@ import asyncio
 
 import pytest
 
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
+
 from meshtastic_mcp.web.services import recovery as WR
 
 

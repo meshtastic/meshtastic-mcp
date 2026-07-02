@@ -16,6 +16,11 @@ import json
 import struct
 import sys
 
+import pytest
+
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
+
 from meshtastic_mcp.web import camera_worker as cw
 from meshtastic_mcp.web.services import camera_stream as cs
 

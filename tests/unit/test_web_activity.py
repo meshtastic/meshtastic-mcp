@@ -14,6 +14,9 @@ import asyncio
 
 import pytest
 
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
+
 from meshtastic_mcp.web import app as webapp
 from meshtastic_mcp.web.services import activity
 from meshtastic_mcp.web.services.activity import Activity
