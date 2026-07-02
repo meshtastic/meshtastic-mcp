@@ -95,7 +95,9 @@ class SerialMonitor:
             if mon is None:
                 return
             mon.suspended = False
-            if mon.refs > 0 and mon.thread is None:
+            # `_open` self-heals an abandoned (now-dead) reader, so resume only
+            # needs to skip a monitor that is genuinely still running.
+            if mon.refs > 0 and (mon.thread is None or not mon.thread.is_alive()):
                 await self._open(serial, mon)
 
     async def suspend_all(self) -> None:
@@ -123,6 +125,18 @@ class SerialMonitor:
 
         if test_runner.is_running():
             return
+        # Self-heal an abandoned close: if a previous _close() timed out, the
+        # wedged reader kept mon.thread set so nothing could double-open the
+        # port. Once that thread has died (device re-enumerated after a
+        # power-cycle, or the blocked ioctl finally errored), the stale
+        # handle is safe to clear — without this, one close timeout killed
+        # the monitor for the rest of the process lifetime and the port
+        # stayed EIO-wedged by our own abandoned fd.
+        if mon.thread is not None:
+            if mon.thread.is_alive():
+                return  # still genuinely held — never spawn a second reader
+            mon.thread = None
+            mon.stop = None
         row = await rd.get(self.db, serial)
         if row is None or row.get("kind") == "native":
             return  # native nodes are TCP — nothing to monitor on the USB bus
@@ -145,10 +159,27 @@ class SerialMonitor:
         if thread is not None:
             await asyncio.to_thread(thread.join, 2.0)
             if thread.is_alive():
-                log.warning("serial monitor thread did not stop within timeout")
+                # Abandon it but keep mon.thread set: the fd is still held, so a
+                # second reader must not open the port. _open()/is_wedged() treat
+                # a dead abandoned thread as closed, so recovery (power-cycle →
+                # re-enumeration kills the reader → resume) reopens the monitor.
+                log.warning(
+                    "serial monitor thread did not stop within timeout — "
+                    "abandoning it (self-heals after the reader dies; "
+                    "an unwedge/power-cycle forces that)"
+                )
                 return
         mon.thread = None
         mon.stop = None
+
+    def is_wedged(self, serial: str) -> bool:
+        """True when this device's reader was abandoned by a timed-out close
+        and is STILL alive — i.e. our own process holds the port hostage and
+        only a power-cycle (device re-enumeration) will free it."""
+        mon = self._mons.get(serial)
+        return (
+            mon is not None and mon.thread is not None and mon.thread.is_alive() and mon.suspended
+        )
 
     def _read_loop(self, serial: str, port: str, stop: threading.Event) -> None:
         """Runs in a worker thread; publishes lines via the hub's thread-safe
