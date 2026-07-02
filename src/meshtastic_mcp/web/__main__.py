@@ -18,8 +18,11 @@ HOST = "127.0.0.1"
 PORT = 8765
 
 
-def _serve(server: uvicorn.Server) -> None:
-    server.run()
+def _serve(server: uvicorn.Server, errors: list[BaseException]) -> None:
+    try:
+        server.run()
+    except BaseException as exc:  # BaseException: uvicorn exits bind failures via SystemExit
+        errors.append(exc)
 
 
 def main() -> None:
@@ -59,13 +62,21 @@ def main() -> None:
         server.run()
         return
 
-    thread = threading.Thread(target=_serve, args=(server,), daemon=True)
+    errors: list[BaseException] = []
+    thread = threading.Thread(target=_serve, args=(server, errors), daemon=True)
     thread.start()
 
     # Wait for the server to bind before pointing the window at it.
     deadline = time.monotonic() + 15
-    while not server.started and time.monotonic() < deadline:
+    while not server.started and not errors and time.monotonic() < deadline:
         time.sleep(0.1)
+
+    if errors:
+        logging.error("server failed to start: %s", str(errors[0]) or repr(errors[0]))
+        raise SystemExit(1)
+    if not server.started:
+        logging.error("server did not start within 15s")
+        raise SystemExit(1)
 
     webview.create_window("FleetSuite", f"http://{args.host}:{args.port}", width=1400, height=900)
     webview.start()

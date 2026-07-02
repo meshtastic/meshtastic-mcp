@@ -22,6 +22,11 @@ log = logging.getLogger("meshtastic_mcp.web.recovery")
 # on a re-enumerated device before giving up on the "reappeared" promotion.
 REAPPEAR_HEALTH_TIMEOUT_S = 15.0
 
+# Ladder steps that rewrite flash or wipe config. Per the repo convention for
+# destructive tools (reboot/factory_reset/erase_and_flash/uhubctl_*), these
+# require an explicit confirm=True from the caller.
+DESTRUCTIVE_STEPS = frozenset({"reflash", "factory_reset", "erase_and_flash"})
+
 
 class RecoveryService:
     def __init__(self, db, hub, serialmon=None, portlocks=None) -> None:
@@ -35,7 +40,9 @@ class RecoveryService:
     def is_recovering(self, serial: str) -> bool:
         return serial in self._active
 
-    async def recover(self, serial: str, *, allow_reflash: bool = False, steps=None) -> dict:
+    async def recover(
+        self, serial: str, *, allow_reflash: bool = False, confirm: bool = False, steps=None
+    ) -> dict:
         device = await rd.get(self.db, serial)
         if device is None:
             raise LookupError(serial)
@@ -50,6 +57,14 @@ class RecoveryService:
                 ladder += ["touch_1200bps", "reflash"]
         else:
             ladder = list(steps)
+
+        destructive = DESTRUCTIVE_STEPS.intersection(ladder)
+        if destructive and not confirm:
+            raise RuntimeError(
+                f"destructive recovery steps {sorted(destructive)} require confirm=True"
+            )
+        if "reflash" in destructive and not allow_reflash:
+            raise RuntimeError("the reflash step requires allow_reflash=True")
 
         port = device.get("current_port")
         env = control.env_for_device(device)

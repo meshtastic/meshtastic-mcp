@@ -476,13 +476,15 @@ def _mount_devices(api: APIRouter) -> None:
     @api.post("/devices/{serial}/recover")
     async def recover_device(serial: str, request: Request, body: dict = Body(default={})):
         """Run the escalating recovery ladder (reboot → power-cycle, plus
-        1200bps→reflash when allow_reflash). Long-running; streams progress on the
-        recovery.update WS topic."""
+        1200bps→reflash when allow_reflash — destructive, so it also requires
+        confirm). Long-running; streams progress on the recovery.update WS topic."""
         await _device_or_404(request.app.state.db, serial)
         _gate_idle()
         try:
             return await request.app.state.recovery.recover(
-                serial, allow_reflash=bool(body.get("allow_reflash"))
+                serial,
+                allow_reflash=bool(body.get("allow_reflash")),
+                confirm=bool(body.get("confirm")),
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
@@ -508,8 +510,12 @@ def _mount_devices(api: APIRouter) -> None:
         async with request.app.state.portlocks.guard(serial):
             holders = await asyncio.to_thread(port_recovery.who_holds_port, port)
             try:
+                # Re-check the runner here (not just _gate_idle above): a run may
+                # have started while we waited on the port guard.
                 new_port = await asyncio.to_thread(
-                    port_recovery.ensure_port_free, port, allow_power_cycle=True
+                    port_recovery.ensure_port_free,
+                    port,
+                    allow_power_cycle=not test_runner.is_running(),
                 )
             except port_recovery.PortRecoveryError as exc:
                 await hub.publish("device.update", {**row, "note": f"unwedge failed: {exc}"})
@@ -617,22 +623,21 @@ def _mount_devices(api: APIRouter) -> None:
         if action not in ("on", "off", "cycle"):
             raise HTTPException(status_code=404, detail="unknown power action")
         _gate_idle()
-        # Free the port from any live serial monitor before toggling VBUS.
-        await request.app.state.serialmon.suspend(serial)
-        try:
-            result = await power.power_device(db, serial, action)
-        except AmbiguousPort as exc:
-            raise HTTPException(
-                status_code=409,
-                detail={"error": str(exc), "candidates": exc.candidates},
-            )
-        except (NoPort, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        except RuntimeError as exc:  # uhubctl errors (permissions, hub gone)
-            raise HTTPException(status_code=502, detail=str(exc))
-        finally:
-            if action != "off":
-                await request.app.state.serialmon.resume(serial)
+        # The guard serialises against enrichment/keep-alive (which open the
+        # port under the same lock) and suspends any live serial monitor while
+        # VBUS is toggled, resuming it on exit even when the action fails.
+        async with request.app.state.portlocks.guard(serial):
+            try:
+                result = await power.power_device(db, serial, action)
+            except AmbiguousPort as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"error": str(exc), "candidates": exc.candidates},
+                )
+            except (NoPort, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            except RuntimeError as exc:  # uhubctl errors (permissions, hub gone)
+                raise HTTPException(status_code=502, detail=str(exc))
         return result
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -35,8 +36,19 @@ def _artifact_root() -> Path:
     )
 
 
+# Build keys become path components; reject separators and dot-only names so a
+# request-supplied env (or sha) can't escape the artifact root.
+_SAFE_ARTIFACT_PART = re.compile(r"[A-Za-z0-9._+-]+")
+
+
+def _safe_artifact_part(value: str, name: str) -> str:
+    if value in (".", "..") or not _SAFE_ARTIFACT_PART.fullmatch(value):
+        raise ValueError(f"invalid {name}: {value!r}")
+    return value
+
+
 def artifact_dir(sha: str, env: str) -> Path:
-    return _artifact_root() / sha / env
+    return _artifact_root() / _safe_artifact_part(sha, "sha") / _safe_artifact_part(env, "env")
 
 
 def cached_artifact_dir(sha: str, env: str) -> Path | None:
@@ -103,7 +115,10 @@ def default_build_fn(env: str, out: Path, log_cb: Callable[[str], None]) -> bool
         from meshtastic_mcp import config as mcfg
         from meshtastic_mcp import pio
 
-        root = mcfg.firmware_root()
+        root = mcfg.firmware_root_or_none()
+        if root is None:
+            log_cb("firmware root not found; set MESHTASTIC_FIRMWARE_ROOT")
+            return False
         log_cb(f"pio run -e {env}")
 
         def on_line(line: str) -> None:
@@ -140,6 +155,10 @@ class BuildOrchestrator:
         self.hub = hub
         self.build_fn = build_fn or default_build_fn
         self._inflight: dict[str, asyncio.Task] = {}
+        # The inflight check and task registration in enqueue() span awaits;
+        # serialize them so concurrent enqueues of the same (env, sha) key
+        # can't both start a build.
+        self._enqueue_lock = asyncio.Lock()
 
     async def enqueue(
         self, envs: list[str], *, sha: str, branch: str | None, force: bool = False
@@ -148,38 +167,41 @@ class BuildOrchestrator:
         ``force`` rebuilds even when an artifact is cached. Returns a status row
         per requested env."""
         results: list[dict] = []
-        for env in envs:
-            key = f"{env}@{sha}"
+        async with self._enqueue_lock:
+            for env in envs:
+                key = f"{env}@{sha}"
 
-            cached = None if force else cached_artifact_dir(sha, env)
-            if cached is not None:
-                row = await rb.get(self.db, env, sha)
-                if row is None or row["status"] not in ("success", "cached"):
-                    bid = await rb.create(
-                        self.db, env=env, fw_sha=sha, fw_branch=branch, status="cached"
-                    )
-                    row = await rb.set_status(
-                        self.db,
-                        bid,
-                        status="cached",
-                        duration_s=0.0,
-                        artifact_dir=str(cached),
-                    )
-                results.append({**row, "cached": True})
-                await self.hub.publish("build.update", {**row, "cached": True})
-                continue
+                cached = None if force else cached_artifact_dir(sha, env)
+                if cached is not None:
+                    row = await rb.get(self.db, env, sha)
+                    if row is None or row["status"] not in ("success", "cached"):
+                        bid = await rb.create(
+                            self.db, env=env, fw_sha=sha, fw_branch=branch, status="cached"
+                        )
+                        row = await rb.set_status(
+                            self.db,
+                            bid,
+                            status="cached",
+                            duration_s=0.0,
+                            artifact_dir=str(cached),
+                        )
+                    results.append({**row, "cached": True})
+                    await self.hub.publish("build.update", {**row, "cached": True})
+                    continue
 
-            if key in self._inflight and not self._inflight[key].done():
-                row = await rb.get(self.db, env, sha)
-                if row:
-                    results.append(row)
-                continue
+                if key in self._inflight and not self._inflight[key].done():
+                    row = await rb.get(self.db, env, sha)
+                    if row:
+                        results.append(row)
+                    continue
 
-            bid = await rb.create(self.db, env=env, fw_sha=sha, fw_branch=branch, status="queued")
-            row = await rb.get_by_id(self.db, bid)
-            results.append(row)
-            await self.hub.publish("build.update", row)
-            self._inflight[key] = asyncio.create_task(self._run_build(bid, env, sha, key))
+                bid = await rb.create(
+                    self.db, env=env, fw_sha=sha, fw_branch=branch, status="queued"
+                )
+                row = await rb.get_by_id(self.db, bid)
+                results.append(row)
+                await self.hub.publish("build.update", row)
+                self._inflight[key] = asyncio.create_task(self._run_build(bid, env, sha, key))
         return results
 
     async def _run_build(self, build_id: int, env: str, sha: str, key: str) -> None:

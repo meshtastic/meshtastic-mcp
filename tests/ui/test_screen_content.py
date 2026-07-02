@@ -19,7 +19,7 @@ from meshtastic_mcp.input_events import InputEventCode
 
 from ._ocr_match import normalize, ocr_contains_any
 from ._screen_log import get_current_frame
-from .conftest import FrameCapture, send_event
+from .conftest import FrameCapture, post_event_settle, send_event
 
 
 def _ocr_available() -> bool:
@@ -76,6 +76,7 @@ def test_home_screen_shows_device_identity(
 
 @pytest.mark.timeout(120)
 def test_carousel_frames_render(
+    ui_role: str,
     ui_port: str,
     frame_capture: FrameCapture,
     request: pytest.FixtureRequest,
@@ -90,12 +91,13 @@ def test_carousel_frames_render(
 
     total = min(start.count, 6)
     rendered = 0
+    settle = post_event_settle(ui_role)
     for i in range(total):
         cap = frame_capture(f"frame-{i}")
         if normalize(cap.get("ocr_text") or ""):
             rendered += 1
         send_event(ui_port, InputEventCode.RIGHT)
-        time.sleep(0.4)
+        time.sleep(settle)
 
     # OLED OCR is fuzzy — require a majority, not every frame (some are sparse
     # icon-only screens that OCR can't read).

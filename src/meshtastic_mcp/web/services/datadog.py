@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import re
-import socket
 import time
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -197,7 +196,9 @@ def _read_live(path: Path, cursor: dict, max_lines: int) -> tuple[list[dict], di
     consumed = pos + len(complete)
 
     rows: list[dict] = []
-    for raw in complete.split(b"\n"):
+    offset = 0
+    for raw in complete.splitlines(keepends=True):
+        offset += len(raw)
         if not raw.strip():
             continue
         try:
@@ -205,7 +206,9 @@ def _read_live(path: Path, cursor: dict, max_lines: int) -> tuple[list[dict], di
         except ValueError:
             continue
         if len(rows) >= max_lines:
-            break
+            # Stop the cursor after the last returned row so the rest of the
+            # chunk is picked up next cycle instead of being skipped.
+            return rows, {"ino": ino, "pos": pos + offset}
     return rows, {"ino": ino, "pos": consumed}
 
 
@@ -399,7 +402,7 @@ class DDForwarder:
             port_tags = await self._port_tags()
             # Datadog hostname is the tester/bench id (a machine hostname is
             # PII-ish and meaningless fleet-wide), mirrored in a tester: tag.
-            host = cfg.host or socket.gethostname()
+            host = cfg.host or cfg.collector or "fleetsuite"
             base_tags = [
                 _tag("collector", cfg.collector) or "collector:fleetsuite",
                 f"tester:{_sanitize_tag_value(host)}",

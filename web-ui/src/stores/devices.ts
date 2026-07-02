@@ -85,12 +85,14 @@ export const useDevicesStore = defineStore("devices", () => {
 
   // Run the escalating recovery ladder (reboot → power-cycle, + reflash when
   // allowReflash). Long-running; progress streams on the recovery.update topic.
+  // Reflash is destructive: the caller confirms with the user first (see
+  // DeviceControls), and we pass that confirmation through to the API gate.
   async function recover(serial: string, allowReflash = false) {
     return api.post<{
       recovered: boolean;
       final_step: string | null;
       steps: { step: string; label: string; skipped: string | null; healthy_after?: boolean }[];
-    }>(`/api/devices/${serial}/recover`, { allow_reflash: allowReflash });
+    }>(`/api/devices/${serial}/recover`, { allow_reflash: allowReflash, confirm: allowReflash });
   }
 
   // Lightweight sibling to recover(): just free a held/wedged serial port —

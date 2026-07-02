@@ -15,10 +15,11 @@ from __future__ import annotations
 import re
 
 # Decimal coordinate: lat/lon/latitude/longitude = <signed decimal>. Longest
-# names first so "latitude" isn't half-matched as "lat".
-_DEC = re.compile(r"\b(latitude|longitude|lat|lon)=(-?\d+\.\d+)")
+# names first so "latitude" isn't half-matched as "lat". Case-insensitive so
+# variant casings ("Latitude=") can't slip coordinates past the scrubber.
+_DEC = re.compile(r"\b(latitude|longitude|lat|lon)=(-?\d+\.\d+)", re.IGNORECASE)
 # Protobuf 1e-7 integer coordinate: same names with an _i suffix = <signed int>.
-_INT = re.compile(r"\b(latitude_i|longitude_i|lat_i|lon_i)=(-?\d+)")
+_INT = re.compile(r"\b(latitude_i|longitude_i|lat_i|lon_i)=(-?\d+)", re.IGNORECASE)
 # NMEA sentence ("$GPGGA,...") — drop everything after the sentence type.
 _NMEA = re.compile(r"(\$G[A-Z]{4}),\S*")
 

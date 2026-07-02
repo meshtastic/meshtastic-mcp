@@ -275,6 +275,10 @@ class TestRunner:
                 await asyncio.wait_for(self.serialmon.suspend_all(), timeout=10.0)
             except TimeoutError:
                 log.warning("suspend_all timed out — launching pytest anyway")
+            except Exception:
+                # running is already True and _drive doesn't exist yet — an
+                # escaping exception here would wedge the runner forever.
+                log.exception("suspend_all failed — launching pytest anyway")
         await self.hub.publish("test.progress", {"type": "run_started", "run_id": run_id})
         self._task = asyncio.create_task(self._drive(run_id, args, overrides))
         return status()
@@ -344,7 +348,8 @@ class TestRunner:
                 timeout=SPAWN_TIMEOUT,
             )
             _state["proc"] = proc
-            tail = asyncio.create_task(self._tail_report(run_id, report))
+            report_done = asyncio.Event()
+            tail = asyncio.create_task(self._tail_report(run_id, report, report_done))
             watchdog = asyncio.create_task(self._startup_watchdog(proc, report))
             heartbeat = asyncio.create_task(self._heartbeat())
             await asyncio.gather(
@@ -352,10 +357,17 @@ class TestRunner:
                 self._pump(proc.stderr, "stderr"),
             )
             exit_code = await proc.wait()
-            await asyncio.sleep(0.2)  # let the reportlog flush
             watchdog.cancel()
-            tail.cancel()
             heartbeat.cancel()
+            # pytest has exited, so the reportlog is complete on disk. Signal
+            # the tail to do one final drain and wait for it, instead of
+            # canceling it mid-poll (which used to drop entries written in the
+            # last ~0.3s — typically the final test's outcome).
+            report_done.set()
+            try:
+                await asyncio.wait_for(tail, timeout=10.0)  # cancels tail on timeout
+            except TimeoutError:
+                log.warning("reportlog tail failed to drain; final entries may be lost")
         except TimeoutError:
             await self.hub.publish(
                 "test.stdout",
@@ -465,20 +477,28 @@ class TestRunner:
                 },
             )
 
-    async def _tail_report(self, run_id: int, report: Path) -> None:
+    async def _tail_report(self, run_id: int, report: Path, done: asyncio.Event) -> None:
         """Follow the reportlog JSONL and translate entries into progress frames
-        + persisted results."""
+        + persisted results. Once ``done`` is set (pytest exited, so the file is
+        complete) it drains whatever remains and returns."""
         from ..db import repo_runs as rr
 
         seen_register: set[str] = set()
         pos = 0
         while True:
+            # Snapshot BEFORE reading: anything written before `done` was set is
+            # already on disk, so a drain after a True snapshot misses nothing.
+            finishing = done.is_set()
             if report.exists():
                 with open(report, "rb") as fh:
                     fh.seek(pos)
                     chunk = fh.read()
-                    pos = fh.tell()
-                for raw in chunk.split(b"\n"):
+                # Consume complete lines only: a partially-written trailing
+                # entry stays behind `pos` and is re-read whole on the next poll
+                # instead of being dropped as malformed JSON.
+                complete, nl, _partial = chunk.rpartition(b"\n")
+                pos += len(complete) + len(nl)
+                for raw in complete.split(b"\n"):
                     if not raw.strip():
                         continue
                     try:
@@ -492,6 +512,8 @@ class TestRunner:
                         await self._handle_entry(run_id, entry, seen_register, rr)
                     except Exception:
                         log.exception("test_runner: bad report entry, skipping")
+            if finishing:
+                return
             await asyncio.sleep(0.3)
 
     async def _register(self, nodeid: str, seen_register: set) -> None:
@@ -539,9 +561,11 @@ class TestRunner:
                 _state["since"] = time.time()
                 _state["last_line"] = None
                 await self.hub.publish("test.progress", {"type": "running", "nodeid": nodeid})
-            # Final outcome: the call phase normally, or a non-passed setup
-            # (skip/error) that short-circuits the test.
-            final = when == "call" or (when == "setup" and outcome != "passed")
+            # Final outcome: the call phase normally, a non-passed setup
+            # (skip/error) that short-circuits the test, or a non-passed
+            # teardown (pytest's "1 passed, 1 error") that must override an
+            # earlier pass — the UI applies outcome frames last-writer-wins.
+            final = when == "call" or (when in ("setup", "teardown") and outcome != "passed")
             if final:
                 duration = entry.get("duration")
                 await self.hub.publish(

@@ -77,15 +77,20 @@ function fmtElapsed(s: number): string {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-async function run(label: string, fn: () => Promise<any>) {
+async function run(
+  label: string,
+  fn: () => Promise<any>,
+  format?: (result: any) => { msg: string; ok: boolean },
+) {
   busy.value = true;
   runStartedAt.value = Date.now();
   msg.value = `${label}…`;
   ok.value = true;
   try {
-    await fn();
-    msg.value = `${label} ✓`;
-    ok.value = true;
+    const result = await fn();
+    const f = format ? format(result) : { msg: `${label} ✓`, ok: true };
+    msg.value = f.msg;
+    ok.value = f.ok;
   } catch (e: any) {
     msg.value = `${label}: ${e.message}`;
     ok.value = false;
@@ -108,10 +113,11 @@ const factory = () => {
     run("factory-reset", () => api.post(`${base()}/factory-reset`, {}));
 };
 const getConfig = () =>
-  run("get-config", async () => {
-    const c = await api.get(`${base()}/config?section=lora`);
-    msg.value = JSON.stringify(c).slice(0, 120);
-  });
+  run(
+    "get-config",
+    () => api.get(`${base()}/config?section=lora`),
+    (c) => ({ msg: JSON.stringify(c).slice(0, 120), ok: true }),
+  );
 
 // Native (Docker meshtasticd) container lifecycle.
 const nativeBase = () => `/api/native/${nativeName.value}`;
@@ -138,9 +144,9 @@ const actions = computed(() =>
 const doSend = () => {
   if (!sendText.value.trim()) return;
   const text = sendText.value;
-  run("send-text", () => api.post(`${base()}/send-text`, { text })).then(
-    () => (sendText.value = ""),
-  );
+  run("send-text", () => api.post(`${base()}/send-text`, { text })).then(() => {
+    if (ok.value) sendText.value = "";
+  });
 };
 
 // USB power control (uhubctl). The node's hub port is tracked on the device;
@@ -184,13 +190,16 @@ function recover(allowReflash: boolean) {
     return;
   recovering.value = true;
   recoverStep.value = "starting…";
-  run(label, async () => {
-    const r = await devices.recover(serial.value, allowReflash);
-    msg.value = r.recovered
-      ? `recovered via ${r.final_step}`
-      : "not recovered — try reflash / check power";
-    ok.value = r.recovered;
-  }).finally(() => {
+  run(
+    label,
+    () => devices.recover(serial.value, allowReflash),
+    (r) => ({
+      msg: r.recovered
+        ? `recovered via ${r.final_step}`
+        : "not recovered — try reflash / check power",
+      ok: r.recovered,
+    }),
+  ).finally(() => {
     recovering.value = false;
     recoverStep.value = null;
   });
@@ -199,15 +208,16 @@ function recover(allowReflash: boolean) {
 // Lightweight unwedge: just free the serial port (wait → power-cycle its hub
 // slot if genuinely wedged). The node may re-enumerate on a new path.
 const unwedge = () =>
-  run("unwedge", async () => {
-    const r = await devices.unwedge(serial.value);
-    if (r.recovered) {
-      msg.value = `unwedged → ${r.new_port}`;
-    } else {
-      msg.value = `not unwedged${r.error ? ": " + r.error : ""}`;
-    }
-    ok.value = r.recovered;
-  });
+  run(
+    "unwedge",
+    () => devices.unwedge(serial.value),
+    (r) => ({
+      msg: r.recovered
+        ? `unwedged → ${r.new_port}`
+        : `not unwedged${r.error ? ": " + r.error : ""}`,
+      ok: r.recovered,
+    }),
+  );
 </script>
 
 <template>

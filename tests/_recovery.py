@@ -12,8 +12,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from meshtastic_mcp import devices as devices_mod
 from meshtastic_mcp import recovery, uhubctl
+
+from ._port_discovery import resolve_port_by_role
 
 
 def hub_slot_for_role(role: str) -> tuple[str | None, int | None]:
@@ -27,18 +28,14 @@ def hub_slot_for_role(role: str) -> tuple[str | None, int | None]:
 
 def port_resolver_for_role(role: str) -> Callable[[], str | None]:
     """A re-resolver: after a power cycle a node can re-enumerate on a new path,
-    so re-find it by the role's VID set."""
-    vids = uhubctl.ROLE_VIDS.get(uhubctl._normalize_role(role), ())
+    so re-find it by the role's pinned hub slot (VID alone is ambiguous with
+    three same-VID nRF52 boards on the bench)."""
 
     def resolve() -> str | None:
-        for d in devices_mod.list_devices(include_unknown=True):
-            vid = d.get("vid")
-            try:
-                if vid and int(vid, 16) in vids:
-                    return d["port"]
-            except ValueError:
-                continue
-        return None
+        try:
+            return resolve_port_by_role(role, timeout_s=5.0)
+        except (AssertionError, ValueError):
+            return None
 
     return resolve
 

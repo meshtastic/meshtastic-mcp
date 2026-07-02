@@ -92,6 +92,8 @@ def test_full_ladder_when_nothing_heals(monkeypatch):
 
 import asyncio
 
+import pytest
+
 from meshtastic_mcp.web.services import recovery as WR
 
 
@@ -143,6 +145,25 @@ def _service(monkeypatch, *, ladder_report, healthy, detail=None, online=1):
     return svc, probe_calls
 
 
+def test_destructive_steps_require_confirm(monkeypatch):
+    # Reflash/factory_reset follow the repo-wide destructive-tool convention:
+    # allow_reflash alone is not enough, and explicit steps= injection can't
+    # bypass the gate either. Nothing runs — it rejects before the ladder.
+    svc, probe_calls = _service(monkeypatch, ladder_report=dict(_UNHEALED), healthy=True)
+    with pytest.raises(RuntimeError, match="confirm=True"):
+        asyncio.run(svc.recover("x", allow_reflash=True))
+    with pytest.raises(RuntimeError, match="confirm=True"):
+        asyncio.run(svc.recover("x", steps=["factory_reset"]))
+    assert probe_calls == []
+
+
+def test_explicit_reflash_step_still_requires_allow_reflash(monkeypatch):
+    # confirm=True alone can't smuggle reflash in via steps=.
+    svc, _ = _service(monkeypatch, ladder_report=dict(_UNHEALED), healthy=True)
+    with pytest.raises(RuntimeError, match="allow_reflash=True"):
+        asyncio.run(svc.recover("x", confirm=True, steps=["reflash"]))
+
+
 def test_reappeared_needs_a_real_health_check(monkeypatch):
     # Re-enumerated (online=1) but every step was healthy_after:false and the
     # confirmation handshake fails — must NOT be promoted to recovered.
@@ -152,7 +173,7 @@ def test_reappeared_needs_a_real_health_check(monkeypatch):
         healthy=False,
         detail="connected but no firmware_version",
     )
-    rep = asyncio.run(svc.recover("0898D59592BBA72B", allow_reflash=True))
+    rep = asyncio.run(svc.recover("0898D59592BBA72B", allow_reflash=True, confirm=True))
     assert rep["recovered"] is False
     assert rep["final_step"] is None
     assert rep["reappeared_unhealthy"]  # reason surfaced
@@ -166,7 +187,7 @@ def test_reappeared_promotes_on_successful_handshake(monkeypatch):
         healthy=True,
         detail={"firmware_version": "2.5.0"},
     )
-    rep = asyncio.run(svc.recover("0898D59592BBA72B", allow_reflash=True))
+    rep = asyncio.run(svc.recover("0898D59592BBA72B", allow_reflash=True, confirm=True))
     assert rep["recovered"] is True
     assert rep["final_step"] == "reappeared"
     assert probe_calls == ["/dev/cu.NEW"]
@@ -176,7 +197,7 @@ def test_reappeared_promotes_on_successful_handshake(monkeypatch):
 def test_offline_device_is_never_probed(monkeypatch):
     # Not even on the bus -> no probe, stays unrecovered (no false reappear).
     svc, probe_calls = _service(monkeypatch, ladder_report=dict(_UNHEALED), healthy=True, online=0)
-    rep = asyncio.run(svc.recover("x", allow_reflash=True))
+    rep = asyncio.run(svc.recover("x", allow_reflash=True, confirm=True))
     assert rep["recovered"] is False
     assert probe_calls == []
     assert "reappeared_unhealthy" not in rep
@@ -191,7 +212,7 @@ def test_ladder_success_skips_the_reappear_probe(monkeypatch):
         "steps": [{"step": "reboot", "skipped": None, "healthy_after": True}],
     }
     svc, probe_calls = _service(monkeypatch, ladder_report=healed, healthy=False)
-    rep = asyncio.run(svc.recover("x", allow_reflash=True))
+    rep = asyncio.run(svc.recover("x", allow_reflash=True, confirm=True))
     assert rep["recovered"] is True
     assert rep["final_step"] == "reboot"
     assert probe_calls == []

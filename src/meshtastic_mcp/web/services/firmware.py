@@ -11,12 +11,9 @@ from pathlib import Path
 
 @lru_cache(maxsize=1)
 def _root() -> Path:
-    try:
-        from meshtastic_mcp import config as mcfg
+    from meshtastic_mcp import config as mcfg
 
-        return mcfg.firmware_root()
-    except Exception:
-        return Path.cwd()
+    return mcfg.firmware_root_or_none() or Path.cwd()
 
 
 def _git(*args: str) -> str | None:

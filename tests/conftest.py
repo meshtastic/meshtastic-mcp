@@ -79,10 +79,19 @@ def pytest_configure(config: pytest.Config) -> None:
     `_PORT_<ROLE>` *before* its VID table, so setting them here makes recovery
     work per board without touching production `uhubctl.ROLE_VIDS`.
 
-    Operator-set env vars win — we only fill blanks — so manual pins or a
-    `--hub-profile` still override.
+    Pins come from the active profile — `--hub-profile=<yaml>` when passed,
+    otherwise the reference bench — so recovery targets the same slots the
+    detection layer resolves. Operator-set env vars win — we only fill blanks.
     """
-    for role, spec in _bench.BENCH_ROLES.items():
+    profile_path = config.getoption("--hub-profile", default=None)
+    if profile_path:
+        import yaml
+
+        with open(profile_path, encoding="utf-8") as f:
+            profile = yaml.safe_load(f) or {}
+    else:
+        profile = _bench.BENCH_ROLES
+    for role, spec in profile.items():
         env = spec.get("env")
         if env:
             os.environ.setdefault(f"MESHTASTIC_MCP_ENV_{role.upper()}", env)

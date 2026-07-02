@@ -58,7 +58,7 @@ async def create(db, *, name: str, tcp_port: int) -> dict:
         "--name",
         _container(name),
         "-p",
-        f"{tcp_port}:4403",
+        f"127.0.0.1:{tcp_port}:4403",
         IMAGE,
     )
     if code != 0:

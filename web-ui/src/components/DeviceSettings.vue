@@ -99,7 +99,7 @@ const identify = () => {
       const res = await devices.identify(serial.value);
       selectedSlot.value = currentSlot.value;
       if (res.identified && res.slot) {
-        msg.value = `found on ${res.slot.location}:${res.slot.port}${
+        return `found on ${res.slot.location}:${res.slot.port}${
           res.mapped.length > 1 ? ` (+${res.mapped.length - 1} more mapped)` : ""
         }`;
       } else {
@@ -137,8 +137,9 @@ async function act(label: string, fn: () => Promise<any>) {
   msg.value = `${label}…`;
   ok.value = true;
   try {
-    await fn();
-    msg.value = `${label} ✓`;
+    // A string return value becomes the success message (e.g. identify's slot info).
+    const result = await fn();
+    msg.value = typeof result === "string" ? result : `${label} ✓`;
   } catch (e: any) {
     msg.value = `${label}: ${e.message}`;
     ok.value = false;

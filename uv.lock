@@ -1075,6 +1075,11 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
+sdr = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pyrtlsdr" },
+]
 test = [
     { name = "coverage", extra = ["toml"] },
     { name = "pytest" },
@@ -1116,12 +1121,14 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.2" },
     { name = "meshtastic", specifier = ">=2.7.8" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "numpy", marker = "extra == 'sdr'", specifier = ">=1.26" },
     { name = "numpy", marker = "extra == 'ui'", specifier = ">=1.26" },
     { name = "numpy", marker = "extra == 'ui-min'", specifier = ">=1.26" },
     { name = "opencv-python-headless", marker = "extra == 'ui'", specifier = ">=4.9" },
     { name = "opencv-python-headless", marker = "extra == 'ui-min'", specifier = ">=4.9" },
     { name = "pillow", marker = "extra == 'ui'", specifier = ">=10.0" },
     { name = "platformdirs", specifier = ">=4.0" },
+    { name = "pyrtlsdr", marker = "extra == 'sdr'", specifier = ">=0.3" },
     { name = "pyserial", specifier = ">=3.5" },
     { name = "pytesseract", marker = "extra == 'ui'", specifier = ">=0.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
@@ -1138,7 +1145,7 @@ requires-dist = [
     { name = "textual", marker = "extra == 'test'", specifier = ">=0.50" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.27" },
 ]
-provides-extras = ["dev", "test", "ui", "ui-min", "web"]
+provides-extras = ["dev", "sdr", "test", "ui", "ui-min", "web"]
 
 [[package]]
 name = "mpmath"
@@ -2056,6 +2063,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c9/ae/873ab0911ba6ae395f05a788cd509af4ade15585740e1f0bc7673775f469/pypubsub-4.0.7.tar.gz", hash = "sha256:ec8b5cb147624958320e992602380cc5d0e4b36b1c59844d05e425a3003c09dc", size = 179165, upload-time = "2025-12-08T05:35:21.402Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/47/bf/17587e7cdefbf66cb3f0bced126c11a6d4c0b9b78a3eb90bbd0a49963d58/pypubsub-4.0.7-py3-none-any.whl", hash = "sha256:89c3e274e634fea19de881bb45152815d9c1aaa0120215f85200ba56843372f4", size = 72280, upload-time = "2025-12-08T05:35:20.439Z" },
+]
+
+[[package]]
+name = "pyrtlsdr"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/07/e0/4011cab0c7d1f886c2851e1d683fc807130eb7a90d48a4e2dabfde50b0e0/pyrtlsdr-0.4.0.tar.gz", hash = "sha256:67f10775b8b56be9d64fb932881795c2a896425f1efbc78cca6ea8b734c46cde", size = 37623, upload-time = "2026-03-01T21:47:43.685Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/e2/ee05a0e985e1175be2ed451dcdd525fc4901bbe891399056d56fd9ab47c4/pyrtlsdr-0.4.0-py3-none-any.whl", hash = "sha256:964dc69e261f608f617db0e48c5d92e8d8c975f1c1c3c1d8add8d8012b72bd14", size = 31484, upload-time = "2026-03-01T21:47:41.541Z" },
 ]
 
 [[package]]

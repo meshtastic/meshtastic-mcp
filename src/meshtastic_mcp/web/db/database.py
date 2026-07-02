@@ -155,8 +155,9 @@ class Database:
         for table, col, decl in additions:
             try:
                 await self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
-            except Exception:
-                pass
+            except aiosqlite.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
 
     async def close(self) -> None:
         if self._conn is not None:

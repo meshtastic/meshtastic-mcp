@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from meshtastic_mcp import info, recovery
+from meshtastic_mcp import info, recovery, uhubctl
 from tests import _power, _recovery
 from tests._port_discovery import resolve_port_by_role
 
@@ -26,14 +26,19 @@ def test_ladder_recovers_a_dead_node(baked_single: dict[str, object]) -> None:
     healthy, detail = recovery.is_healthy(port, timeout_s=5.0)
     assert healthy, f"{role} not healthy before test: {detail}"
 
+    # Resolve the hub slot ONCE, while the device is still visible — once it's
+    # powered off, resolve_target can't find it (its VID is gone from every hub)
+    # and would raise, so the finally could never restore the bench.
+    slot = uhubctl.resolve_target(role)
+
     # Wedge it: cut power so a soft reboot can't reach it.
-    _power.power_off(role)
+    _power.power_off(role, resolved=slot)
     _power.wait_for_absence(role, timeout_s=10.0)
     try:
         # reboot fails (it's gone) → power_cycle revives it.
         report = _recovery.heal(port, role=role)
     finally:
-        _power.power_on(role)  # never leave it dark for the next test
+        _power.power_on(role, resolved=slot)  # never leave it dark for the next test
         resolve_port_by_role(role, timeout_s=30.0)
 
     assert report["recovered"], f"ladder did not recover {role}: {report}"

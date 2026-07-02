@@ -26,6 +26,7 @@ locally for the rest of the test body rather than expecting
 
 from __future__ import annotations
 
+import os
 import time
 
 from meshtastic_mcp import devices as devices_module
@@ -55,6 +56,22 @@ def _coerce_vid(raw: object) -> int | None:
     return None
 
 
+def _role_location(role: str) -> str | None:
+    """Effective hub-slot location for ``role``, env pins first.
+
+    ``MESHTASTIC_UHUBCTL_LOCATION_<ROLE>`` + ``MESHTASTIC_UHUBCTL_PORT_<ROLE>``
+    are the same per-role pin channel ``uhubctl.resolve_target`` honors for
+    power/recovery (``conftest.pytest_configure`` seeds them from the active
+    bench profile), so on a non-default bench re-resolution follows the pinned
+    slot rather than the reference registry in ``tests/_bench.py``. Falls back
+    to the registry location when no pin is set."""
+    hub = os.environ.get(f"MESHTASTIC_UHUBCTL_LOCATION_{role.upper()}")
+    slot = os.environ.get(f"MESHTASTIC_UHUBCTL_PORT_{role.upper()}")
+    if hub and slot:
+        return f"{hub}.{slot}"
+    return _bench.role_location(role)
+
+
 def resolve_port_by_role(
     role: str,
     *,
@@ -73,7 +90,9 @@ def resolve_port_by_role(
     board connected" vs. "still re-enumerating".
 
     Args:
-        role: ``"nrf52"`` or ``"esp32s3"`` (keys of ``_ROLE_VIDS``).
+        role: a key of ``_ROLE_VIDS`` (e.g. ``"rak4631"``, ``"esp32s3"``), or
+            any role pinned via ``MESHTASTIC_UHUBCTL_LOCATION_<ROLE>`` +
+            ``MESHTASTIC_UHUBCTL_PORT_<ROLE>`` (a ``--hub-profile`` bench).
         timeout_s: upper bound on how long to wait for the device to
             re-appear. Default 30 s — nRF52 factory_reset observed at
             2-12 s on a healthy lab hub.
@@ -82,13 +101,18 @@ def resolve_port_by_role(
 
     Raises:
         AssertionError: if no matching device appears within ``timeout_s``.
-        ValueError: if ``role`` is not in ``_ROLE_VIDS``.
+        ValueError: if ``role`` is neither in ``_ROLE_VIDS`` nor pinned to a
+            hub slot via env vars.
 
     """
-    if role not in _ROLE_VIDS:
-        raise ValueError(f"unknown role {role!r}; expected one of {sorted(_ROLE_VIDS)}")
-    wanted_vids = _ROLE_VIDS[role]
-    location = _bench.role_location(role)
+    location = _role_location(role)
+    if role not in _ROLE_VIDS and location is None:
+        raise ValueError(
+            f"unknown role {role!r}; expected one of {sorted(_ROLE_VIDS)}, or pin its "
+            f"slot via MESHTASTIC_UHUBCTL_LOCATION_{role.upper()} + "
+            f"MESHTASTIC_UHUBCTL_PORT_{role.upper()}"
+        )
+    wanted_vids = _ROLE_VIDS.get(role, ())
 
     deadline = time.monotonic() + timeout_s
     delay = poll_start

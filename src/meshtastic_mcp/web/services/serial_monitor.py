@@ -27,6 +27,9 @@ from ..db import repo_devices as rd
 log = logging.getLogger("meshtastic_mcp.web.serial_monitor")
 
 BAUD = 115200
+# Cap on the partial-line buffer: a binary burst or newline-free stream must
+# not grow it without bound. Text debug lines are well under this.
+MAX_PARTIAL = 8192
 
 
 class _Monitor:
@@ -138,6 +141,9 @@ class SerialMonitor:
         # reader against a port the old thread is still releasing.
         if thread is not None:
             await asyncio.to_thread(thread.join, 2.0)
+            if thread.is_alive():
+                log.warning("serial monitor thread did not stop within timeout")
+                return
         mon.thread = None
         mon.stop = None
 
@@ -194,6 +200,8 @@ class SerialMonitor:
                                 "uptime_s": parsed.get("uptime_s"),
                             }
                         )
+                if len(buf) > MAX_PARTIAL:
+                    buf = b""  # drop runaway newline-free data; resync at next newline
         finally:
             try:
                 ser.close()
