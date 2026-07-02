@@ -34,10 +34,12 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
 from meshtastic.protobuf import channel_pb2
+
+if TYPE_CHECKING:  # numpy ships with the [sdr] extra — keep the base install slim
+    import numpy as np
 
 from . import lora_compliance, sdr
 from .admin import _message_to_dict
@@ -200,6 +202,8 @@ def scan(
     device involved. Useful for a pre-test "is this channel already busy"
     occupancy check, or just probing a frequency by hand.
     """
+    import numpy as np  # lazy: ships with the [sdr] extra
+
     requested_rate_hz = min(
         _MAX_SAMPLE_RATE_HZ, max(span_khz * 1000.0 * 1.5, _MIN_SAFE_SAMPLE_RATE_HZ)
     )
