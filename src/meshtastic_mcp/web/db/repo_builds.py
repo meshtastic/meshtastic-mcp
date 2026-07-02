@@ -23,6 +23,7 @@ async def create(db: Database, *, env: str, fw_sha: str, fw_branch: str | None, 
         "INSERT INTO builds (env, fw_sha, fw_branch, status, created_at) VALUES (?,?,?,?,?)",
         (env, fw_sha, fw_branch, status, time.time()),
     )
+    assert cur.lastrowid is not None  # set after any successful INSERT
     return cur.lastrowid
 
 

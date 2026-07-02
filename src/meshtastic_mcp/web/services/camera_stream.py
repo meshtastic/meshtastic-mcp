@@ -199,6 +199,7 @@ async def mjpeg(device_index: str) -> AsyncIterator[bytes]:
             )
         except OSError:
             return
+        assert proc.stdout is not None  # stdout=PIPE above
         produced = False
         try:
             async for jpg in _read_frames(proc.stdout):

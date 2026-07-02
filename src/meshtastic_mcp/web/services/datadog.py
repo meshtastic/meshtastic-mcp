@@ -21,6 +21,7 @@ import re
 import time
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+from typing import Any
 
 from ..db import repo_devices as rd
 from ..db import repo_settings as rs
@@ -307,7 +308,7 @@ class DDForwarder:
         self.hub = hub
         self.serialmon = serialmon
         self.cfg = DDConfig()
-        self.stats = {
+        self.stats: dict[str, Any] = {
             "running": False,
             "sent_logs": 0,
             "sent_metrics": 0,
@@ -347,7 +348,7 @@ class DDForwarder:
         ``deque.append`` is atomic, so no lock needed). Dropped when inactive."""
         if not self.active():
             return
-        if len(self._queue) >= self._queue.maxlen:
+        if self._queue.maxlen is not None and len(self._queue) >= self._queue.maxlen:
             self._dropped += 1  # deque will evict the oldest; record the loss
         self._queue.append(rec)
 

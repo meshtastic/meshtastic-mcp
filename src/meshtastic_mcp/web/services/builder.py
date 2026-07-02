@@ -188,6 +188,7 @@ class BuildOrchestrator:
                             duration_s=0.0,
                             artifact_dir=str(cached),
                         )
+                    assert row is not None  # fetched above or just created
                     results.append({**row, "cached": True})
                     await self.hub.publish("build.update", {**row, "cached": True})
                     continue
@@ -202,6 +203,7 @@ class BuildOrchestrator:
                     self.db, env=env, fw_sha=sha, fw_branch=branch, status="queued"
                 )
                 row = await rb.get_by_id(self.db, bid)
+                assert row is not None  # just created above
                 results.append(row)
                 await self.hub.publish("build.update", row)
                 self._inflight[key] = asyncio.create_task(self._run_build(bid, env, sha, key))

@@ -576,6 +576,7 @@ def _mount_devices(api: APIRouter) -> None:
         if not power.available():
             raise HTTPException(status_code=400, detail="uhubctl not available on this host")
         dev = await rd.get(db, serial)
+        assert dev is not None  # _device_or_404 above
         candidates = await asyncio.to_thread(power.candidates_for, dev)
         if not candidates:
             raise HTTPException(

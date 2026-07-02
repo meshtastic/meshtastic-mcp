@@ -32,6 +32,7 @@ async def add(db: Database, *, name: str, device_index: str) -> int:
         "created_at) VALUES (?, 'usb', ?, 0, 1, ?)",
         (name, device_index, time.time()),
     )
+    assert cur.lastrowid is not None  # set after any successful INSERT
     return cur.lastrowid
 
 

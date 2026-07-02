@@ -155,6 +155,7 @@ class Database:
             ("devices", "hub_location", "TEXT"),
             ("devices", "hub_port", "INTEGER"),
         )
+        assert self._conn is not None  # only called from connect()
         for table, col, decl in additions:
             try:
                 await self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")

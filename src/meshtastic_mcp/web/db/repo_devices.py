@@ -24,9 +24,7 @@ _COLS = (
 )
 
 
-def _to_dict(row) -> dict | None:
-    if row is None:
-        return None
+def _to_dict(row) -> dict:
     d = dict(row)
     serial = d.get("serial_number") or ""
     d["has_stable_id"] = identity.has_stable_id(serial)
@@ -37,7 +35,14 @@ def _to_dict(row) -> dict | None:
 
 async def get(db: Database, serial: str) -> dict | None:
     row = await db.fetchone(f"SELECT {_COLS} FROM devices WHERE serial_number=?", (serial,))
-    return _to_dict(row)
+    return _to_dict(row) if row is not None else None
+
+
+async def _get_must_exist(db: Database, serial: str) -> dict:
+    """`get` for rows this module just wrote — the row provably exists."""
+    row = await get(db, serial)
+    assert row is not None, f"device row vanished mid-transaction: {serial}"
+    return row
 
 
 async def list_all(db: Database) -> list[dict]:
@@ -70,7 +75,7 @@ async def upsert_from_discovery(
             "VALUES (?,?,?,?,?,'usb',1,?,?,0)",
             (serial_number, current_port, vid, pid, role, now, now),
         )
-        row = await get(db, serial_number)
+        row = await _get_must_exist(db, serial_number)
         row["_is_new"] = True
         row["_port_changed"] = False
         return row
@@ -82,7 +87,7 @@ async def upsert_from_discovery(
         "last_seen=? WHERE serial_number=?",
         (current_port, vid, pid, role, now, serial_number),
     )
-    row = await get(db, serial_number)
+    row = await _get_must_exist(db, serial_number)
     row["_is_new"] = False
     row["_port_changed"] = port_changed
     # An offline→online transition at the SAME port still needs a broadcast so
@@ -112,7 +117,7 @@ async def upsert_native(db: Database, *, name: str, tcp_port: int, online: bool 
             "last_seen=? WHERE serial_number=?",
             (tcp_port, port, int(online), now, serial),
         )
-    return await get(db, serial)
+    return await _get_must_exist(db, serial)
 
 
 async def set_friendly_name(db: Database, serial: str, name: str) -> dict | None:
@@ -191,7 +196,7 @@ async def by_hub_slot(db: Database, *, location: str | None, port: int | None) -
         "ORDER BY last_seen DESC LIMIT 1",
         (location, port),
     )
-    return _to_dict(row)
+    return _to_dict(row) if row is not None else None
 
 
 async def record_flashed(db: Database, serial: str, *, branch: str | None, sha: str | None) -> None:
@@ -217,7 +222,7 @@ async def online_by_role(db: Database, role: str) -> dict | None:
         f"SELECT {_COLS} FROM devices WHERE online=1 AND role=? ORDER BY last_seen DESC LIMIT 1",
         (role,),
     )
-    return _to_dict(row)
+    return _to_dict(row) if row is not None else None
 
 
 async def online_with_env(db: Database) -> list[dict]:

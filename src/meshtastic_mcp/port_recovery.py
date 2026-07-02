@@ -160,7 +160,7 @@ def ensure_port_free(
             f"(last: {last_exc!r}; holders: {holders or 'none — wedged/EINVAL'}); "
             f"power-cycle disabled."
         )
-    if hub is None:
+    if hub is None or hub_port is None:
         raise PortRecoveryError(
             f"{label}{port} unusable (last: {last_exc!r}; holders: {holders or 'none'}) and "
             f"its hub slot can't be resolved from USB topology — cannot auto-recover. "
@@ -188,15 +188,15 @@ def ensure_port_free(
 
     time.sleep(0.5)  # VBUS is back; let the device start enumerating
     deadline = time.monotonic() + reenum_timeout_s
-    last = last_exc
+    last: BaseException | None = last_exc
     tried = port
     while time.monotonic() < deadline:
         tried = port_on_slot(hub, hub_port) or port
-        ok, exc = port_openable(tried)
+        ok, open_exc = port_openable(tried)
         if ok:
             _emit(f"{label}recovered on {tried}" + (f" (was {port})" if tried != port else ""))
             return tried
-        last = exc
+        last = open_exc
         time.sleep(poll)
     raise PortRecoveryError(
         f"{label}still unusable after power-cycling hub {hub}:{hub_port} "
@@ -229,7 +229,7 @@ def ensure_port_responsive(
         return port
 
     hub, hub_port = hub_slot_for_port(port)
-    if not allow_power_cycle or hub is None or not _uhubctl_available():
+    if not allow_power_cycle or hub is None or hub_port is None or not _uhubctl_available():
         raise PortRecoveryError(
             f"{label}{port} opens but the device doesn't answer ({detail}); "
             f"no power-cycle available to recover."

@@ -100,14 +100,17 @@ class DeviceDiscovery:
             # recognise (covers CP210x/CH34x ESP32 boards findPorts drops).
             if not (dev.get("likely_meshtastic") or identity.role_for_vid(vid)):
                 continue
-            loc = locations.get(dev.get("port"))
+            port = dev.get("port")
+            if not port:  # a serial device without a port path can't be used
+                continue
+            loc = locations.get(port)
             key, _stable = identity.device_key({**dev, "location": loc})
             role = identity.role_for_vid(vid)
             seen.add(key)
             row = await rd.upsert_from_discovery(
                 self.db,
                 serial_number=key,
-                current_port=dev.get("port"),
+                current_port=port,
                 vid=dev.get("vid"),
                 pid=dev.get("pid"),
                 role=role,
@@ -120,7 +123,9 @@ class DeviceDiscovery:
             # Auto-map the uhubctl hub port from USB topology (no power-cycling).
             slot = identity.hub_slot_from_location(loc)
             if slot and (row.get("hub_location") != slot[0] or row.get("hub_port") != slot[1]):
-                row = await rd.set_hub_port(self.db, key, location=slot[0], port=slot[1])
+                slot_row = await rd.set_hub_port(self.db, key, location=slot[0], port=slot[1])
+                assert slot_row is not None  # row upserted just above
+                row = slot_row
                 changed = True
             if changed:
                 await self.hub.publish("device.update", row)
@@ -133,9 +138,9 @@ class DeviceDiscovery:
         newly_offline = await rd.mark_offline_except(self.db, seen | natives)
         for serial in newly_offline:
             self._enriched.pop(serial, None)  # re-verify if it comes back
-            row = await rd.get(self.db, serial)
-            if row:
-                await self.hub.publish("device.update", row)
+            off_row = await rd.get(self.db, serial)
+            if off_row:
+                await self.hub.publish("device.update", off_row)
 
         # Keep the Datadog fleet-log capture in sync with what's online — but
         # NOT while a test run owns the ports (sync_capture acquires serial
