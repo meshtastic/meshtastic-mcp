@@ -47,6 +47,8 @@ jobs:
         run: uv run --extra dev ruff check --output-format=github .
       - name: Ruff format
         run: uv run --extra dev ruff format --check .
+      - name: SPDX headers
+        run: python scripts/check_spdx.py
 
   types:
     runs-on: ubuntu-latest

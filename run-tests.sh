@@ -93,74 +93,114 @@ export MESHTASTIC_MCP_FLASH_LOG="$SCRIPT_DIR/tests/flash.log"
 : >"$MESHTASTIC_MCP_FLASH_LOG"
 
 # ---------- Detect connected hardware -------------------------------------
-# In-process call to the same Python API the test fixtures use, so the
-# script never drifts from what pytest sees. Returns a JSON object
-# {role: port, ...}.
-ROLES_JSON="$(
+# Per-board bench roles (tests/_bench.py). Assignment order per role:
+#   1. hub-slot location match (the reference bench's pinned slots)
+#   2. VERIFIED: a device_info handshake's hw_model resolves to the role's env
+#   3. VID fallback (UNVERIFIED — same-VID boards are indistinguishable here)
+# The exported MESHTASTIC_MCP_ENV_<ROLE> always prefers the env resolved from
+# the board's ACTUAL hw_model, so a fallback mislabel can't bake the wrong
+# variant. Operator MESHTASTIC_MCP_ENV_<ROLE> overrides win over everything.
+DETECTED=""
+UNVERIFIED=0
+while IFS=$'\t' read -r role port env verified; do
+	[[ -z $role ]] && continue
+	upper="$(echo "$role" | tr '[:lower:]' '[:upper:]')"
+	var="MESHTASTIC_MCP_ENV_${upper}"
+	eval "override=\${$var:-}"
+	if [[ -n $override ]]; then
+		env="$override"
+		verified="operator-override"
+	fi
+	export "MESHTASTIC_MCP_ENV_${upper}=$env"
+	if [[ $verified == "unverified" ]]; then
+		UNVERIFIED=1
+	fi
+	DETECTED="${DETECTED}  $(printf '%-12s' "$role") @ ${port} -> env=${env} [${verified}]\n"
+done < <(
 	"$VENV_PY" - <<'PY'
-import json
 import sys
 
 sys.path.insert(0, "src")
-from meshtastic_mcp import devices
+sys.path.insert(0, ".")
+from tests import _bench  # noqa: E402
+from meshtastic_mcp import devices, info  # noqa: E402
+from meshtastic_mcp.web.services import identity  # noqa: E402  # env_for_hw_model (no web deps)
 
-# Role → canonical VID map. Kept in sync with
-# `tests/conftest.py::hub_profile` defaults; if that changes, this must too.
-ROLE_BY_VID = {
-    0x239A: "nrf52",     # Adafruit / RAK nRF52 native USB (app + DFU)
-    0x303A: "esp32s3",   # Espressif native USB (ESP32-S3)
-    0x10C4: "esp32s3",   # CP2102 USB-UART (common on Heltec/LilyGO ESP32 boards)
-}
+devs = [d for d in devices.list_devices(include_unknown=True) if d.get("port")]
 
-out: dict[str, str] = {}
-for dev in devices.list_devices(include_unknown=True):
-    vid_raw = dev.get("vid") or ""
+
+def vid_of(d) -> int | None:
+    raw = d.get("vid") or ""
     try:
-        if isinstance(vid_raw, str) and vid_raw.startswith("0x"):
-            vid = int(vid_raw, 16)
-        else:
-            vid = int(vid_raw)
+        return int(raw, 16) if isinstance(raw, str) else int(raw)
     except (TypeError, ValueError):
+        return None
+
+
+# Ground truth per port: a short device_info handshake -> hw_model -> exact env.
+# Fails soft (busy port / non-meshtastic device / no firmware root).
+exact_env: dict[str, str] = {}
+for d in devs:
+    if not (d.get("likely_meshtastic") or identity.role_for_vid(d.get("vid"))):
         continue
-    role = ROLE_BY_VID.get(vid)
-    # First port wins per role — matches hub_devices fixture semantics.
-    if role and role not in out:
-        out[role] = dev["port"]
+    try:
+        di = info.device_info(port=d["port"], timeout_s=8.0)
+        env = identity.env_for_hw_model(di.get("hw_model"))
+        if env:
+            exact_env[d["port"]] = env
+    except Exception as exc:
+        print(f"note: handshake failed on {d['port']}: {exc}", file=sys.stderr)
 
-json.dump(out, sys.stdout)
+used: set[str] = set()
+assigned: dict[str, tuple[str, str, str]] = {}  # role -> (port, env, verified)
+
+# Pass 1 — location pins, then hw_model-verified env matches.
+for role in _bench.roles():
+    spec_loc = _bench.role_location(role)
+    if spec_loc:
+        for d in devs:
+            p = d["port"]
+            if p not in used and _bench.device_location(p) == spec_loc:
+                env = exact_env.get(p) or _bench.role_env(role) or ""
+                assigned[role] = (p, env, "hub-slot")
+                used.add(p)
+                break
+for role in _bench.roles():
+    if role in assigned:
+        continue
+    want = _bench.role_env(role)
+    for p, env in exact_env.items():
+        if p not in used and env == want:
+            assigned[role] = (p, env, "verified")
+            used.add(p)
+            break
+
+# Pass 2 — VID fallback for whatever's left. If the board handshook, trust its
+# hw_model env over the role default; otherwise flag it loudly.
+for role in _bench.roles():
+    if role in assigned:
+        continue
+    vids = set(_bench.role_vids(role))
+    for d in devs:
+        p = d["port"]
+        if p in used or vid_of(d) not in vids:
+            continue
+        if p in exact_env:
+            assigned[role] = (p, exact_env[p], "verified")
+        else:
+            assigned[role] = (p, _bench.role_env(role) or "", "unverified")
+        used.add(p)
+        break
+
+for role, (p, env, verified) in assigned.items():
+    print(f"{role}\t{p}\t{env}\t{verified}")
 PY
-)"
+)
 
-# ---------- Map role → pio env --------------------------------------------
-# Honor MESHTASTIC_MCP_ENV_<ROLE> operator overrides; fall back to the
-# same defaults hardcoded in tests/conftest.py::_DEFAULT_ROLE_ENVS.
-resolve_env() {
-	local role="$1"
-	local default="$2"
-	local upper
-	upper="$(echo "$role" | tr '[:lower:]' '[:upper:]')"
-	local var="MESHTASTIC_MCP_ENV_${upper}"
-	eval "local override=\${$var:-}"
-	if [[ -n $override ]]; then
-		echo "$override"
-	else
-		echo "$default"
-	fi
-}
-
-NRF52_PORT="$(echo "$ROLES_JSON" | "$VENV_PY" -c 'import json,sys; print(json.loads(sys.stdin.read()).get("nrf52", ""))')"
-ESP32S3_PORT="$(echo "$ROLES_JSON" | "$VENV_PY" -c 'import json,sys; print(json.loads(sys.stdin.read()).get("esp32s3", ""))')"
-
-DETECTED=""
-if [[ -n $NRF52_PORT ]]; then
-	NRF52_ENV="$(resolve_env nrf52 rak4631)"
-	export MESHTASTIC_MCP_ENV_NRF52="$NRF52_ENV"
-	DETECTED="${DETECTED}  nrf52   @ ${NRF52_PORT} -> env=${NRF52_ENV}\n"
-fi
-if [[ -n $ESP32S3_PORT ]]; then
-	ESP32S3_ENV="$(resolve_env esp32s3 heltec-v3)"
-	export MESHTASTIC_MCP_ENV_ESP32S3="$ESP32S3_ENV"
-	DETECTED="${DETECTED}  esp32s3 @ ${ESP32S3_PORT} -> env=${ESP32S3_ENV}\n"
+if [[ $UNVERIFIED == 1 ]]; then
+	echo "WARNING: some roles are VID-guessed with no hw_model handshake — the"
+	echo "         bake would flash that role's DEFAULT env. Verify the board or"
+	echo "         set MESHTASTIC_MCP_ENV_<ROLE> before trusting a flash."
 fi
 
 # ---------- Pre-flight summary --------------------------------------------
