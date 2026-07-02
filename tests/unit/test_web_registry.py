@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Unit tests for the web stack's SQLite registry + identity reconciliation.
 
 No hardware, no event loop fixtures — each test drives the async helpers via

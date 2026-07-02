@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Provisioning: after a non-full factory_reset, USERPREFS defaults come back.
 
 Real operator concern: "if someone resets my fleet device, will it come back

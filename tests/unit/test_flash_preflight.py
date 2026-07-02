@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Unit tests for flash()'s pre-flight port recovery.
 
 flash() runs the upload port through ``port_recovery.ensure_port_free`` first, so

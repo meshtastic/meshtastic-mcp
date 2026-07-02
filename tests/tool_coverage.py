@@ -1,7 +1,10 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Tool-surface coverage: track which MCP tools the test suite actually exercises.
 
 This is NOT line coverage (that's `coverage.py`). This measures which of the
-38 public MCP tools in `meshtastic_mcp.server` got invoked during a pytest
+public MCP tools in `meshtastic_mcp.server` got invoked during a pytest
 run — a quick signal for "where are the test-coverage gaps".
 
 Approach: introspect `meshtastic_mcp.server.app` for registered tools, find

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """The unwedging primitive — probe → diagnose → power-cycle → re-resolve.
 
 All hardware (pyserial open, uhubctl, lsof) is mocked, so this runs in the unit

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """The bounded close — a graceful `iface.close()` must never hang the caller.
 
 After a factory_reset/reboot the meshtastic library's close() loops forever

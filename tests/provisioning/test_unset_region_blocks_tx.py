@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Provisioning (negative): firmware baked WITHOUT
 `USERPREFS_CONFIG_LORA_REGION` must refuse to transmit.
 

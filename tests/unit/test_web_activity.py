@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """The server-side activity stream for device actions.
 
 Covers the :class:`Activity` context manager (started → heartbeat → done/error

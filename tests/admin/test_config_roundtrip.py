@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Admin: a config mutation survives a reboot.
 
 This is the most-critical admin behavior not tested elsewhere. If

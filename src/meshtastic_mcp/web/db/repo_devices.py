@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Device registry — the heart of the harness's identity model.
 
 A device is keyed by its USB serial number so its row (and everything attached

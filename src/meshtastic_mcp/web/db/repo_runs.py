@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Test-run history. A run is a single pytest invocation; results are the
 per-test leaves, optionally attributed to the device they exercised."""
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Telemetry: device-metrics packets arrive at the peer.
 
 Two-path verification:

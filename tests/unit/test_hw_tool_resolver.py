@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """`config._hw_tool` resolution order — including the PlatformIO fallback that
 fixes the esp32s3 bake (esptool ships with PlatformIO; a bare checkout has no
 separate install)."""

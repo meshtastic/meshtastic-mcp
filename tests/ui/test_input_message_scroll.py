@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Once we navigate to the textMessage frame, UP/DOWN exercises the
 message-scroll path (or opens CannedMessages on empty devices).
 

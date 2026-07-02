@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Escalating device-recovery ladder — the troubleshooting tricks, in one place.
 
 Shared by FleetSuite's runtime (the Recover action + opt-in auto-heal) and the

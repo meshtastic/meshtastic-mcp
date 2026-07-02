@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Out-of-process camera capture worker.
 
 OpenCV's macOS backend (AVFoundation / Core Media I/O) can **segfault the host

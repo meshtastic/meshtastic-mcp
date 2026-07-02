@@ -1046,11 +1046,7 @@ def _build_app(
             # is enabled. Watches tests/ui_captures/**/transcript.md for new
             # lines as UI tests execute.
             if self._ui_camera_enabled:
-                captures_root = self._root / "mcp-server" / "tests" / "ui_captures"
-                # When the TUI is launched from inside mcp-server (the usual
-                # case), `self._root` is already mcp-server/, so adjust:
-                if captures_root.parent.name != "mcp-server":
-                    captures_root = self._root / "tests" / "ui_captures"
+                captures_root = self._root / "tests" / "ui_captures"
                 self._uicap_worker = _uicap_mod.UiCaptureTailer(
                     root=captures_root,
                     post=lambda tid, line: self.post_message(UiCaptureLine(tid, line)),

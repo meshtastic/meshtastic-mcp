@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Make a serial port actually usable — unwedge it if it isn't.
 
 Flashing (esptool / nrfutil / pio) and a clean ``connect()`` need an EXCLUSIVE

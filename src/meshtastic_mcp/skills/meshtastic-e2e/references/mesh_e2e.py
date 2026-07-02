@@ -5,8 +5,7 @@
 
 Run with the MCP server's venv so meshtastic + meshtastic_mcp are importable:
 
-    FW=$HOME/meshtastic/firmware
-    $FW/mcp-server/.venv/bin/python references/mesh_e2e.py <cmd> [args]
+    python references/mesh_e2e.py <cmd> [args]
 
 Commands
   devices                                  list USB-serial radios (port, vid, desc)

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Discovery's self-heal: power-cycle a genuinely wedged device — and ONLY then.
 
 The dangerous part of background auto-recovery is firing it when it shouldn't

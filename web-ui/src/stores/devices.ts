@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Meshtastic contributors
+// SPDX-License-Identifier: GPL-3.0-only
+
 import { defineStore } from "pinia";
 import { computed, reactive } from "vue";
 import { api } from "../api/client";

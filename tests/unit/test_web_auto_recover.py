@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Unit tests for the control-path auto-recover pre-flight (app._ensure_openable).
 
 Pins the two gates that matter: it only escalates to ``port_recovery`` when even

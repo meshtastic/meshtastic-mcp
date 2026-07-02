@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """The recovery ladder heals a dead node.
 
 A powered-off device is the harness's proxy for a wedged one — a soft reboot

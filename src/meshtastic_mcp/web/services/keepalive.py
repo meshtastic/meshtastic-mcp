@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Fleet screen keep-alive.
 
 Keeps every connected node's OLED awake so the cameras always have something to

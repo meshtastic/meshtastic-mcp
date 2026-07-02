@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """FleetSuite device recovery.
 
 Drives the shared :mod:`meshtastic_mcp.recovery` ladder against a registry

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Out-of-bounds FN_F5 when the device has <5 frames: no crash, idx unchanged.
 
 `Screen::handleInputEvent` dispatches FN_F5 unconditionally to

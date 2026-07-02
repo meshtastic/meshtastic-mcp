@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """MJPEG camera streaming — capture runs out-of-process.
 
 All OpenCV access happens in a child process (``meshtastic_mcp.web.camera_worker``)

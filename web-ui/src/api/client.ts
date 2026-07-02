@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Meshtastic contributors
+// SPDX-License-Identifier: GPL-3.0-only
+
 // Thin REST wrappers over the FastAPI backend. Relative URLs so the same build
 // works behind the pywebview window and the Vite dev proxy.
 

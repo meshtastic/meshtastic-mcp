@@ -4,7 +4,7 @@
 """Cross-run history for ``meshtastic-mcp-test-tui``.
 
 Persists one JSON object per pytest run to
-``mcp-server/tests/.history/runs.jsonl``. The TUI reads the last N
+``tests/.history/runs.jsonl``. The TUI reads the last N
 entries on launch to render a duration sparkline in the header — a
 quick read on whether the suite is slowing down over time.
 

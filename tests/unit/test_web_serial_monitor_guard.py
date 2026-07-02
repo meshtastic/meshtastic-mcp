@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """The server must vacate the serial bus during a test run.
 
 A test run's pytest subprocess opens the device ports exclusively (flash,

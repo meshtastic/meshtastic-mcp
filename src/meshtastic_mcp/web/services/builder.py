@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Firmware build orchestrator.
 
 Builds are keyed by ``(env, fw_sha)`` and cached on disk under

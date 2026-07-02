@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Meshtastic contributors
+// SPDX-License-Identifier: GPL-3.0-only
+
 // Live server-side activity stream for device actions (flash, inject-nodedb,
 // factory-reset, reboot). The backend wraps each action in an Activity that
 // publishes `action.update` frames {id, kind, target, phase, state, elapsed_s,

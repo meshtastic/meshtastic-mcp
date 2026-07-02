@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Background USB discovery loop.
 
 Polls the serial bus, reconciles each likely-Meshtastic device into the

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Recovery helpers for the test harness.
 
 Thin composition over the shared ``meshtastic_mcp.recovery`` ladder, wired to the

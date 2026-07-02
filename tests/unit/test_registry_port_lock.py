@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """registry.clear_port_lock recovers a leaked per-port lock.
 
 When a connect() is abandoned mid-flight (its thread stuck in meshtastic's

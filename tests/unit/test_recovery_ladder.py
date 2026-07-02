@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Recovery-ladder escalation logic.
 
 Stubs the per-step techniques + the health probe so the orchestration is

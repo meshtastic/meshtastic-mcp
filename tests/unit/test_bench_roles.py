@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """The bench board registry (tests/_bench.py) + location-aware role resolution.
 
 The whole point of the registry is that three nRF52 boards share VID 0x239a and

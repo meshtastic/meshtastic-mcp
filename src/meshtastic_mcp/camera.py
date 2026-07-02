@@ -98,7 +98,7 @@ class OpenCVBackend:
         except ImportError as exc:
             raise CameraError(
                 "opencv backend requested but `cv2` is not installed. "
-                "Install the mcp-server [ui] extra: pip install -e '.[ui]'"
+                "Install the ui extra: pip install 'meshtastic-mcp[ui]'"
             ) from exc
 
         self._cv2 = cv2

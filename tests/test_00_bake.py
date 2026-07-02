@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Session-bake module — runs first in the tier order to flash both hub roles
 with the session `test_profile`.
 

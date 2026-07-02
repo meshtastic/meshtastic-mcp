@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Run the FleetSuite backend (uvicorn, :8765) and the Vite dev server together,
 # with HMR. The Vite server proxies /api and /ws to the backend. Ctrl-C stops
 # both. For a single-process production run instead, build the SPA once

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Phase 2 build-orchestrator logic: queue → build → SHA-keyed cache hit.
 
 Uses an injected fake build function that writes a dummy artifact, so the

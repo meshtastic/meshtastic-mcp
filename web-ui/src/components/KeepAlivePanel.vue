@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: Meshtastic contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 <script setup lang="ts">
 import { reactive, ref, watch } from "vue";
 import { useKeepAliveStore } from "../stores/keepalive";

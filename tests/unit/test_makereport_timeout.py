@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Regression test for `conftest._run_with_timeout`.
 
 The makereport hook snapshots device state (device_info + lora config) when a

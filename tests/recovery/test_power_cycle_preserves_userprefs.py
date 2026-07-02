@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Hard reset via uhubctl must NOT wipe NVS. Verify the test profile's
 region + channel survive a power-cycle.
 

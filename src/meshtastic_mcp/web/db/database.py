@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Thin async wrapper over a single aiosqlite connection.
 
 ``row_factory`` is set to ``aiosqlite.Row`` so every fetch behaves like a dict

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Device-control safety gate.
 
 The central invariant: no ``connect()``-based action (flash, reboot, config,

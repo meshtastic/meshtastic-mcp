@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Native (Docker ``meshtasticd``) node lifecycle.
 
 Each native node is a container publishing the simulator's TCP API (4403) on a

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Per-device port arbitration (PortLocks.guard).
 
 Verifies the guard's three contract points with a fake serial monitor and

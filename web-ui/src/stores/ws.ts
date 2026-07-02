@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Meshtastic contributors
+// SPDX-License-Identifier: GPL-3.0-only
+
 // Single WebSocket to /ws. Other stores register topic handlers; this store
 // owns the socket, (re)subscribes on (re)connect, and dispatches frames.
 

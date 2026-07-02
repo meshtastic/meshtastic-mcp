@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Datadog forwarder.
 
 Pure mappers (``log_to_dd`` / ``telemetry_to_metrics``) turn recorder rows into
@@ -233,9 +236,9 @@ def _metrics_intake_url(site: str) -> str:
 
 
 # --- config -----------------------------------------------------------------
-# FleetSuite ships to US5 only (matches the FleetLog fleet + the shared
-# dashboard); the site is not user-configurable.
-DD_SITE = "us5.datadoghq.com"
+# Default Datadog site; override with MESHTASTIC_MCP_DD_SITE for other regions
+# (e.g. "datadoghq.com", "datadoghq.eu").
+DD_SITE = os.environ.get("MESHTASTIC_MCP_DD_SITE", "us5.datadoghq.com")
 
 
 @dataclass

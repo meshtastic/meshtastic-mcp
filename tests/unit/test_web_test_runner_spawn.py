@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """The pytest launch must not wedge in FleetSuite desktop mode.
 
 In desktop mode the server runs pywebview (Cocoa/WebKit) on the main thread and

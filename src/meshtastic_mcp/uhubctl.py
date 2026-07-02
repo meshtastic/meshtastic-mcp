@@ -61,7 +61,7 @@ class UhubctlError(RuntimeError):
 
 # ---------- Role → VID map -------------------------------------------------
 
-# Mirrors the default hub_profile in `mcp-server/tests/conftest.py:335`.
+# Mirrors the default hub_profile in `tests/_bench.py`.
 # Note: esp32s3 and esp32s3_alt share a logical role — we search both.
 ROLE_VIDS: dict[str, tuple[int, ...]] = {
     "nrf52": (0x239A,),

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Out-of-process camera worker + the reader that adapts it to MJPEG.
 
 cv2's macOS backend can SIGSEGV the host; capture runs in a child so a crash

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Admin: owner name persists across a reboot.
 
 The single most common "did my admin change stick?" test. Proves

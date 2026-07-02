@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Tolerant matching for OLED OCR.
 
 The camera reads a tiny, low-DPI monochrome screen, so exact text rarely

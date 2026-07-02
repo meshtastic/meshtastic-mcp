@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Screen keep-alive provisioning logic.
 
 Drives the async ``ScreenKeepAlive`` service via ``asyncio.run`` against a

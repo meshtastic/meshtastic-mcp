@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Full power-cycle round-trip: off → verify gone → on → verify identity
 preserved.
 

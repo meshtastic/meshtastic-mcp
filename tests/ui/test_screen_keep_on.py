@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Screen-on provisioning is what makes input events land.
 
 InputBroker drops any event that arrives while the screen is off (it just wakes

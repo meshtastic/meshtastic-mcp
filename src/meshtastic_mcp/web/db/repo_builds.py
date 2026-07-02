@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Firmware-build ledger, keyed by (env, fw_sha). The orchestrator records one
 row per build attempt; ``get`` returns the latest for a key so a cache hit can
 be distinguished from a fresh queue."""

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """FleetSuite — the FastAPI + WebSocket backend that serves the Vue SPA and
 drives the Meshtastic test harness. Replaces the old Textual TUI.
 

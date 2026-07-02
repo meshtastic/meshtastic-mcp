@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Datadog forwarder: scrub, payload mapping (dashboard-compatible), cursor
 reader, and config persistence. Pure/deterministic — no network."""
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """UI-tier fixtures: per-node camera lifecycle, OCR warmup, per-test frame
 capture, and a `ui_home_state` autouse guard that resets to the home frame
 before every test (prevents state bleed if a prior test exited inside a menu).

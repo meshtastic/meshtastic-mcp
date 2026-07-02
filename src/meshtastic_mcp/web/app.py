@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """FastAPI application factory for FleetSuite.
 
 ``create_app()`` wires the registry, the broadcast hub, and the services

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """End-to-end click-through screen tests, asserted on each node's own camera.
 
 These walk a node's on-device UI with button events and assert on what the

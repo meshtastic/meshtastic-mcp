@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Single entrypoint for FleetSuite — the web UI for the Meshtastic test harness.
 # Ensures deps, builds the SPA, and launches the app. One command, from anywhere.
 #

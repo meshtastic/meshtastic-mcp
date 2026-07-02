@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Camera registry. A camera is an independent entity (a USB capture device)
 that can be *assigned* to a device serial; rotation is a property of the camera
 mount, so it survives reassignment."""

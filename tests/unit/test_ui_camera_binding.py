@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Unit tests for the UI tier's DB-backed camera resolver
 (`tests.ui.conftest.camera_binding_for_role`): role → bench hub slot → the
 device on that slot → the camera FleetSuite assigned to it. Seeds a temp
