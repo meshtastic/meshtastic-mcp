@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Admin: channel URL export and re-import round-trip.
 
 Real operator workflow: "I have two fleets, I want them to share a channel

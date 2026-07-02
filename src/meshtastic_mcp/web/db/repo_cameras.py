@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Camera registry. A camera is an independent entity (a USB capture device)
 that can be *assigned* to a device serial; rotation is a property of the camera
 mount, so it survives reassignment."""
@@ -29,6 +32,7 @@ async def add(db: Database, *, name: str, device_index: str) -> int:
         "created_at) VALUES (?, 'usb', ?, 0, 1, ?)",
         (name, device_index, time.time()),
     )
+    assert cur.lastrowid is not None  # set after any successful INSERT
     return cur.lastrowid
 
 

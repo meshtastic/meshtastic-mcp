@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Parse `Screen: frame N/M name=X reason=Y` log lines from `_debug_log_buffer`.
 
 The firmware emits one line per frame transition when

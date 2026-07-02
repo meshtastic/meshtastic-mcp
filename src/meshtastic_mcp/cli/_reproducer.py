@@ -5,7 +5,7 @@
 
 When the operator presses ``x`` on a failed test leaf, we package the
 minimum viable failure context into a tarball under
-``mcp-server/tests/reproducers/``:
+``tests/reproducers/``:
 
 ::
 
@@ -133,7 +133,7 @@ Exported by `meshtastic-mcp-test-tui` on {t}.
 ## Reproducing locally
 
 ```bash
-cd mcp-server
+# from the meshtastic-mcp repo root
 MESHTASTIC_MCP_SEED='{ctx.seed}' .venv/bin/pytest '{ctx.nodeid}' --tb=long -v
 ```
 """

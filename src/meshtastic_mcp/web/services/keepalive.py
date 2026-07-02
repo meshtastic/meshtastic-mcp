@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Fleet screen keep-alive.
 
 Keeps every connected node's OLED awake so the cameras always have something to
@@ -19,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Any
 
 from ..db import repo_devices as rd
 from ..db import repo_settings as rs
@@ -46,8 +50,8 @@ class ScreenKeepAlive:
         from .portlock import PortLocks
 
         self.portlocks = portlocks or PortLocks(serialmon)
-        self.cfg = dict(DEFAULTS)
-        self.stats = {
+        self.cfg: dict[str, Any] = dict(DEFAULTS)
+        self.stats: dict[str, Any] = {
             "enabled": False,
             "provisioned": 0,
             "events_sent": 0,

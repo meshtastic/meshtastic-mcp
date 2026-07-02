@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Native (Docker ``meshtasticd``) node lifecycle.
 
 Each native node is a container publishing the simulator's TCP API (4403) on a
@@ -39,6 +42,7 @@ async def _docker(*args: str, timeout: int = 30) -> tuple[int, str]:
     except TimeoutError:
         proc.kill()
         return 124, "docker timed out"
+    assert proc.returncode is not None  # communicate() returned, process exited
     return proc.returncode, out.decode(errors="replace")
 
 
@@ -75,7 +79,7 @@ async def lifecycle(db, name: str, action: str) -> dict:
         raise RuntimeError(f"docker {verb} failed: {out.strip()[:200]}")
     online = action != "stop"
     row = await rd.get(db, f"native:{name}")
-    tcp_port = row.get("tcp_port") if row else 4403
+    tcp_port = (row.get("tcp_port") if row else None) or 4403
     return await rd.upsert_native(db, name=name, tcp_port=tcp_port, online=online)
 
 

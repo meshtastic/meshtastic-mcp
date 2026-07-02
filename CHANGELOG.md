@@ -3,9 +3,20 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com); versions follow SemVer.
 
-## [Unreleased]
+## [0.1.0] — 2026-07-02 (first public release)
 
 ### Added
+- **FleetSuite — web control plane + hardware bench harness** (#9) — a FastAPI backend
+  (`[web]` extra, `meshtastic-mcp-web` entrypoint) + Vue 3 SPA for running a multi-board USB
+  bench: live device registry with discovery + auto-enrichment, build queue + flash, an
+  escalating recovery ladder (reboot → USB power-cycle → 1200bps touch → reflash), per-device
+  camera streams, serial monitors, the tiered test runner, and optional Datadog shipping.
+  Lifted from `meshtastic/firmware`'s `mcp-server/` tree and reconciled onto this repo's
+  capability-gated core; includes the hub-slot-keyed per-board bench roles
+  (`tests/_bench.py`), `port_recovery.py`/`recovery.py`, and the bake/mesh/telemetry/monitor/
+  fleet/admin/provisioning/recovery/ui hardware test tiers.
+- **RF-compliance oracle via RTL-SDR** (#8) — `rf_scan` / `rf_confirm_tx` tools (`[sdr]`
+  extra): spectrum occupancy checks and independent on-air TX verification.
 - **Replay answers `get_owner_request`** — the simulated device now emulates the firmware's owner
   admin round-trip (replies with the owner `User` + a session passkey, echoing the request id), so
   strict clients that block their post-NodeDB "seeding" step on it can reach a ready/connected
@@ -87,7 +98,25 @@ All notable changes are documented here. Format loosely follows
 - **CLI `watch`** — live-tail recorder streams (logs/packets/events).
 - **CLI `completion`** — prints bash/zsh completion scripts.
 
+### Fixed
+- **Base install works with no extras** — `server.py` → `rf_oracle`/`sdr` imported numpy at
+  module level, so `pip install meshtastic-mcp` couldn't start the server without the `[sdr]`
+  extra. numpy is now lazy, and capability detection can no longer crash startup on a broken
+  SDR stack (e.g. an old system `librtlsdr`).
+- **FleetSuite degrades gracefully without a firmware root** (#10) — auto-enrichment records
+  fw/hw/region with the pio env unresolved instead of silently aborting;
+  `POST /devices/{serial}/refresh` and `GET /api/boards` answer 409 with the reason instead
+  of a raw 500; an app-wide `ConfigError` handler covers any firmware-dependent lookup.
+- **Docker image builds again** — `.dockerignore` excludes `.git`, which broke hatch-vcs
+  version detection; the build now takes `--build-arg VERSION=`.
+- The wheel ships the built FleetSuite SPA (`web/static`); the release workflow builds it
+  and refuses to publish from a non-tag run.
+- User-visible strings no longer reference the pre-extraction `mcp-server/` layout
+  (reproducer bundles, camera install hint, TUI capture paths).
+
 ### Changed
+- SPDX license headers stamped across the FleetSuite/web, web-ui, and test suites (GPL-3.0-only).
+- `MESHTASTIC_MCP_DD_SITE` overrides FleetSuite's Datadog site (default `us5.datadoghq.com`).
 - Auto-load `MESHTASTIC_*` env vars from `~/.config/meshtastic-mcp/.env` (CLI works in
   non-interactive shells without manual sourcing).
 - esptool auto-discovery from the PlatformIO penv — no manual `MESHTASTIC_ESPTOOL_BIN` wrapper.
@@ -101,7 +130,7 @@ All notable changes are documented here. Format loosely follows
   (`0x2886`, TinyUSB-CDC) as likely, and bases the flag on the VID directly rather than the upstream
   `findPorts` filter (which hid a bridge-chip board whenever a native-USB board was also attached).
 
-## [0.1.0] — 2026-06-25
+## [0.1.0-pre] — 2026-06-25 (internal extraction milestone, never published)
 
 Initial release.
 

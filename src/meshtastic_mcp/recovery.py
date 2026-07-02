@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Escalating device-recovery ladder — the troubleshooting tricks, in one place.
 
 Shared by FleetSuite's runtime (the Recover action + opt-in auto-heal) and the
@@ -40,7 +43,7 @@ STEP_LABELS = {
 
 
 # --- individual techniques (each independently callable) -------------------
-def step_reboot(port: str) -> dict[str, Any]:
+def step_reboot(port: str | None) -> dict[str, Any]:
     from . import admin
 
     return admin.reboot(port=port, confirm=True, seconds=2)
@@ -52,19 +55,23 @@ def step_power_cycle(location: str, port: int, *, delay_s: int = 3) -> dict[str,
     return uhubctl.cycle(location, int(port), delay_s=delay_s)
 
 
-def step_touch_1200bps(port: str) -> dict[str, Any]:
+def step_touch_1200bps(port: str | None) -> dict[str, Any]:
     from . import flash
 
+    if port is None:
+        raise ValueError("no port resolved for 1200bps touch")
     return flash.touch_1200bps(port)
 
 
-def step_reflash(env: str, port: str) -> dict[str, Any]:
+def step_reflash(env: str, port: str | None) -> dict[str, Any]:
     from . import flash
 
+    if port is None:
+        raise ValueError("no port resolved for reflash")
     return flash.flash(env, port, confirm=True)
 
 
-def step_factory_reset(port: str) -> dict[str, Any]:
+def step_factory_reset(port: str | None) -> dict[str, Any]:
     from . import admin
 
     return admin.factory_reset(port=port, confirm=True)

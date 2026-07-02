@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """USB hub power control for tests — thin composition of the `uhubctl`
 module + `_port_discovery.resolve_port_by_role`.
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Meshtastic contributors
+// SPDX-License-Identifier: GPL-3.0-only
+
 // Minimal ANSI SGR → HTML converter for log panes. Firmware debug output and
 // pytest both emit color codes (e.g. \x1b[34m for DEBUG). We render the common
 // foreground colors + bold and DROP every other escape sequence. Text content

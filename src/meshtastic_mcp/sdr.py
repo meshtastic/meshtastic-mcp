@@ -31,8 +31,10 @@ from __future__ import annotations
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import numpy as np
+if TYPE_CHECKING:  # numpy ships with the [sdr] extra — keep the base install slim
+    import numpy as np
 
 
 class SdrError(RuntimeError):
@@ -46,6 +48,12 @@ def _require_rtlsdr():
         raise SdrError(
             "pyrtlsdr is not installed. Install the 'sdr' extra: pip install 'meshtastic-mcp[sdr]' "
             "(also requires librtlsdr — e.g. `apt install librtlsdr-dev rtl-sdr`)."
+        ) from exc
+    except Exception as exc:  # e.g. ctypes AttributeError: system librtlsdr too old
+        raise SdrError(
+            f"pyrtlsdr failed to bind the system librtlsdr: {exc}. "
+            "Your librtlsdr may be too old — pyrtlsdr targets the "
+            "librtlsdr/librtlsdr fork (e.g. missing rtlsdr_set_dithering)."
         ) from exc
     return RtlSdr
 
@@ -151,6 +159,8 @@ def capture_iq_timed(
     `read_samples()` calls can exceed librtlsdr's internal transfer-size
     comfort zone on some platforms.
     """
+    import numpy as np  # lazy: ships with the [sdr] extra
+
     RtlSdr = _require_rtlsdr()
     try:
         sdr = RtlSdr(device_index=device_index)
@@ -201,6 +211,8 @@ def power_spectrum_db(
     resolution for a less noisy spectral estimate — appropriate here since we
     care about where the energy sits, not catching a single symbol.
     """
+    import numpy as np  # lazy: ships with the [sdr] extra
+
     n = len(iq)
     if n < nfft:
         # fall back to a smaller power-of-2 for short captures
@@ -238,6 +250,8 @@ def occupied_bandwidth(
     docstring) — use it for regression ("did this preset change widen the
     occupied bandwidth"), not for compliance sign-off.
     """
+    import numpy as np  # lazy: ships with the [sdr] extra
+
     freqs, psd_db = power_spectrum_db(iq, sample_rate_hz, nfft=nfft)
     peak_idx = int(np.argmax(psd_db))
     peak_db = psd_db[peak_idx]
@@ -276,6 +290,8 @@ def in_band_fraction(
     ~1.0. A low fraction with a confirmed-active capture means energy leaked
     outside the configured region.
     """
+    import numpy as np  # lazy: ships with the [sdr] extra
+
     freqs, psd_db = power_spectrum_db(iq, sample_rate_hz, nfft=nfft)
     psd_linear = 10.0 ** (psd_db / 10.0)
     abs_freqs = capture_center_hz + freqs
@@ -314,6 +330,8 @@ def active_windows(
     `duty_cycle_pct` — it does not require demodulating the signal, only
     detecting "is the radio transmitting right now."
     """
+    import numpy as np  # lazy: ships with the [sdr] extra
+
     n = len(iq)
     n_windows = n // win_samples
     if n_windows == 0:

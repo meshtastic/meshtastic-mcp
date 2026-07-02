@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """MJPEG camera streaming — capture runs out-of-process.
 
 All OpenCV access happens in a child process (``meshtastic_mcp.web.camera_worker``)
@@ -196,6 +199,7 @@ async def mjpeg(device_index: str) -> AsyncIterator[bytes]:
             )
         except OSError:
             return
+        assert proc.stdout is not None  # stdout=PIPE above
         produced = False
         try:
             async for jpg in _read_frames(proc.stdout):

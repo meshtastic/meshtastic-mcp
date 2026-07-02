@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Mesh: explicit two-way communication, single pass/fail.
 
 Opens a ReceiveCollector on EVERY role, sends a uniquely-tagged broadcast

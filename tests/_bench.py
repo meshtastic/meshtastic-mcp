@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Canonical bench board registry — the single source of truth mapping each
 physical board to its test role, PlatformIO env, USB VID(s), and hub-slot
 location.

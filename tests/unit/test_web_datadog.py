@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Datadog forwarder: scrub, payload mapping (dashboard-compatible), cursor
 reader, and config persistence. Pure/deterministic — no network."""
 
@@ -5,6 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+
+import pytest
+
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
 
 from meshtastic_mcp.web.db import repo_settings as rs
 from meshtastic_mcp.web.db.database import Database

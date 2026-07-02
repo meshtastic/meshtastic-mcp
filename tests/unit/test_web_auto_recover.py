@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Unit tests for the control-path auto-recover pre-flight (app._ensure_openable).
 
 Pins the two gates that matter: it only escalates to ``port_recovery`` when even
@@ -9,7 +12,13 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from meshtastic_mcp import port_recovery
+
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
+
 from meshtastic_mcp.web import app
 from meshtastic_mcp.web.services import test_runner
 

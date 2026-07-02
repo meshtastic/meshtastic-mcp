@@ -15,8 +15,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # hatch-vcs derives the version from the tag
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Build the FleetSuite SPA first — the wheel ships it (hatch `artifacts`).
+      - run: npm ci && npm run build
+        working-directory: web-ui
       - uses: astral-sh/setup-uv@v5
       - run: uv build
+      # Smoke: the wheel must contain the built SPA and import cleanly with no extras.
+      - run: |
+          python -m zipfile -l dist/*.whl | grep -q "web/static/index.html"
+          python -m venv /tmp/smoke && /tmp/smoke/bin/pip install -q dist/*.whl
+          /tmp/smoke/bin/python -c "import meshtastic_mcp.server"
       - uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -24,6 +35,9 @@ jobs:
 
   publish-pypi:
     needs: build
+    # Only publish from a version tag — a manual workflow_dispatch run stops at
+    # the build artifact instead of pushing a dev version to PyPI.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

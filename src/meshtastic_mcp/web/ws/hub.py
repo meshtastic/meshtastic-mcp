@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Topic-based broadcast hub backing the single ``/ws`` socket.
 
 Each connection subscribes to a set of topics; ``publish(topic, data)`` fans the

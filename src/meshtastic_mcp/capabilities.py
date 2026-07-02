@@ -64,7 +64,10 @@ def has_sdr() -> bool:
 
     try:
         return len(sdr.list_devices()) > 0
-    except sdr.SdrError:
+    except Exception:
+        # Capability detection must never crash server startup — a missing
+        # pyrtlsdr/numpy, an old system librtlsdr (ctypes AttributeError), or
+        # a wedged USB stack all just mean "no sdr capability".
         return False
 
 

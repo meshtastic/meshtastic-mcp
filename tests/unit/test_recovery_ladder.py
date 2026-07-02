@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Recovery-ladder escalation logic.
 
 Stubs the per-step techniques + the health probe so the orchestration is
@@ -93,6 +96,9 @@ def test_full_ladder_when_nothing_heals(monkeypatch):
 import asyncio
 
 import pytest
+
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
 
 from meshtastic_mcp.web.services import recovery as WR
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Unit tests for the web stack's SQLite registry + identity reconciliation.
 
 No hardware, no event loop fixtures — each test drives the async helpers via
@@ -9,6 +12,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
 
 from meshtastic_mcp.web.db import repo_cameras as rc
 from meshtastic_mcp.web.db import repo_devices as rd

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Phase 2 build-orchestrator logic: queue → build → SHA-keyed cache hit.
 
 Uses an injected fake build function that writes a dummy artifact, so the
@@ -8,6 +11,11 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+
+import pytest
+
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
 
 from meshtastic_mcp.web.db import repo_builds as rb
 from meshtastic_mcp.web.db.database import Database

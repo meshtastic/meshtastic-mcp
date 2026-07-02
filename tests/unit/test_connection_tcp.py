@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """TCP transport plumbing in connection.py + devices.py.
 
 Pure-Python tests — no real device or daemon required. Mocks `TCPInterface`

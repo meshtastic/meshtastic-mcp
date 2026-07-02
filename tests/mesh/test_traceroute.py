@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Mesh: traceroute from TX to RX round-trips with no intermediate hops.
 
 TX sends a `TRACEROUTE_APP` request (RouteDiscovery with `want_response=True`)

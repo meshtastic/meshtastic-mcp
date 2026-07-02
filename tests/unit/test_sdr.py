@@ -12,8 +12,11 @@ tests are the prediction half.
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
+
+pytest.importorskip("numpy")  # optional extra — a bare [test] install skips these
+
+import numpy as np
 
 from meshtastic_mcp import sdr
 

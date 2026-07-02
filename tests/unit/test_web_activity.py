@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """The server-side activity stream for device actions.
 
 Covers the :class:`Activity` context manager (started → heartbeat → done/error
@@ -10,6 +13,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
 
 from meshtastic_mcp.web import app as webapp
 from meshtastic_mcp.web.services import activity

@@ -6,6 +6,10 @@ FROM python:3.12-slim AS build
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /src
 COPY . .
+# .dockerignore excludes .git (small context), so hatch-vcs can't derive the
+# version — pass it explicitly: `docker build --build-arg VERSION=$(git describe --tags)`.
+ARG VERSION=0.0.0.dev0
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${VERSION}
 RUN uv build --wheel
 
 FROM python:3.12-slim

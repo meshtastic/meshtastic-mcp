@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """USER_PRESS advances the screen carousel.
 
 This is the exact event FleetSuite's screen keep-alive injects every cycle to

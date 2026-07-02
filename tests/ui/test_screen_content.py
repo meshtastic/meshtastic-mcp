@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Camera + OCR content assertions.
 
 The other UI tests assert which *frame* the firmware logged; these assert that

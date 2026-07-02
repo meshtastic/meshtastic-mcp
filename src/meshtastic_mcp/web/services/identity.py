@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Device identity reconciliation.
 
 Two jobs: (1) map a USB VID to a coarse *role* and a role to a default pio

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """FleetSuite entrypoint (the ``meshtastic-mcp-web`` console script).
 
 Default: serve the API + built SPA on 127.0.0.1:8765 and open a pywebview
@@ -9,10 +12,18 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 import threading
 import time
 
-import uvicorn
+try:
+    import fastapi  # noqa: F401  # probe: the app needs it at import time
+    import uvicorn
+except ImportError:
+    sys.exit(
+        "FleetSuite needs the [web] extra — install with: "
+        "pip install 'meshtastic-mcp[web]' (or uv tool install 'meshtastic-mcp[web]')"
+    )
 
 HOST = "127.0.0.1"
 PORT = 8765

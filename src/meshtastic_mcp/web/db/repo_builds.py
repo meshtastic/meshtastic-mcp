@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Firmware-build ledger, keyed by (env, fw_sha). The orchestrator records one
 row per build attempt; ``get`` returns the latest for a key so a cache hit can
 be distinguished from a fresh queue."""
@@ -20,6 +23,7 @@ async def create(db: Database, *, env: str, fw_sha: str, fw_branch: str | None, 
         "INSERT INTO builds (env, fw_sha, fw_branch, status, created_at) VALUES (?,?,?,?,?)",
         (env, fw_sha, fw_branch, status, time.time()),
     )
+    assert cur.lastrowid is not None  # set after any successful INSERT
     return cur.lastrowid
 
 

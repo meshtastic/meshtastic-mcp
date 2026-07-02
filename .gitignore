@@ -34,8 +34,17 @@ src/meshtastic_mcp/web/static/
 # Tooling
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 .coverage
+coverage.xml
+htmlcov/
 .DS_Store
+
+# Local env files (`meshtastic-mcp provision` writes sourceable .env files)
+.env
+
+# Agent session state
+.claude/
 
 # hatch-vcs generated
 src/meshtastic_mcp/_version.py

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Per-device port arbitration.
 
 Every port-bound operation — auto-enrichment, screen keep-alive, and the control

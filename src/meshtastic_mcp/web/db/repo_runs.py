@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Test-run history. A run is a single pytest invocation; results are the
 per-test leaves, optionally attributed to the device they exercised."""
 
@@ -14,9 +17,7 @@ _RUN_COLS = (
 )
 
 
-def _run_to_dict(row) -> dict | None:
-    if row is None:
-        return None
+def _run_to_dict(row) -> dict:
     d = dict(row)
     try:
         d["args"] = json.loads(d["args"]) if d.get("args") else []
@@ -39,12 +40,13 @@ async def create_run(
         "VALUES (?,?,?,?,?,?)",
         (time.time(), json.dumps(args or []), seed, fw_branch, fw_sha, int(fw_dirty)),
     )
+    assert cur.lastrowid is not None  # set after any successful INSERT
     return cur.lastrowid
 
 
 async def get_run(db: Database, run_id: int) -> dict | None:
     row = await db.fetchone(f"SELECT {_RUN_COLS} FROM runs WHERE id=?", (run_id,))
-    return _run_to_dict(row)
+    return _run_to_dict(row) if row is not None else None
 
 
 async def list_runs(db: Database, limit: int = 50) -> list[dict]:

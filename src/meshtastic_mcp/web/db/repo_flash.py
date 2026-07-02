@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Flash-timing log. Each flash records whether it came from a prebuilt
 artifact or a from-scratch host rebuild, so the UI can show how much the
 artifact cache saves on a given device."""

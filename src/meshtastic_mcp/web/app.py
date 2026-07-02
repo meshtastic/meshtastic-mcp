@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """FastAPI application factory for FleetSuite.
 
 ``create_app()`` wires the registry, the broadcast hub, and the services
@@ -517,6 +520,10 @@ def _mount_devices(api: APIRouter) -> None:
         _gate_idle()
         async with request.app.state.portlocks.guard(serial):
             holders = await asyncio.to_thread(port_recovery.who_holds_port, port)
+            # A timed-out monitor close leaves OUR OWN abandoned reader holding
+            # the fd — surface that distinctly (the power-cycle below is what
+            # frees it; the monitor self-heals on the post-guard resume).
+            self_wedged = request.app.state.serialmon.is_wedged(serial)
             try:
                 # Re-check the runner here (not just _gate_idle above): a run may
                 # have started while we waited on the port guard.
@@ -531,11 +538,17 @@ def _mount_devices(api: APIRouter) -> None:
                     "recovered": False,
                     "new_port": None,
                     "holders": holders,
+                    "self_wedged": self_wedged,
                     "error": str(exc),
                 }
         note = "unwedged: recovered on " + new_port + (f" (was {port})" if new_port != port else "")
         await hub.publish("device.update", {**row, "current_port": new_port, "note": note})
-        return {"recovered": True, "new_port": new_port, "holders": holders}
+        return {
+            "recovered": True,
+            "new_port": new_port,
+            "holders": holders,
+            "self_wedged": self_wedged,
+        }
 
     # --- per-device USB power (uhubctl) ----------------------------------
     @api.put("/devices/{serial}/hub-port")
@@ -573,6 +586,7 @@ def _mount_devices(api: APIRouter) -> None:
         if not power.available():
             raise HTTPException(status_code=400, detail="uhubctl not available on this host")
         dev = await rd.get(db, serial)
+        assert dev is not None  # _device_or_404 above
         candidates = await asyncio.to_thread(power.candidates_for, dev)
         if not candidates:
             raise HTTPException(

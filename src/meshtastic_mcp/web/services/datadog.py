@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Datadog forwarder.
 
 Pure mappers (``log_to_dd`` / ``telemetry_to_metrics``) turn recorder rows into
@@ -18,6 +21,7 @@ import re
 import time
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+from typing import Any
 
 from ..db import repo_devices as rd
 from ..db import repo_settings as rs
@@ -233,9 +237,9 @@ def _metrics_intake_url(site: str) -> str:
 
 
 # --- config -----------------------------------------------------------------
-# FleetSuite ships to US5 only (matches the FleetLog fleet + the shared
-# dashboard); the site is not user-configurable.
-DD_SITE = "us5.datadoghq.com"
+# Default Datadog site; override with MESHTASTIC_MCP_DD_SITE for other regions
+# (e.g. "datadoghq.com", "datadoghq.eu").
+DD_SITE = os.environ.get("MESHTASTIC_MCP_DD_SITE", "us5.datadoghq.com")
 
 
 @dataclass
@@ -304,7 +308,7 @@ class DDForwarder:
         self.hub = hub
         self.serialmon = serialmon
         self.cfg = DDConfig()
-        self.stats = {
+        self.stats: dict[str, Any] = {
             "running": False,
             "sent_logs": 0,
             "sent_metrics": 0,
@@ -344,7 +348,7 @@ class DDForwarder:
         ``deque.append`` is atomic, so no lock needed). Dropped when inactive."""
         if not self.active():
             return
-        if len(self._queue) >= self._queue.maxlen:
+        if self._queue.maxlen is not None and len(self._queue) >= self._queue.maxlen:
             self._dropped += 1  # deque will evict the oldest; record the loss
         self._queue.append(rec)
 

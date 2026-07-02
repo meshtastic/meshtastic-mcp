@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Tiny key/value store for JSON-serialisable config blobs (e.g. the Datadog
 forwarder settings)."""
 

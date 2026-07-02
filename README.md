@@ -41,6 +41,7 @@ No firmware checkout required. Core tools work against any serial or TCP device.
 uv tool install 'meshtastic-mcp[ui]'       # includes camera/OCR support
 # or without UI extras:
 uv tool install meshtastic-mcp
+# other extras: [web] FleetSuite bench UI · [sdr] RF-compliance oracle · [test] pytest harness
 
 # Install from a local checkout (dev):
 uv tool install --editable '/path/to/meshtastic-mcp[ui]'
@@ -99,6 +100,8 @@ with no firmware checkout. Optional capabilities activate when their prerequisit
 | **android** | `android` CLI + `adb` | Android-emulator + native-node orchestration for hardware-free e2e |
 | **apple** | `xcrun` (+ `idb` for UI) | iOS Simulator / macOS-app orchestration for hardware-free e2e |
 | **local-model** | a reachable Ollama or OpenAI-compatible `llama-server` (or a `llama` binary to start one) | offload tools that push token-heavy work onto a local GPU — summarize/triage recorder windows, e2e-failure first pass, and an offline **vision oracle**; see [docs/local-models.md](docs/local-models.md) |
+| **sdr** | `[sdr]` extra + `librtlsdr` + an RTL-SDR dongle | RF-compliance oracle: `rf_scan` occupancy checks and `rf_confirm_tx` on-air verification, no second radio needed |
+| **sdk-cli** *(experimental)* | Kotlin SDK headless CLI | alternate device-IO backend over the JVM CLI; see [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md) |
 
 The active set is logged at startup (`meshtastic-mcp capabilities active: …`).
 
@@ -232,10 +235,36 @@ Three skills ship in the wheel (`meshtastic-mcp skills install` copies them to y
 - **`meshtastic-org-knowledge`** — answer questions that span the Meshtastic GitHub org:
   which project does X, status of Y, where Z is documented, what changed recently.
 
+## FleetSuite — web control plane for a device bench
+
+A local web UI for running a multi-board hardware bench: live device registry (discovery +
+auto-enrichment with firmware/hw/region), build queue + flash, an escalating recovery ladder
+(reboot → USB power-cycle → bootloader → reflash), per-device camera streams for screen
+assertions, the tiered test runner, serial monitors, and optional Datadog log/metric shipping.
+
+```bash
+uv tool install 'meshtastic-mcp[web]'
+meshtastic-mcp-web              # desktop window at http://127.0.0.1:8765
+meshtastic-mcp-web --browser    # serve only (headless / open it yourself)
+```
+
+Binds to `127.0.0.1` by default. Destructive actions (reflash / factory-reset) require an
+explicit confirmation. While FleetSuite runs it owns the bench's serial ports (monitors +
+enrichment) — pause it or use its own controls rather than pointing a second tool at the same
+ports; its test runner already suspends the monitors for the duration of a run. From a source checkout, `./scripts/fleetsuite.sh` bootstraps
+everything (venv + npm + SPA build) in one command; `./scripts/web-dev.sh` runs the
+backend + Vite dev server with HMR. Point `MESHTASTIC_FIRMWARE_ROOT` at a firmware checkout
+to enable builds, reflash recovery, and exact per-board PlatformIO env resolution — without
+it FleetSuite still discovers, enriches, and drives devices.
+
 ## Hardware test suite
 
 `tests/` is a tiered pytest suite (`unit`, `mesh`, `telemetry`, `monitor`, `recovery`, `ui`,
-`fleet`, `admin`, `provisioning`). `unit` runs with no hardware. See `run-tests.sh`.
+`fleet`, `admin`, `provisioning`). `unit` runs with no hardware; the hardware tiers target a
+USB-hub bench with per-board roles keyed by hub slot (reference bench: T-Echo, Heltec T114,
+RAK4631, ESP32-S3 — see `tests/_bench.py` and [tests/README.md](tests/README.md)). Drive it
+via `run-tests.sh`, the `meshtastic-mcp-test-tui` terminal UI, or FleetSuite's test runner.
+**Setting up your own bench** (any boards, any hub): [docs/bench-setup.md](docs/bench-setup.md).
 
 ## License
 

@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: Meshtastic contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 <script setup lang="ts">
 import { useDevicesStore } from "../stores/devices";
 import CameraManager from "./CameraManager.vue";

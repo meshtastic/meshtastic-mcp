@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """On the nodelist_nodes frame, UP/DOWN scrolls the list via
 `NodeListRenderer::scrollUp/scrollDown` (src/graphics/Screen.cpp:1779-1788).
 The firmware returns 0 before notifying observers, so no frame-change

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """The pytest runner.
 
 ``resolve_env_overrides`` and ``is_running`` are the pure pieces the safety

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Screen keep-alive provisioning logic.
 
 Drives the async ``ScreenKeepAlive`` service via ``asyncio.run`` against a
@@ -11,6 +14,11 @@ port while a test run owns it.
 from __future__ import annotations
 
 import asyncio
+
+import pytest
+
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
 
 from meshtastic_mcp.web.db import repo_devices as rd
 from meshtastic_mcp.web.db.database import Database

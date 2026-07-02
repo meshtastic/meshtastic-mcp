@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Discovery's self-heal: power-cycle a genuinely wedged device — and ONLY then.
 
 The dangerous part of background auto-recovery is firing it when it shouldn't
@@ -10,7 +13,13 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from meshtastic_mcp import port_recovery
+
+pytest.importorskip("fastapi")  # optional extra — a bare [test] install skips these
+pytest.importorskip("aiosqlite")  # optional extra — a bare [test] install skips these
+
 from meshtastic_mcp.web.services import discovery as disc
 from meshtastic_mcp.web.services import power, test_runner
 

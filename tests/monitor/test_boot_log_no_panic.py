@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Monitor: boot log is clean — no panic markers in the first 60 seconds.
 
 This is the single highest-signal test for catching firmware regressions.

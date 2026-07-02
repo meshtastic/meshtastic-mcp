@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Current firmware git ref — branch, sha, dirty flag, and the tip commit's
 subject/date. Read straight from git in the firmware root; degrades to
 ``{"available": False}`` outside a checkout."""

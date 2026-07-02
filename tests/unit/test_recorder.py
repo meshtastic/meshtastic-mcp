@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Unit tests for the persistent device-log recorder.
 
 Hardware-free: drives the Recorder through its `_on_*` handlers with

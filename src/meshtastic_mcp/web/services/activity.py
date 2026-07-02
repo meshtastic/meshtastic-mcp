@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Unified server-side activity stream for device actions.
 
 A device action (flash, inject-nodedb, factory-reset, reboot) can run for

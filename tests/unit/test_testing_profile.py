@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """`userprefs.build_testing_profile` / `generate_psk` correctness.
 
 The testing-profile generator is the critical primitive for automated test

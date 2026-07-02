@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Per-node USB power control via uhubctl.
 
 Each bench node sits on a PPPS-capable (per-port-power-switching) hub. uhubctl

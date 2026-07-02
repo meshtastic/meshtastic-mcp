@@ -24,7 +24,8 @@ pip install -e ".[test]"
 # No hardware — unit tier only
 pytest tests/unit -v
 
-# Hub attached (nRF52840 + ESP32-S3) — first run bakes, then exercises everything
+# Hub attached (reference bench: T-Echo, Heltec T114, RAK4631, ESP32-S3) —
+# first run bakes, then exercises everything
 pytest tests/ --html=report.html
 
 # Hub already baked with session profile (dev loop) — skip bake
@@ -40,14 +41,17 @@ pytest tests/ --force-bake --html=report.html
   current state matches the session profile.
 - `--assume-baked` — skip `test_00_bake.py` entirely. Use when you know the
   devices are already baked and want a fast dev loop.
-- `--hub-profile=<yaml>` — point at a YAML file for non-default hub hardware.
+- `--hub-profile=<yaml>` — point at a YAML file for non-default hub hardware
+  (see [docs/bench-setup.md](../docs/bench-setup.md) for a walkthrough).
   Default targets VID `0x239a` (nRF52) and `0x303a`/`0x10c4` (ESP32-S3).
 - `--no-teardown-rebake` — skip the session-end rebake that `provisioning/`
   and `fleet/` tests perform. Useful in rapid iteration.
 
 ## Environment variables
 
-- `MESHTASTIC_FIRMWARE_ROOT` — firmware repo path (defaults to `../` from tests/)
+- `MESHTASTIC_FIRMWARE_ROOT` — firmware repo path. Required for the bake and
+  firmware-marked tiers; without it the harness auto-skips them (point it at a
+  sibling `meshtastic/firmware` checkout).
 - `MESHTASTIC_MCP_ENV_<ROLE>` — PlatformIO env override per *per-board* bench
   role (`tests/_bench.py`): `MESHTASTIC_MCP_ENV_T_ECHO`,
   `MESHTASTIC_MCP_ENV_HELTEC_T114`, `MESHTASTIC_MCP_ENV_ESP32S3`,
@@ -63,8 +67,11 @@ pytest tests/ --force-bake --html=report.html
 
 All defined in `conftest.py`:
 
-- **`hub_devices`** → `{"nrf52": "/dev/cu.X", "esp32s3": "/dev/cu.Y"}`. Auto-
-  skips the test if a required role isn't present.
+- **`hub_devices`** → `{"t_echo": "/dev/cu.W", "heltec_t114": "/dev/cu.X",
+  "rak4631": "/dev/cu.Y", "esp32s3": "/dev/cu.Z"}` — per-board bench roles from
+  `tests/_bench.py` (hub-slot keyed; coarse VID roles are the fallback for
+  custom `--hub-profile` yamls). Auto-skips the test if a required role isn't
+  present.
 - **`test_profile`** → USERPREFS dict for the session (`build_testing_profile`).
 - **`no_region_profile`** → variant without `USERPREFS_CONFIG_LORA_REGION`.
 - **`baked_mesh`** → verifies both devices are baked with the session profile
@@ -89,7 +96,7 @@ predicate(), timeout=60)` replaces flaky `time.sleep()` patterns.
 `pytest --junitxml=junit.xml` produces CI-integration XML.
 
 `tool_coverage.json` is emitted at session end in the tests directory — shows
-which of the 38 MCP tools the run exercised. Useful for closing test gaps.
+which of the server's public MCP tools the run exercised. Useful for closing test gaps.
 
 ## Adding a new test
 

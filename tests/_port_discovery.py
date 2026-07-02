@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Role-to-port rediscovery after USB CDC re-enumeration.
 
 Used by tests that mutate device identity in ways macOS treats as a

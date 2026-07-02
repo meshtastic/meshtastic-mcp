@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Unit tests for `camera.orient_frame` — the rotation/mirror transform the UI
 tier applies so OCR sees an upright image regardless of how the bench camera is
 physically mounted (the DB stores a per-camera rotation: cam 0/cam 2 are 180°).

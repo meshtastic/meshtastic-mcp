@@ -162,8 +162,8 @@ def test_connect_app_via_deeplink_builds_correct_uri(monkeypatch) -> None:
     monkeypatch.setattr(
         avd, "deeplink", lambda path, serial=None, package=None: seen.update(path=path)
     )
-    avd.connect_app_via_deeplink("t192.168.1.168:4403")
-    assert seen["path"] == "connections?address=t192.168.1.168:4403"
+    avd.connect_app_via_deeplink("t192.0.2.68:4403")
+    assert seen["path"] == "connections?address=t192.0.2.68:4403"
 
 
 def test_disconnect_app_via_deeplink_uses_sentinel(monkeypatch) -> None:
@@ -196,7 +196,7 @@ def test_connect_app_to_tcp_deeplink_fast_path_confirms(monkeypatch) -> None:
     )
     monkeypatch.setattr(avd.time, "sleep", lambda s: None)  # don't actually wait in a unit test
 
-    ok = avd.connect_app_to_tcp(host="192.168.1.168", port=4403, confirm_timeout_s=5.0)
+    ok = avd.connect_app_to_tcp(host="192.0.2.68", port=4403, confirm_timeout_s=5.0)
     assert ok is True
     assert calls["deeplink"] == 1
     assert calls["tap"] == 0  # never fell through to the UI-tap fallback
@@ -213,5 +213,5 @@ def test_connect_app_to_tcp_falls_back_to_ui_taps_when_deeplink_never_confirms(m
     )  # "Add device manually" not found
     monkeypatch.setattr(avd.time, "sleep", lambda s: None)
 
-    ok = avd.connect_app_to_tcp(host="192.168.1.168", port=4403, confirm_timeout_s=0.01)
+    ok = avd.connect_app_to_tcp(host="192.0.2.68", port=4403, confirm_timeout_s=0.01)
     assert ok is False  # UI-tap flow ran but "Add device manually" was never found

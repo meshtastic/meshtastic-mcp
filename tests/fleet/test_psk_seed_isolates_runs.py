@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Fleet: different session seeds produce non-overlapping PSKs.
 
 No hardware needed — this is a pure property check on the test profile

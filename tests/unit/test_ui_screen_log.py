@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Pin the `Screen: frame N/M name=X reason=Y` regex + FrameEvent dataclass.
 
 The firmware-side format lives in `src/graphics/Screen.cpp::logFrameChange`;

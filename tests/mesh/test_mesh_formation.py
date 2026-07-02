@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Mesh: two devices baked with the same session profile discover each other.
 
 The fundamental "does my mesh work" test. If both devices share a PSK, LoRa
