@@ -189,12 +189,28 @@ def _sdr_check() -> Check:
             STATUS_MISSING,
             "RF-compliance oracle (rf_scan / rf_confirm_tx)",
             detail="pyrtlsdr not importable",
-            fix="pip install 'meshtastic-mcp[sdr]'  # also needs librtlsdr: "
-            + _pkg("brew install librtlsdr", "apt install librtlsdr-dev rtl-sdr"),
+            fix="pip install 'meshtastic-mcp[sdr]'  # bundles pyrtlsdrlib (prebuilt librtlsdr)",
+        )
+    except Exception as exc:
+        # `import rtlsdr` binds librtlsdr symbols at import time, so a wrong/old
+        # system librtlsdr (e.g. Homebrew's osmocom fork, missing
+        # rtlsdr_set_dithering) raises AttributeError here, not ImportError.
+        return Check(
+            "pyrtlsdr",
+            "sdr",
+            STATUS_MISSING,
+            "RF-compliance oracle (rf_scan / rf_confirm_tx)",
+            detail=f"pyrtlsdr installed but failed to bind librtlsdr: {exc}",
+            fix="pip install pyrtlsdrlib  # prebuilt librtlsdr with the ABI pyrtlsdr "
+            "expects; preferred over a system librtlsdr (e.g. Homebrew's) that lacks "
+            "rtlsdr_set_dithering",
         )
     try:
         devices = sdr_mod.list_devices()
     except sdr_mod.SdrError as exc:
+        # librtlsdr already imported/bound OK above, so this is a USB
+        # enumeration failure (libusb) — a device/permissions problem, not a
+        # missing library. Don't re-suggest installing librtlsdr here.
         return Check(
             "rtl-sdr-device",
             "sdr",
@@ -202,8 +218,9 @@ def _sdr_check() -> Check:
             "RF-compliance oracle (rf_scan / rf_confirm_tx)",
             detail=str(exc),
             fix=_pkg(
-                "brew install librtlsdr",
-                "apt install librtlsdr-dev rtl-sdr  # then plug in an RTL-SDR",
+                "no RTL-SDR found — plug one in and check the USB connection",
+                "no RTL-SDR found — plug one in; on Linux you may need udev rules "
+                "(plugdev group / an SDR rules file) for non-root access",
             ),
         )
     if not devices:

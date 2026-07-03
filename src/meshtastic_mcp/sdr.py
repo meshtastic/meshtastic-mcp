@@ -47,13 +47,14 @@ def _require_rtlsdr():
     except ImportError as exc:
         raise SdrError(
             "pyrtlsdr is not installed. Install the 'sdr' extra: pip install 'meshtastic-mcp[sdr]' "
-            "(also requires librtlsdr — e.g. `apt install librtlsdr-dev rtl-sdr`)."
+            "(bundles pyrtlsdrlib, a prebuilt librtlsdr — no system package needed)."
         ) from exc
-    except Exception as exc:  # e.g. ctypes AttributeError: system librtlsdr too old
+    except Exception as exc:  # e.g. ctypes AttributeError: wrong/old system librtlsdr
         raise SdrError(
-            f"pyrtlsdr failed to bind the system librtlsdr: {exc}. "
-            "Your librtlsdr may be too old — pyrtlsdr targets the "
-            "librtlsdr/librtlsdr fork (e.g. missing rtlsdr_set_dithering)."
+            f"pyrtlsdr failed to bind librtlsdr: {exc}. "
+            "A system librtlsdr (e.g. Homebrew's osmocom fork) may be the wrong ABI "
+            "(missing rtlsdr_set_dithering). Install pyrtlsdrlib for a prebuilt "
+            "librtlsdr that matches pyrtlsdr: `pip install pyrtlsdrlib`."
         ) from exc
     return RtlSdr
 

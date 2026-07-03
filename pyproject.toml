@@ -63,9 +63,16 @@ web = [
 ]
 # The `sdr` capability is the RF-compliance oracle (rf_scan/rf_confirm_tx): captures
 # raw IQ from an RTL-SDR and checks it against lora_compliance's prediction of what
-# the device's configured region/preset should produce on air. Also needs librtlsdr
-# on the system (not pip-installable) — e.g. `apt install librtlsdr-dev rtl-sdr`.
-sdr = ["pyrtlsdr>=0.3", "numpy>=1.26"]
+# the device's configured region/preset should produce on air.
+#
+# `pyrtlsdrlib` ships a prebuilt librtlsdr (macOS/Windows/Linux wheels) that matches
+# pyrtlsdr's expected ABI, so `[sdr]` works out of the box. It is preferred by
+# pyrtlsdr's loader and avoids the common trap where a *system* librtlsdr is the
+# osmocom fork (e.g. Homebrew's) that lacks `rtlsdr_set_dithering` and makes
+# `import rtlsdr` fail with an AttributeError. If you'd rather use a system librtlsdr
+# (`apt install librtlsdr-dev rtl-sdr`), it must be the librtlsdr/librtlsdr (keenerd)
+# fork; pyrtlsdrlib is harmless alongside it (loader falls back to the system lib).
+sdr = ["pyrtlsdr>=0.3", "pyrtlsdrlib>=0.0.4", "numpy>=1.26"]
 # The `firmware` capability needs a Meshtastic firmware checkout + PlatformIO `pio`
 # on PATH (not pip-installable) — set MESHTASTIC_FIRMWARE_ROOT.
 # The `emulator` capability needs the `android` CLI + `adb` on PATH (not pip-installable).
