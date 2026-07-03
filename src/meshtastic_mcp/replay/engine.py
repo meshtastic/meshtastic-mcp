@@ -38,6 +38,9 @@ from ..recorder.rotating import _RotatingJsonl
 from .capture import Capture, node_to_nodeinfo
 from .fuzz import FuzzConfig, Fuzzer
 
+# Portnum for TRACEROUTE_APP — mirrored from portnums_pb2 for readability.
+_TRACEROUTE_APP = portnums_pb2.PortNum.TRACEROUTE_APP  # 70
+
 
 def _replay_log_dir() -> Path:
     """Per-session replay lifecycle logs, alongside the recorder's `.mtlog/`.
@@ -486,16 +489,25 @@ class ReplaySession:
         send(fr)
 
     def _handle_client_packet(self, pkt: mesh_pb2.MeshPacket, send: Any) -> None:
-        """Answer the admin round-trips a strict client issues during the handshake.
+        """Answer admin round-trips and traceroute requests from the connected client.
 
-        Real firmware replies to ``get_owner_request`` with the device owner and a
-        session passkey; the replay device emulates that one round-trip so strict
-        clients (e.g. the Kotlin SDK, which blocks ``Connected`` on a post-NodeDB
-        "seeding" step) can reach a ready state. Everything else is drained and
-        ignored — replay is read-only (tx disabled), so mutating admin writes are
-        never honored.
+        Real firmware replies to ``get_owner_request`` with the device owner and
+        a session passkey; the replay device emulates that round-trip so strict
+        clients (e.g. the Kotlin SDK) can reach a ready state.
+
+        ``TRACEROUTE_APP`` requests addressed to any synthetic node are answered
+        with a synthesised ``RouteDiscovery`` response that carries a plausible
+        two-hop route (observer → random router → destination) and realistic SNR
+        values, so apps can exercise the traceroute UI (hop list, SNR colouring,
+        map flyover) without real hardware.
         """
-        if pkt.decoded.portnum != portnums_pb2.PortNum.ADMIN_APP:
+        portnum = pkt.decoded.portnum
+
+        if portnum == _TRACEROUTE_APP:
+            self._handle_traceroute(pkt, send)
+            return
+
+        if portnum != portnums_pb2.PortNum.ADMIN_APP:
             return
         try:
             req = admin_pb2.AdminMessage()
@@ -527,6 +539,59 @@ class ReplaySession:
             mp.decoded.request_id = pkt.id
         mp.decoded.payload = resp.SerializeToString()
         send(fr)
+
+    def _handle_traceroute(self, pkt: mesh_pb2.MeshPacket, send: Any) -> None:
+        """Synthesise a RouteDiscovery response to a client traceroute request.
+
+        The response route is: observer → (optional random relay from the node
+        DB) → destination.  SNR values are randomised in a realistic range
+        (-120 … +40, as stored by firmware in units of SNR×4).
+        """
+        import random as _random
+
+        dest = pkt.to & 0xFFFFFFFF
+        requester = getattr(pkt, "from", 0) or OBSERVER_NUM
+
+        # Build a plausible relay list from the capture node DB.
+        routers = [
+            n.num
+            for n in self.capture.nodes
+            if n.num not in (dest, requester, OBSERVER_NUM)
+            and getattr(n, "role", "") in ("ROUTER", "ROUTER_LATE", "")
+        ]
+        relay = [_random.choice(routers)] if routers else []
+
+        forward_route = [OBSERVER_NUM, *relay, dest]
+        snr_towards = [_random.randint(-100, 40) for _ in forward_route]
+        back_route = list(reversed(forward_route))
+        snr_back = [_random.randint(-100, 40) for _ in forward_route]
+
+        rd = mesh_pb2.RouteDiscovery()
+        for nn in forward_route:
+            rd.route.append(nn & 0xFFFFFFFF)
+        for snr in snr_towards:
+            rd.snr_towards.append(snr)
+        for nn in back_route:
+            rd.route_back.append(nn & 0xFFFFFFFF)
+        for snr in snr_back:
+            rd.snr_back.append(snr)
+
+        fr = mesh_pb2.FromRadio()
+        mp = fr.packet
+        setattr(mp, "from", dest)
+        mp.to = requester & 0xFFFFFFFF
+        mp.id = int(time.time() * 1000) & 0x7FFFFFFF
+        mp.rx_time = int(time.time())
+        mp.channel = pkt.channel
+        mp.hop_limit = 0
+        mp.decoded.portnum = _TRACEROUTE_APP
+        if pkt.id:
+            mp.decoded.request_id = pkt.id
+        mp.decoded.payload = rd.SerializeToString()
+        try:
+            send(fr)
+        except (OSError, ConnectionError):
+            pass
 
     def _observer_nodeinfo(self) -> mesh_pb2.FromRadio:
         fr = mesh_pb2.FromRadio()

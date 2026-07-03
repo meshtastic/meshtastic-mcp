@@ -21,9 +21,13 @@ import struct
 import time
 from typing import Any
 
-from meshtastic.protobuf import config_pb2, mesh_pb2
+from meshtastic.protobuf import channel_pb2, config_pb2, mesh_pb2
 
 BROADCAST = 0xFFFFFFFF
+
+# Portnum for MESH_BEACON_APP — added to the protobufs after meshtastic-python
+# 2.7.x; defined here as a constant so callers don't need the newer library.
+MESH_BEACON_APP = 37
 _id_seed = int(time.time() * 1000)
 
 
@@ -180,6 +184,74 @@ def nodeinfo_payload(
     return u.SerializeToString()
 
 
+def beacon_payload(
+    message: str,
+    *,
+    offer_channel_name: str = "",
+    offer_channel_psk: bytes = b"",
+    offer_region: str = "",
+    offer_preset: str = "",
+) -> bytes:
+    """A MeshBeacon payload (portnum 37 / MESH_BEACON_APP).
+
+    The ``MeshBeacon`` message is newer than meshtastic-python 2.7.x, so this
+    encodes it directly from the proto field numbers using the same raw-wire
+    approach as the geofence fields.
+
+    ``offer_channel_name`` / ``offer_channel_psk`` populate ``offer_channel``
+    (field 2, a ``ChannelSettings`` sub-message: psk=#2, name=#3).
+    ``offer_region`` is a ``Config.LoRaConfig.RegionCode`` name string (e.g.
+    ``"US"``).  ``offer_preset`` is a ``Config.LoRaConfig.ModemPreset`` name
+    string (e.g. ``"LONG_FAST"``).
+    """
+    out = b""
+    if message:
+        msg_b = message.encode("utf-8")
+        out += _tag(1, 2) + _varint(len(msg_b)) + msg_b
+    if offer_channel_name or offer_channel_psk:
+        cs = channel_pb2.ChannelSettings()
+        if offer_channel_psk:
+            cs.psk = offer_channel_psk
+        if offer_channel_name:
+            cs.name = offer_channel_name
+        ch_b = cs.SerializeToString()
+        out += _tag(2, 2) + _varint(len(ch_b)) + ch_b
+    if offer_region:
+        region_val = _enum(config_pb2.Config.LoRaConfig.RegionCode, offer_region)
+        if region_val:
+            out += _tag(3, 0) + _varint(region_val)
+    if offer_preset:
+        preset_val = _enum(config_pb2.Config.LoRaConfig.ModemPreset, offer_preset)
+        out += _tag(4, 0) + _varint(preset_val)
+    return out
+
+
+def traceroute_payload(
+    route: list[int],
+    *,
+    snr_towards: list[int] | None = None,
+    route_back: list[int] | None = None,
+    snr_back: list[int] | None = None,
+) -> bytes:
+    """A RouteDiscovery payload (portnum 70 / TRACEROUTE_APP).
+
+    ``route`` is the list of node nums along the forward path (destination
+    last).  ``snr_towards`` / ``snr_back`` are per-hop SNR values (clamped to
+    ±127 dBm × 4 as stored by firmware).  ``route_back`` is the return path
+    (source last), if known.
+    """
+    rd = mesh_pb2.RouteDiscovery()
+    for nn in route:
+        rd.route.append(nn & 0xFFFFFFFF)
+    for snr in snr_towards or []:
+        rd.snr_towards.append(int(snr))
+    for nn in route_back or []:
+        rd.route_back.append(nn & 0xFFFFFFFF)
+    for snr in snr_back or []:
+        rd.snr_back.append(int(snr))
+    return rd.SerializeToString()
+
+
 # ── full MeshPacket assembly ─────────────────────────────────────────────────
 def packet(
     portnum: int,
@@ -213,6 +285,8 @@ PORTNUM = {
     "position": 3,
     "nodeinfo": 4,
     "waypoint": 8,
+    "beacon": MESH_BEACON_APP,  # 37
+    "traceroute": 70,
 }
 
 
@@ -229,6 +303,9 @@ def from_kind(
     kinds: ``waypoint`` (lat, lon, name, geofence_radius, bbox, notify_on_enter,
     notify_on_exit, notify_favorites_only, icon), ``position`` (lat, lon),
     ``text`` (body), ``nodeinfo`` (id, long_name, short_name, hw_model, role),
+    ``beacon`` (message, offer_channel_name, offer_channel_psk_hex,
+    offer_region, offer_preset), ``traceroute`` (route: [node_num, …],
+    snr_towards: [int, …], route_back: [node_num, …], snr_back: [int, …]),
     ``raw`` (portnum, payload_hex).
     """
     a = args or {}
@@ -265,6 +342,26 @@ def from_kind(
             role=a.get("role", "CLIENT"),
         )
         return packet(4, pl, from_node=from_node, to_node=to_node, channel_idx=channel_idx)
+    if kind == "beacon":
+        psk_hex = a.get("offer_channel_psk_hex", "")
+        pl = beacon_payload(
+            a.get("message", ""),
+            offer_channel_name=a.get("offer_channel_name", ""),
+            offer_channel_psk=bytes.fromhex(psk_hex) if psk_hex else b"",
+            offer_region=a.get("offer_region", ""),
+            offer_preset=a.get("offer_preset", ""),
+        )
+        return packet(
+            MESH_BEACON_APP, pl, from_node=from_node, to_node=to_node, channel_idx=channel_idx
+        )
+    if kind == "traceroute":
+        pl = traceroute_payload(
+            a.get("route", []),
+            snr_towards=a.get("snr_towards"),
+            route_back=a.get("route_back"),
+            snr_back=a.get("snr_back"),
+        )
+        return packet(70, pl, from_node=from_node, to_node=to_node, channel_idx=channel_idx)
     if kind == "raw":
         return packet(
             int(a["portnum"]),

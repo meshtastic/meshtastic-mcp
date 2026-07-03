@@ -24,7 +24,7 @@ from meshtastic.protobuf import mesh_pb2
 
 from meshtastic_mcp.replay import ReplayParams, ReplaySession, capture, fuzz, sim
 
-ALL_PORTNUMS = {1, 3, 4, 5, 6, 8, 34, 65, 66, 67, 70, 71}
+ALL_PORTNUMS = {1, 3, 4, 5, 6, 8, 34, 37, 65, 66, 67, 70, 71}
 
 
 def _portnum_counts(cap) -> Counter:
@@ -797,6 +797,178 @@ def test_replay_session_writes_lifecycle_log(tmp_path, monkeypatch):
     assert "listening" in kinds
     assert "client_connected" in kinds
     assert kinds[-1] in ("session_ended",)  # always the last event written
+
+
+# ── Beacon (MESH_BEACON_APP = 37) ────────────────────────────────────────────
+
+
+def test_build_beacon_payload_encodes_message_and_offers():
+    from meshtastic_mcp.replay import build
+
+    # message only
+    pl = build.beacon_payload("hello mesh")
+    assert b"hello mesh" in pl
+    # field 1 (message) uses tag 0x0A (field=1, wire=2)
+    assert pl.startswith(bytes([0x0A]))
+
+    # with channel offer
+    pl2 = build.beacon_payload(
+        "join us",
+        offer_channel_name="MeshCon",
+        offer_channel_psk=b"\x01",
+        offer_region="US",
+        offer_preset="LONG_FAST",
+    )
+    assert b"join us" in pl2
+    assert b"MeshCon" in pl2
+    # field 3 (offer_region=US=1) → tag 0x18 + varint 1
+    assert bytes([0x18, 0x01]) in pl2
+    # field 4 (offer_preset=LONG_FAST=0) → tag 0x20 + varint 0
+    assert bytes([0x20, 0x00]) in pl2
+
+
+def test_from_kind_builds_beacon():
+    from meshtastic_mcp.replay import build
+
+    mp = build.from_kind(
+        "beacon",
+        {"message": "test beacon", "offer_region": "US", "offer_preset": "LONG_FAST"},
+        from_node=0xBEAC,
+    )
+    assert mp.decoded.portnum == build.MESH_BEACON_APP  # 37
+    assert b"test beacon" in mp.decoded.payload
+    assert getattr(mp, "from") == 0xBEAC
+
+
+def test_sim_emits_beacon_packets():
+    """sim.generate must include MESH_BEACON_APP (portnum 37) with routers."""
+    cap = sim.generate(nodes=60, days=2, seed=7, start=1_700_000_000)
+    counts = _portnum_counts(cap)
+    assert 37 in counts, "MESH_BEACON_APP (portnum 37) missing from synthetic capture"
+    assert counts[37] >= 1
+
+
+def test_sim_waypoints_include_geofenced_variants():
+    """sim.generate must include at least some waypoints with geofence fields."""
+    from meshtastic_mcp.replay import build
+
+    cap = sim.generate(nodes=60, days=3, seed=42, start=1_700_000_000)
+    geofenced = 0
+    for _ts, raw, _ch in cap.packets:
+        mp = mesh_pb2.MeshPacket()
+        mp.ParseFromString(raw)
+        if mp.decoded.portnum != 8:
+            continue
+        # geofence_radius is field 9, wire-tag = (9<<3)|0 = 0x48
+        if build._tag(9, 0) in mp.decoded.payload:
+            geofenced += 1
+    assert geofenced >= 1, "no geofenced waypoints found in synthetic capture"
+
+
+# ── Traceroute responder ──────────────────────────────────────────────────────
+
+
+def test_build_traceroute_payload_encodes_route_and_snr():
+    from meshtastic_mcp.replay import build
+
+    route = [0xAAAA, 0xBBBB, 0xCCCC]
+    snr_t = [40, -80, 10]
+    snr_b = [30, -90, 5]
+    pl = build.traceroute_payload(route, snr_towards=snr_t, snr_back=snr_b)
+    rd = mesh_pb2.RouteDiscovery()
+    rd.ParseFromString(pl)
+    assert list(rd.route) == route
+    assert list(rd.snr_towards) == snr_t
+    assert list(rd.snr_back) == snr_b
+
+
+def test_from_kind_builds_traceroute():
+    from meshtastic_mcp.replay import build
+
+    mp = build.from_kind(
+        "traceroute",
+        {"route": [0x1111, 0x2222], "snr_towards": [20, -40]},
+        from_node=0x1111,
+        to_node=0x2222,
+    )
+    assert mp.decoded.portnum == 70
+    rd = mesh_pb2.RouteDiscovery()
+    rd.ParseFromString(mp.decoded.payload)
+    assert list(rd.route) == [0x1111, 0x2222]
+    assert list(rd.snr_towards) == [20, -40]
+
+
+def test_traceroute_responder_replies_to_client_request():
+    """When the connected client sends a TRACEROUTE_APP request, the replay
+    engine must synthesise a RouteDiscovery response addressed back to the
+    requester.
+    """
+    from meshtastic.protobuf import portnums_pb2
+
+    cap = sim.generate(nodes=20, days=1, seed=3, start=1_700_000_000)
+    dest_num = cap.nodes[0].num
+
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession(
+        "tr", cap, ReplayParams(host="127.0.0.1", port=port, rate=200, node_delay=0)
+    )
+    sess.start()
+    try:
+        deadline = time.time() + 5
+        client = None
+        while time.time() < deadline:
+            try:
+                client = socket.create_connection(("127.0.0.1", port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        assert client is not None
+
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+
+        # drain the handshake (my_info + node_info + config phases)
+        t0 = time.time()
+        while time.time() - t0 < 3 and not sess.state.connected:
+            _read_frame(client)
+
+        # send a TRACEROUTE_APP request from the observer to dest_num
+        req_mp = mesh_pb2.MeshPacket()
+        req_mp.to = dest_num & 0xFFFFFFFF
+        setattr(req_mp, "from", 0x42524331)  # OBSERVER_NUM
+        req_mp.id = 0x1234ABCD
+        req_mp.want_ack = True
+        req_mp.decoded.portnum = portnums_pb2.PortNum.TRACEROUTE_APP
+        rd_req = mesh_pb2.RouteDiscovery()
+        req_mp.decoded.payload = rd_req.SerializeToString()
+        _send_toradio(client, packet=req_mp)
+
+        # look for the RouteDiscovery response within 3 seconds
+        response = None
+        t0 = time.time()
+        while time.time() - t0 < 3 and response is None:
+            fr = _read_frame(client)
+            if fr.WhichOneof("payload_variant") != "packet":
+                continue
+            if fr.packet.decoded.portnum != portnums_pb2.PortNum.TRACEROUTE_APP:
+                continue
+            response = fr.packet
+        client.close()
+
+        assert response is not None, (
+            "no RouteDiscovery response from the replay traceroute responder"
+        )
+        assert response.decoded.request_id == 0x1234ABCD
+        rd_resp = mesh_pb2.RouteDiscovery()
+        rd_resp.ParseFromString(response.decoded.payload)
+        # route must include at least the origin and destination
+        assert len(rd_resp.route) >= 2
+        assert len(rd_resp.snr_towards) >= 1
+    finally:
+        sess.stop()
 
 
 if __name__ == "__main__":  # pragma: no cover
