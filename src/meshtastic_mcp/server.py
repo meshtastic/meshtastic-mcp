@@ -2080,6 +2080,160 @@ def replay_inject(
 
 
 @app.tool()
+def replay_inject_beacon(
+    session_id: str,
+    message: str = "Mesh beacon — join the network",
+    *,
+    from_node: int | None = None,
+    channel: str = "LongFast",
+    offer_channel_name: str = "",
+    offer_channel_psk_hex: str = "",
+    offer_region: str = "US",
+    offer_preset: str = "LONG_FAST",
+    count: int = 1,
+) -> dict[str, Any]:
+    """Inject a MESH_BEACON_APP packet (portnum 37) into a running replay session.
+
+    Convenience wrapper around `replay_inject(sid, "beacon", …)` that lets the
+    Apple app (and others) exercise the "Local Mesh Discovery" flow — capturing
+    beacons, auto-adding beacon-advertised presets/channels to a scan, and
+    offering "switch to this channel" — without real beaconing hardware.
+
+    `message` is the human-readable beacon text (max 100 bytes on real firmware).
+    `offer_channel_name` / `offer_channel_psk_hex` optionally advertise a channel
+    the client app can offer the user to switch to. `offer_region` and
+    `offer_preset` advertise the LoRa region/preset of the beaconed mesh.
+    """
+    frm = from_node if from_node is not None else 0x0A1B2C3D
+    pkts = [
+        replay_build.from_kind(
+            "beacon",
+            {
+                "message": message,
+                "offer_channel_name": offer_channel_name,
+                "offer_channel_psk_hex": offer_channel_psk_hex,
+                "offer_region": offer_region,
+                "offer_preset": offer_preset,
+            },
+            from_node=frm,
+            to_node=replay_build.BROADCAST,
+        )
+        for _ in range(max(1, count))
+    ]
+    return get_replay_manager().inject(session_id, pkts, channel=channel)
+
+
+@app.tool()
+def replay_inject_traceroute(
+    session_id: str,
+    destination_node: int,
+    *,
+    route: list[int] | None = None,
+    snr_towards: list[int] | None = None,
+    route_back: list[int] | None = None,
+    snr_back: list[int] | None = None,
+    from_node: int | None = None,
+    channel: str = "LongFast",
+) -> dict[str, Any]:
+    """Inject a TRACEROUTE_APP RouteDiscovery packet into a running replay session.
+
+    Convenience wrapper that lets you test the traceroute UI (hop list, SNR
+    colouring, map flyover) without real hardware.
+
+    `destination_node` is the node num the traceroute is addressed *from*
+    (i.e. the node "responding" — the source of the RouteDiscovery reply).
+    `route` is the list of node nums along the path (destination last); if
+    omitted a synthetic multi-hop route (origin → relay → destination) is used
+    so the hop-list/SNR UI has something meaningful to render. `snr_towards` /
+    `snr_back` are per-hop SNR values; if omitted realistic random values are
+    generated.
+
+    The replay engine also answers live traceroute *requests* sent by a connected
+    client automatically — this tool lets you push an unsolicited RouteDiscovery
+    to exercise the display path.
+    """
+    frm = from_node if from_node is not None else destination_node
+    if route:
+        effective_route = route
+    elif frm != destination_node:
+        effective_route = [frm, destination_node]
+    else:
+        # Only session_id + destination_node given: fabricate a plausible
+        # three-hop path through a synthetic origin and relay so the client's
+        # hop list / SNR colouring has more than a single degenerate node.
+        synthetic_origin = 0x0A1B2C3D
+        synthetic_relay = 0x0A1B2C3E
+        effective_route = [synthetic_origin, synthetic_relay, destination_node]
+    pkts = [
+        replay_build.from_kind(
+            "traceroute",
+            {
+                "route": effective_route,
+                "snr_towards": snr_towards,
+                "route_back": route_back,
+                "snr_back": snr_back,
+            },
+            from_node=frm,
+            to_node=replay_build.BROADCAST,
+        )
+    ]
+    return get_replay_manager().inject(session_id, pkts, channel=channel)
+
+
+@app.tool()
+def replay_inject_waypoint(
+    session_id: str,
+    lat: float,
+    lon: float,
+    *,
+    name: str = "",
+    description: str = "",
+    icon: int = 0,
+    geofence_radius: int = 0,
+    bbox: list[float] | None = None,
+    notify_on_enter: bool = False,
+    notify_on_exit: bool = False,
+    notify_favorites_only: bool = False,
+    from_node: int | None = None,
+    channel: str = "LongFast",
+    count: int = 1,
+) -> dict[str, Any]:
+    """Inject a WAYPOINT_APP packet (portnum 8) into a running replay session.
+
+    Convenience wrapper with full geofence support — populates
+    `geofence_radius`, `bounding_box`, `notify_on_enter`, `notify_on_exit`,
+    and `notify_favorites_only` so the Apple app's enter/exit alert flow can
+    be exercised without real hardware.
+
+    `bbox` is `[south, west, north, east]` in decimal degrees. `geofence_radius`
+    is a circular radius in metres. Either or both may be set simultaneously.
+
+    Follow up with `replay_inject(sid, "position", {"lat":…,"lon":…},
+    from_node=<tracker>)` to drive a synthetic node's position through the
+    geofence boundary and trigger the client's enter/exit notifications.
+    """
+    frm = from_node if from_node is not None else 0x0A1B2C3D
+    args: dict[str, Any] = {
+        "lat": lat,
+        "lon": lon,
+        "name": name,
+        "description": description,
+        "icon": icon,
+        "geofence_radius": geofence_radius,
+        "notify_on_enter": notify_on_enter,
+        "notify_on_exit": notify_on_exit,
+        "notify_favorites_only": notify_favorites_only,
+    }
+    if bbox is not None:
+        args["bbox"] = bbox
+    pkts = [
+        replay_build.from_kind("waypoint", args, from_node=frm, to_node=replay_build.BROADCAST)
+        for _ in range(max(1, count))
+    ]
+    return get_replay_manager().inject(session_id, pkts, channel=channel)
+
+
+@app.tool()
 def replay_fuzz_presets() -> dict[str, Any]:
     """List the built-in replay fuzz presets and the fault categories each enables.
 
@@ -2277,6 +2431,9 @@ _DESTRUCTIVE = {
     "replay_start",
     "replay_stop",
     "replay_inject",  # emits packets onto the live connection
+    "replay_inject_beacon",  # emits a MESH_BEACON_APP packet
+    "replay_inject_traceroute",  # emits a TRACEROUTE_APP RouteDiscovery packet
+    "replay_inject_waypoint",  # emits a WAYPOINT_APP packet (with optional geofence)
     "local_model_serve",  # spawns a detached llama-server process (and may install it)
     "local_model_serve_stop",  # terminates the managed llama-server process
     "sdk_send_text",  # injects a mesh packet via the Kotlin SDK CLI; cannot be recalled

@@ -36,6 +36,7 @@ from meshtastic.protobuf import (
     telemetry_pb2,
 )
 
+from .build import MESH_BEACON_APP, beacon_payload
 from .capture import Capture, NodeRow
 
 BROADCAST = 0xFFFFFFFF
@@ -91,6 +92,10 @@ PROFILE: dict = {
     # share of traffic that is encrypted/foreign (channels the viewer lacks keys
     # for) — real captures ran ~40%; a moderate default keeps it visible.
     "encrypted_fraction": 0.25,
+    # Beacons (MESH_BEACON_APP): fraction of routers/infra that emit periodic
+    # MESH_BEACON_APP packets, and the broadcast interval in seconds.
+    "beacon_fraction": 0.4,
+    "beacon_interval": 1800,
 }
 
 # Real text is short: median ~18 chars, p90 ~79. About half of messages are
@@ -508,17 +513,17 @@ def generate(
             if dm and rng.random() < 0.8:
                 add(t + rng.randint(1, 5), to, sender.num, 5, _pl_routing_ack(), ch=ch, hop=0)
 
-    # -- waypoints --
+    # -- waypoints (some with geofence fields for client enter/exit alert testing) --
     pois = [
-        ("Coffee Truck", "☕ best brew at base camp", 9749),
-        ("Registration", "Badge pickup + swag", 128221),
-        ("Dish Dome", "Main stage / keynotes", 127963),
-        ("Antenna Shootout", "Range contest 19:00", 128225),
-        ("Afterparty", "🔥 fire pit + RF stories", 128293),
-        ("Datil Dinner", "Bus loads here 18:30", 127858),
+        ("Coffee Truck", "☕ best brew at base camp", 9749, False),
+        ("Registration", "Badge pickup + swag", 128221, False),
+        ("Dish Dome", "Main stage / keynotes", 127963, True),  # geofenced
+        ("Antenna Shootout", "Range contest 19:00", 128225, True),  # geofenced
+        ("Afterparty", "🔥 fire pit + RF stories", 128293, False),
+        ("Datil Dinner", "Bus loads here 18:30", 127858, False),
     ]
     for day in range(days):
-        for name, desc, icon in rng.sample(pois, min(len(pois), rng.randint(3, 6))):
+        for name, desc, icon, geofenced in rng.sample(pois, min(len(pois), rng.randint(3, 6))):
             t = start_epoch + day * 86400 + rng.randint(7 * 3600, 20 * 3600)
             host = rng.choice(routers) if routers else rng.choice(meta)
             add(
@@ -526,7 +531,7 @@ def generate(
                 host["num"],
                 BROADCAST,
                 8,
-                _pl_waypoint(rng, host, t, name, desc, icon),
+                _pl_waypoint(rng, host, t, name, desc, icon, geofenced=geofenced),
                 ch="MeshCon" if "MeshCon" in ch_index else "LongFast",
                 hop=4,
             )
@@ -579,6 +584,26 @@ def generate(
                     _pl_admin(),
                     ch="Staff" if "Staff" in ch_index else "LongFast",
                 )
+
+    # -- beacons (MESH_BEACON_APP = 37): a fraction of infra nodes periodically
+    # broadcast MeshBeacon packets so clients can exercise the "discover and
+    # join a beaconed mesh" flow without real hardware. --
+    beacon_iv = P.get("beacon_interval", 1800)
+    beacon_frac = P.get("beacon_fraction", 0.4)
+    beacon_nodes = [m for m in routers if rng.random() < beacon_frac]
+    for m in beacon_nodes:
+        t = start_epoch + rng.randint(0, beacon_iv)
+        while t < end_epoch:
+            add(
+                t,
+                m["num"],
+                BROADCAST,
+                MESH_BEACON_APP,
+                _pl_beacon(rng, chans),
+                ch="LongFast",
+                hop=3,
+            )
+            t += int(beacon_iv * rng.uniform(0.85, 1.15))
 
     packets.sort(key=lambda p: p[0])
     cap = Capture(
@@ -788,7 +813,9 @@ def _pl_neighborinfo(rng, num, neighbors):
     return ni.SerializeToString()
 
 
-def _pl_waypoint(rng, m, t, name, desc, icon):
+def _pl_waypoint(rng, m, t, name, desc, icon, *, geofenced: bool = False):
+    from .build import append_fields
+
     w = mesh_pb2.Waypoint()
     w.id = rng.randint(1, 0x7FFFFFFF)
     w.latitude_i = m["lat_i"] + rng.randint(-2000, 2000)
@@ -797,7 +824,11 @@ def _pl_waypoint(rng, m, t, name, desc, icon):
     w.name = name
     w.description = desc
     w.icon = icon
-    return w.SerializeToString()
+    base = w.SerializeToString()
+    if geofenced:
+        radius = rng.randint(50, 500)
+        base += append_fields({9: radius, 11: True, 12: True})
+    return base
 
 
 def _pl_pax(rng):
@@ -806,6 +837,32 @@ def _pl_pax(rng):
     px.ble = rng.randint(5, 400)
     px.uptime = rng.randint(60, 200000)
     return px.SerializeToString()
+
+
+# Synthetic beacon messages for MESH_BEACON_APP packets — short, conference-
+# flavoured texts that a beaconing node would broadcast to advertise its mesh.
+_BEACON_MESSAGES = [
+    "MeshCon mesh — join us!",
+    "VLA mesh active — connect on LongFast",
+    "Mesh beacon — conference channel available",
+    "Open mesh at base camp",
+    "Join the MeshCon network",
+]
+
+
+def _pl_beacon(rng: random.Random, chans: list[str]) -> bytes:
+    """A synthetic MeshBeacon payload (MESH_BEACON_APP = 37)."""
+    msg = rng.choice(_BEACON_MESSAGES)
+    # Optionally advertise one of the conference channels
+    offer_name = rng.choice(chans) if rng.random() < 0.6 else ""
+    offer_psk = b"\x01" if offer_name == "LongFast" else b""
+    return beacon_payload(
+        msg,
+        offer_channel_name=offer_name,
+        offer_channel_psk=offer_psk,
+        offer_region="US",
+        offer_preset="LONG_FAST" if rng.random() < 0.7 else "",
+    )
 
 
 def _pl_sf():
