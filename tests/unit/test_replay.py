@@ -579,6 +579,17 @@ def test_from_kind_builds_each_packet_type():
         build.from_kind("bogus", {}, from_node=1)
 
 
+def test_fromradio_from_kind_builds_fileinfo():
+    from meshtastic_mcp.replay import build
+
+    fr = build.fromradio_from_kind("fileinfo", {"file_name": "log.bin", "size_bytes": 4096})
+    assert fr.WhichOneof("payload_variant") == "fileInfo"
+    assert fr.fileInfo.file_name == "log.bin"
+    assert fr.fileInfo.size_bytes == 4096
+    with pytest.raises(ValueError):
+        build.fromradio_from_kind("bogus", {})
+
+
 def test_from_events_builds_scenario_capture():
     cap = capture.from_events(
         [
@@ -640,6 +651,58 @@ def test_live_inject_reaches_client():
                     found = True
         client.close()
         assert found  # injected waypoint reached the live client
+        assert mgr.status(sid)["injected"] >= 1
+    finally:
+        mgr.stop(sid)
+
+
+def test_live_inject_fromradio_reaches_client():
+    """inject_fromradio() is the handshake-only counterpart to inject(): a raw FromRadio
+    (e.g. fileInfo) with no MeshPacket envelope, delivered outside the initial handshake
+    window. Regression coverage for the gap found while adversarial-fuzz-testing
+    Meshtastic-Android: there was no way to exercise a client's FileInfo handler
+    (STATE_SEND_FILEMANIFEST) mid-session, only at connect time.
+    """
+    from meshtastic_mcp.replay import build, get_manager
+
+    cap = sim.generate(nodes=5, days=1, seed=1, start=1_700_000_000)
+    mgr = get_manager()
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    st = mgr.start(cap, ReplayParams(host="127.0.0.1", port=port, rate=600, node_delay=0))
+    sid = st["id"]
+    try:
+        client = None
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                client = socket.create_connection(("127.0.0.1", port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        assert client is not None
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+        time.sleep(0.3)
+
+        fr_in = build.fromradio_from_kind(
+            "fileinfo", {"file_name": "evil.bin", "size_bytes": 999999999}
+        )
+        res = mgr.inject_fromradio(sid, [fr_in])
+        assert res["queued"] == 1
+        found = False
+        t0 = time.time()
+        while time.time() - t0 < 3 and not found:
+            fr = _read_frame(client)
+            if (
+                fr.WhichOneof("payload_variant") == "fileInfo"
+                and fr.fileInfo.file_name == "evil.bin"
+            ):
+                found = True
+        client.close()
+        assert found  # injected FileInfo reached the live client
         assert mgr.status(sid)["injected"] >= 1
     finally:
         mgr.stop(sid)

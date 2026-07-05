@@ -2124,6 +2124,39 @@ def replay_inject_beacon(
 
 
 @app.tool()
+def replay_inject_fileinfo(
+    session_id: str,
+    file_name: str,
+    size_bytes: int = 0,
+    count: int = 1,
+) -> dict[str, Any]:
+    """Inject a raw FileInfo FromRadio message into a running replay session.
+
+    Unlike `replay_inject` (which wraps a MeshPacket for mesh traffic), FileInfo is a
+    handshake-only FromRadio oneof (STATE_SEND_FILEMANIFEST) with no MeshPacket envelope --
+    real firmware only ever sends it during the initial config handshake. Most app-side
+    handlers don't gate on handshake state though, so this lets you exercise that code path
+    on demand, e.g. to fuzz-test unbounded accumulation (send many with `count`) or
+    malformed/adversarial entries (huge `file_name`, negative `size_bytes`) in a
+    long-running session rather than only at connect time.
+
+    `count` repeats the inject (each with a distinct file_name suffix so entries don't
+    collide) -- useful for probing whether a client caps its file manifest.
+    """
+    msgs = [
+        replay_build.fromradio_from_kind(
+            "fileinfo",
+            {
+                "file_name": file_name if count == 1 else f"{file_name}.{i}",
+                "size_bytes": size_bytes,
+            },
+        )
+        for i in range(max(1, count))
+    ]
+    return get_replay_manager().inject_fromradio(session_id, msgs)
+
+
+@app.tool()
 def replay_inject_traceroute(
     session_id: str,
     destination_node: int,

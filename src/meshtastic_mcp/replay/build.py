@@ -372,3 +372,23 @@ def from_kind(
             channel_idx=channel_idx,
         )
     raise ValueError(f"unknown inject kind: {kind!r}")
+
+
+def fromradio_from_kind(kind: str, args: dict[str, Any]) -> mesh_pb2.FromRadio:
+    """Build a raw top-level FromRadio message from a high-level ``kind`` + ``args``.
+
+    Counterpart to `from_kind()` for the handshake-only oneofs that have no MeshPacket
+    envelope (nothing to route/channel/from-node -- these aren't mesh traffic). Pair with
+    `ReplaySession.inject_fromradio()` / `ReplayManager.inject_fromradio()`.
+
+    kinds: ``fileinfo`` (file_name, size_bytes) -- exercises a client's file-manifest
+    handler (STATE_SEND_FILEMANIFEST) outside the initial handshake window, e.g. to fuzz-
+    test unbounded accumulation or malformed entries under a long-running session.
+    """
+    a = args or {}
+    if kind == "fileinfo":
+        fr = mesh_pb2.FromRadio()
+        fr.fileInfo.file_name = a.get("file_name", "")
+        fr.fileInfo.size_bytes = int(a.get("size_bytes", 0))
+        return fr
+    raise ValueError(f"unknown fromradio inject kind: {kind!r}")
