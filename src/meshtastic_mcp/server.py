@@ -2143,15 +2143,27 @@ def replay_inject_traceroute(
     `destination_node` is the node num the traceroute is addressed *from*
     (i.e. the node "responding" — the source of the RouteDiscovery reply).
     `route` is the list of node nums along the path (destination last); if
-    omitted a two-hop synthetic route is used. `snr_towards` / `snr_back` are
-    per-hop SNR values; if omitted realistic random values are generated.
+    omitted a synthetic multi-hop route (origin → relay → destination) is used
+    so the hop-list/SNR UI has something meaningful to render. `snr_towards` /
+    `snr_back` are per-hop SNR values; if omitted realistic random values are
+    generated.
 
     The replay engine also answers live traceroute *requests* sent by a connected
     client automatically — this tool lets you push an unsolicited RouteDiscovery
     to exercise the display path.
     """
     frm = from_node if from_node is not None else destination_node
-    effective_route = route or [frm, destination_node]
+    if route:
+        effective_route = route
+    elif frm != destination_node:
+        effective_route = [frm, destination_node]
+    else:
+        # Only session_id + destination_node given: fabricate a plausible
+        # three-hop path through a synthetic origin and relay so the client's
+        # hop list / SNR colouring has more than a single degenerate node.
+        synthetic_origin = 0x0A1B2C3D
+        synthetic_relay = 0x0A1B2C3E
+        effective_route = [synthetic_origin, synthetic_relay, destination_node]
     pkts = [
         replay_build.from_kind(
             "traceroute",

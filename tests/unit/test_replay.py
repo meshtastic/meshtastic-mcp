@@ -859,10 +859,35 @@ def test_sim_waypoints_include_geofenced_variants():
         mp.ParseFromString(raw)
         if mp.decoded.portnum != 8:
             continue
-        # geofence_radius is field 9, wire-tag = (9<<3)|0 = 0x48
-        if build._tag(9, 0) in mp.decoded.payload:
+        payload = mp.decoded.payload
+        # The sim appends geofence fields 9/11/12 (geofence_radius,
+        # notify_on_enter, notify_on_exit) as raw wire bytes. A bare tag-9
+        # byte (0x48) can occur incidentally inside lat/lon varints, so require
+        # both the geofence_radius tag *and* the notify enter/exit tag pair
+        # (0x58 0x01 0x60 0x01) — an appended suffix that is highly unlikely to
+        # collide with the standard Waypoint encoding.
+        notify_pair = build._tag(11, 0) + build._varint(1) + build._tag(12, 0) + build._varint(1)
+        if build._tag(9, 0) in payload and notify_pair in payload:
             geofenced += 1
     assert geofenced >= 1, "no geofenced waypoints found in synthetic capture"
+
+
+def test_from_kind_waypoint_wires_description():
+    """from_kind must forward `description` into the Waypoint payload (regression:
+    the field was silently dropped, so injected waypoints had empty descriptions).
+    """
+    from meshtastic_mcp.replay import build
+
+    mp = build.from_kind(
+        "waypoint",
+        {"lat": 37.7, "lon": -122.4, "name": "Perimeter", "description": "geofenced POI"},
+        from_node=0xBEEF,
+    )
+    assert mp.decoded.portnum == 8
+    w = mesh_pb2.Waypoint()
+    w.ParseFromString(mp.decoded.payload)
+    assert w.name == "Perimeter"
+    assert w.description == "geofenced POI"
 
 
 # ── Traceroute responder ──────────────────────────────────────────────────────
@@ -926,6 +951,11 @@ def test_traceroute_responder_replies_to_client_request():
             except OSError:
                 time.sleep(0.05)
         assert client is not None
+        # create_connection leaves a 1s recv timeout, but the loops below run to
+        # 3s deadlines and _read_frame() does a blocking recv(1); raise the socket
+        # timeout above the longest wait so a brief stream pause can't trip a
+        # premature socket.timeout before the loop's own deadline governs.
+        client.settimeout(6)
 
         _send_toradio(client, want_config_id=69420)
         _send_toradio(client, want_config_id=69421)

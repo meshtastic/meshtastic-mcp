@@ -314,6 +314,7 @@ def from_kind(
             a["lat"],
             a["lon"],
             name=a.get("name", ""),
+            description=a.get("description", ""),
             icon=a.get("icon", 0),
             geofence_radius=a.get("geofence_radius", 0),
             bbox=a.get("bbox"),
