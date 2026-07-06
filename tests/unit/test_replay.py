@@ -586,6 +586,10 @@ def test_fromradio_from_kind_builds_fileinfo():
     assert fr.WhichOneof("payload_variant") == "fileInfo"
     assert fr.fileInfo.file_name == "log.bin"
     assert fr.fileInfo.size_bytes == 4096
+    # Adversarial negative size_bytes must still encode (masked into uint32) rather
+    # than raising -- replay_inject_fileinfo advertises negative values as a fuzz case.
+    neg = build.fromradio_from_kind("fileinfo", {"file_name": "x", "size_bytes": -1})
+    assert neg.fileInfo.size_bytes == 0xFFFFFFFF
     with pytest.raises(ValueError):
         build.fromradio_from_kind("bogus", {})
 

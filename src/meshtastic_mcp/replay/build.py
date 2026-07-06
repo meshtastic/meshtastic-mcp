@@ -389,6 +389,9 @@ def fromradio_from_kind(kind: str, args: dict[str, Any]) -> mesh_pb2.FromRadio:
     if kind == "fileinfo":
         fr = mesh_pb2.FromRadio()
         fr.fileInfo.file_name = a.get("file_name", "")
-        fr.fileInfo.size_bytes = int(a.get("size_bytes", 0))
+        # size_bytes is a uint32 on the wire; protobuf rejects a raw negative int.
+        # Mask into the unsigned representation so adversarial/negative fuzz values
+        # (advertised by replay_inject_fileinfo) still encode instead of raising.
+        fr.fileInfo.size_bytes = int(a.get("size_bytes", 0)) & 0xFFFFFFFF
         return fr
     raise ValueError(f"unknown fromradio inject kind: {kind!r}")
