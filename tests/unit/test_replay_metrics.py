@@ -378,6 +378,11 @@ def test_profile_accepts_dict_json_and_deep_merges(tmp_path):
     assert merged["observer"]["path_loss_exp"] == 3.5
     assert merged["observer"]["enabled"] is False  # untouched default preserved
     assert merged["venue"]["name"] == _sim.PROFILE["venue"]["name"]
+    # a partial `tak` override keeps the other tak defaults (team_nodes, etc.)
+    tak_merged = _sim._resolve_profile({"tak": {"wire": "v2"}})
+    assert tak_merged["tak"]["wire"] == "v2"
+    assert tak_merged["tak"]["team_nodes"] == _sim.PROFILE["tak"]["team_nodes"]
+    assert tak_merged["tak"]["pli_interval"] == _sim.PROFILE["tak"]["pli_interval"]
     # JSON path load
     import json
 

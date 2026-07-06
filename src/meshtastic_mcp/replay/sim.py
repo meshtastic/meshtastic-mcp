@@ -259,7 +259,7 @@ PRESETS: dict[str, dict] = {
 
 # Config keys whose values are themselves dicts and should deep-merge (rather
 # than wholesale-replace) when a profile override is applied.
-_MERGE_DICT_KEYS = frozenset({"venue", "observer", "climate", "pos_interval"})
+_MERGE_DICT_KEYS = frozenset({"venue", "observer", "climate", "pos_interval", "tak"})
 
 
 def _deep_merge(base: dict, over: dict) -> dict:
