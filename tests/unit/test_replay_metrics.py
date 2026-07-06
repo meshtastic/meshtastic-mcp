@@ -457,3 +457,45 @@ def test_tak_squad_is_opt_in_and_well_formed():
     assert pli > 0 and chat > 0
     assert len(callsigns) == 5  # one per squad member
     assert teams == {atak_pb2.Team.Value("Cyan")}
+
+
+# ── capture-stats CLI subcommand ─────────────────────────────────────────────
+
+
+def test_capture_stats_cli_preset_json(capsys):
+    import pytest
+
+    from meshtastic_mcp import __main__ as cli
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["capture-stats", "meshcon", "--sim-nodes", "60", "--sim-days", "1", "--json"])
+    assert exc.value.code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["schema"] == metrics.SCHEMA_VERSION
+    assert out["nodes"]["count"] == 60
+    assert "portnum_mix" in out
+
+
+def test_capture_stats_cli_text_render(capsys):
+    import pytest
+
+    from meshtastic_mcp import __main__ as cli
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["capture-stats", "defcon", "--sim-nodes", "60", "--sim-days", "1"])
+    assert exc.value.code == 0
+    text = capsys.readouterr().out
+    assert "capture: defcon" in text
+    assert "portnum mix:" in text
+    assert "NODEINFO" in text
+
+
+def test_capture_stats_cli_bad_source_errors(capsys):
+    import pytest
+
+    from meshtastic_mcp import __main__ as cli
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["capture-stats", "/nonexistent/path.db"])
+    assert exc.value.code == 1
+    assert "error:" in capsys.readouterr().err
