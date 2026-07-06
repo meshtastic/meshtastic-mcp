@@ -2465,6 +2465,7 @@ _DESTRUCTIVE = {
     "replay_stop",
     "replay_inject",  # emits packets onto the live connection
     "replay_inject_beacon",  # emits a MESH_BEACON_APP packet
+    "replay_inject_fileinfo",  # emits a FileInfo FromRadio onto the live connection
     "replay_inject_traceroute",  # emits a TRACEROUTE_APP RouteDiscovery packet
     "replay_inject_waypoint",  # emits a WAYPOINT_APP packet (with optional geofence)
     "local_model_serve",  # spawns a detached llama-server process (and may install it)
