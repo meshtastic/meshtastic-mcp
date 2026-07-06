@@ -225,3 +225,26 @@ def test_sim_observer_integration() -> None:
     assert 0 < len(ids) < len(truth_ids)  # loss happened
     assert any(v > 1 for v in ids.values())  # rebroadcast duplicates happened
     assert rf_meta > 0 and mqtt > 0
+
+
+def test_fading_gate_creates_gap_tails() -> None:
+    """The Gilbert-Elliott fading gate produces the heavy inter-arrival tails
+    real gateway captures show (bursts of loss -> long silent gaps)."""
+    packets, positions = _fleet(4000, 100, 800)
+    base = ObserverParams(lat=OBS_LAT, lon=OBS_LON, seed=17)
+    faded = ObserverParams(
+        lat=OBS_LAT, lon=OBS_LON, seed=17, fade_good_s=120.0, fade_bad_s=90.0, fade_bad_loss=0.95
+    )
+    out_base = observe(packets, positions, base)
+    out_faded = observe(packets, positions, faded)
+    assert len(out_faded) < len(out_base)  # fading removes traffic
+
+    def max_gap(rows):
+        import itertools
+
+        ts = [t for t, _b, _c in rows]
+        return max((b - a for a, b in itertools.pairwise(ts)), default=0)
+
+    # bad-state dwells carve visible silences into the stream
+    assert max_gap(out_faded) > max_gap(out_base)
+    assert max_gap(out_faded) >= 30

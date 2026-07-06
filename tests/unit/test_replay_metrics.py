@@ -217,3 +217,102 @@ def test_golden_profiles_capture_the_calibration_targets():
     # both: text has a long tail our sim must reproduce
     assert dc["text"]["len"]["max"] > 200
     assert bm["text"]["len"]["max"] > 200
+
+
+# ── WS3/WS-T: temporal coherence + sensor telemetry ──────────────────────────
+
+
+def _telemetry(cap, variant):
+    from meshtastic.protobuf import telemetry_pb2
+
+    for _t, raw, _ch in cap.packets:
+        mp = mesh_pb2.MeshPacket()
+        mp.ParseFromString(raw)
+        if mp.WhichOneof("payload_variant") != "decoded" or mp.decoded.portnum != 67:
+            continue
+        tel = telemetry_pb2.Telemetry()
+        tel.ParseFromString(mp.decoded.payload)
+        if tel.WhichOneof("variant") == variant:
+            yield tel
+
+
+def test_battery_population_is_bimodal_with_zero_spike():
+    from collections import Counter
+
+    cap = sim.generate(nodes=400, days=2, seed=3, start=1_700_000_000)
+    levels = Counter(
+        min(t.device_metrics.battery_level, 101) for t in _telemetry(cap, "device_metrics")
+    )
+    assert levels[101] > 0  # plugged mode
+    assert levels[0] > 0  # drained-to-zero spike (real captures show both)
+    curve = sum(v for k, v in levels.items() if 0 < k < 101)
+    assert curve > 0  # and a discharge curve in between
+
+
+def test_chutil_tracks_generated_load():
+    import math
+    import statistics
+    from collections import Counter, defaultdict
+
+    start = 1_700_000_000
+    cap = sim.generate(nodes=400, days=2, seed=3, start=start)
+    by_hour_n = Counter((t - start) // 3600 for t, _r, _c in cap.packets)
+    by_hour_util = defaultdict(list)
+    for _t, raw, _ch in cap.packets:
+        mp = mesh_pb2.MeshPacket()
+        mp.ParseFromString(raw)
+        if mp.WhichOneof("payload_variant") == "decoded" and mp.decoded.portnum == 67:
+            from meshtastic.protobuf import telemetry_pb2
+
+            tel = telemetry_pb2.Telemetry()
+            tel.ParseFromString(mp.decoded.payload)
+            if tel.WhichOneof("variant") == "device_metrics":
+                h = (tel.time - start) // 3600
+                by_hour_util[h].append(tel.device_metrics.channel_utilization)
+    hours = sorted(h for h in by_hour_util if len(by_hour_util[h]) >= 3)
+    xs = [by_hour_n[h] for h in hours]
+    ys = [statistics.mean(by_hour_util[h]) for h in hours]
+    mx, my = statistics.mean(xs), statistics.mean(ys)
+    cov = sum((a - mx) * (b - my) for a, b in zip(xs, ys, strict=True))
+    rho = cov / math.sqrt(sum((a - mx) ** 2 for a in xs) * sum((b - my) ** 2 for b in ys))
+    assert rho > 0.5, f"chutil should track the diurnal load envelope (rho={rho:.2f})"
+
+
+def test_env_telemetry_personas_and_nan():
+    import math
+
+    cap = sim.generate(nodes=400, days=2, seed=3, start=1_700_000_000)
+    envs = list(_telemetry(cap, "environment_metrics"))
+    assert envs
+    # every persona reports temperature; only subsets report lux/humidity/pressure
+    assert all(t.environment_metrics.HasField("temperature") for t in envs)
+    n_lux = sum(t.environment_metrics.HasField("lux") for t in envs)
+    n_hum = sum(t.environment_metrics.HasField("relative_humidity") for t in envs)
+    assert 0 < n_lux < len(envs)
+    assert 0 < n_hum < len(envs)
+    # a boosted NaN fraction survives serialization (real sensors emit NaN)
+    prof = {"climate": {"t_mean": 22.0, "t_amp": 9.0, "pressure_hpa": 780.0, "nan_fraction": 0.5}}
+    cap2 = sim.generate(nodes=400, days=2, seed=3, start=1_700_000_000, profile=prof)
+    hums = [
+        t.environment_metrics.relative_humidity
+        for t in _telemetry(cap2, "environment_metrics")
+        if t.environment_metrics.HasField("relative_humidity")
+    ]
+    assert sum(math.isnan(h) for h in hums) > 0
+
+
+def test_text_spike_multiplies_hourly_budget():
+    from collections import Counter
+
+    start = 1_700_000_000
+    prof = {"spikes": [{"start_h": 10, "hours": 2, "text_x": 10.0}]}
+    cap = sim.generate(nodes=300, days=1, seed=5, start=start, profile=prof)
+    texts = Counter()
+    for t, raw, _ch in cap.packets:
+        mp = mesh_pb2.MeshPacket()
+        mp.ParseFromString(raw)
+        if mp.WhichOneof("payload_variant") == "decoded" and mp.decoded.portnum == 1:
+            texts[(t - start) // 3600] += 1
+    spike = (texts[10] + texts[11]) / 2
+    rest = [v for h, v in texts.items() if h not in (10, 11)]
+    assert spike > 2 * max(rest, default=0)

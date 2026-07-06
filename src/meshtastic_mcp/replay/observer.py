@@ -85,6 +85,13 @@ class ObserverParams:
         (6, 0.01),
     )
     mqtt_fraction: float = 0.0  # independent chance a copy also arrives via MQTT bridge
+    # Gilbert-Elliott fading gate: the gateway alternates good/bad reception
+    # states (collision storms, duty-cycle deafness, interference bursts).
+    # ``fade_good_s`` == 0 disables fading. Fading is what produces the real
+    # captures' heavy inter-arrival tails (p99 ~35 s, max gaps of minutes).
+    fade_good_s: float = 0.0  # mean dwell in the good state (seconds)
+    fade_bad_s: float = 45.0  # mean dwell in the bad state (seconds)
+    fade_bad_loss: float = 0.85  # extra RF loss applied while in the bad state
     seed: int = 0
 
 
@@ -154,7 +161,20 @@ def observe(
     dup_wts = [w for _, w in params.dup_weights]
     out: list[tuple[int, bytes, str]] = []
 
+    fading = params.fade_good_s > 0
+    good = True
+    switch_t = 0.0
+    if fading:
+        packets = sorted(packets, key=lambda p: p[0])
+        if packets:
+            switch_t = packets[0][0] + rng.expovariate(1.0 / params.fade_good_s)
+
     for t, raw, channel in packets:
+        if fading:
+            while t >= switch_t:
+                good = not good
+                dwell = params.fade_good_s if good else params.fade_bad_s
+                switch_t += rng.expovariate(1.0 / dwell)
         mp = mesh_pb2.MeshPacket()
         try:
             mp.ParseFromString(raw)
@@ -176,6 +196,8 @@ def observe(
         p_rx = (1.0 - params.loss_floor) * _sigmoid(
             (rssi - params.sensitivity_dbm) / params.softness_db
         )
+        if fading and not good:
+            p_rx *= 1.0 - params.fade_bad_loss
         rf_heard = rng.random() < p_rx
         mqtt_heard = rng.random() < params.mqtt_fraction
         if not rf_heard and not mqtt_heard:

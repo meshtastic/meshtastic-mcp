@@ -110,6 +110,18 @@ PROFILE: dict = {
     "hop_start_weights": [("3", 80), ("4", 8), ("7", 6), ("2", 4), ("5", 2)],
     # Text DMs are rare on-air (BM ~3.4%; DC DMs are PKI-invisible).
     "text_dm_fraction": 0.03,
+    # Scripted traffic spikes (keynote, emergency): each entry multiplies the
+    # text budget inside [start_h, start_h + hours) from the capture start.
+    "spikes": [],
+    # Venue climate for environment telemetry: diurnal temperature sinusoid
+    # (peak mid-afternoon), humidity anti-correlated, pressure around the
+    # venue-altitude mode. BM measured 8..55 C, humidity with real NaNs.
+    "climate": {"t_mean": 22.0, "t_amp": 9.0, "pressure_hpa": 780.0, "nan_fraction": 0.02},
+    # Battery population: fraction running on wall/solar power (reports 101);
+    # the rest discharge at a per-node %/hour rate and bottom out at 0
+    # (real captures show both a 101 mode and a 0 spike). Infra is always
+    # plugged and emits disproportionately, so the client fraction stays low.
+    "plugged_fraction": 0.12,
     # Observed text volume across the real captures was ~2.2 msgs/hr per 150
     # nodes (gateway-observed, an undercount); 4 keeps conference channels lively
     # while staying close to reality.
@@ -440,6 +452,12 @@ def generate(
         # the factor scales a node's beacon cadence below.
         talk = min(25.0, max(0.25, rng.lognormvariate(0.0, 0.9)))
         infra = role.startswith("ROUTER") or role == "SENSOR"
+        # Battery persona: plugged nodes report 101; the rest discharge at a
+        # per-node rate and bottom out at 0 (both modes appear in real data).
+        if infra or rng.random() < P["plugged_fraction"]:
+            batt = (101.0, 0.0)
+        else:
+            batt = (rng.uniform(40.0, 100.0), rng.uniform(2.0, 10.0))
         if role.startswith("ROUTER"):
             talk *= 8.0
         elif role == "SENSOR":
@@ -475,6 +493,10 @@ def generate(
                 "mobile": mobile,
                 "talk": talk,
                 "hop_start": int(_weighted(rng, P["hop_start_weights"])),
+                "batt": batt,
+                # per-node chutil gain: what fraction of the mesh's airtime this
+                # node's radio actually hears (distance/terrain dependent)
+                "ch_gain": rng.uniform(0.1, 0.9),
                 "join_t": start_epoch + int(join_h * 3600),
                 "leave_t": start_epoch + int((join_h + stay_h) * 3600),
             }
@@ -488,6 +510,8 @@ def generate(
     # packet-id counter is local so a given (seed, nodes, days, start) is
     # byte-for-byte reproducible across calls in the same process
     pid_counter = itertools.count(0x10000001)
+
+    tel_pending: list[tuple[int, dict]] = []
 
     def add(t, frm, to, pn, payload, ch="LongFast", hop=None, want_response=False):
         # hop_limit derives from the sender's configured hop_start minus a
@@ -542,12 +566,12 @@ def generate(
             if m["role"].startswith("ROUTER")
             else P["pos_interval"]["default"]
         )
-        # Talkativeness skews *social* traffic hard, but periodic beacons only
-        # mildly (position cadence is device config, not personality) — real
-        # position intervals sit near the firmware defaults (p50 ~10 min).
-        beacon_talk = talk**0.35
-        pos_iv = max(30, pos_iv / beacon_talk)
-        tel_iv = max(60, P["telemetry_interval"] / beacon_talk)
+        # Talkativeness skews *social* traffic hard, but position beacons only
+        # mildly, and telemetry not at all — telemetry cadence is a fixed
+        # firmware default for every role (infra dominance in real captures
+        # comes from persistent presence, not a faster clock).
+        pos_iv = max(30, pos_iv / talk**0.35)
+        tel_iv = P["telemetry_interval"]
         t = jt + rng.randint(0, 300)
         while t < node_end:
             if rng.random() < _activity(hod(t)) + 0.1:
@@ -556,7 +580,9 @@ def generate(
         t = jt + rng.randint(0, 600)
         while t < node_end:
             if rng.random() < _activity(hod(t)) + 0.15:
-                add(t, m["num"], BROADCAST, 67, _pl_tel_device(rng, t))
+                # deferred: chutil is derived from the *actual* generated
+                # airtime, so device telemetry is emitted in a second pass
+                tel_pending.append((t, m))
             t += int(tel_iv * rng.uniform(0.8, 1.2))
         t = jt + P["nodeinfo_refresh"]
         while t < node_end:
@@ -594,9 +620,11 @@ def generate(
     env_extra = [m for m in meta if rng.random() < P["env_sensor_fraction"]]
     env_nodes = list({m["num"]: m for m in sensors + routers[:3] + env_extra}.values())
     for m in env_nodes:
+        # sensor persona: which fields this board reports, fixed per node
+        persona = _weighted(rng, _ENV_PERSONAS)
         t = start_epoch + rng.randint(0, P["env_interval"])
         while t < end_epoch:
-            add(t, m["num"], BROADCAST, 67, _pl_tel_env(rng, t))
+            add(t, m["num"], BROADCAST, 67, _pl_tel_env(rng, P["climate"], persona, hod(t), t))
             if rng.random() < 0.9:
                 add(t + 5, m["num"], BROADCAST, 67, _pl_tel_power(rng, t))
             t += int(P["env_interval"] * rng.uniform(0.8, 1.2))
@@ -630,13 +658,20 @@ def generate(
         if rng.random() < 0.7:
             add(t + rng.randint(1, 4), nb["num"], na["num"], 5, _pl_routing_ack(), hop=0)
 
-    # -- text chatter --
+    # -- text chatter: conversation bursts, not a uniform smear. A burst is a
+    # few nodes trading messages ~45 s apart on one channel (real inter-arrival
+    # is heavy-tailed: replies cluster within minutes, then silence). Scripted
+    # spikes (keynote / emergency) multiply the hourly budget. --
     base = P["text_base_msgs_per_hour"] * (nodes / 150.0) * text_scale
+    spikes = P.get("spikes") or []
     for hour in range(days * 24):
         t0 = start_epoch + hour * 3600
-        n_msgs = int(rng.gauss(base * _text_env(hod(t0)), base * 0.25))
-        for _ in range(max(0, n_msgs)):
-            t = t0 + rng.randint(0, 3599)
+        mult = 1.0
+        for sp in spikes:
+            if sp["start_h"] <= hour < sp["start_h"] + sp["hours"]:
+                mult *= sp.get("text_x", 1.0)
+        budget = int(rng.gauss(base * _text_env(hod(t0)) * mult, base * 0.25))
+        while budget > 0:
             ch = _weighted(
                 rng,
                 [
@@ -650,13 +685,19 @@ def generate(
             )
             if ch not in ch_index:
                 ch = "LongFast"
-            sender = rng.choice(node_rows)
-            text = _pick_text(rng, ch, node_rows)
-            dm = rng.random() < P["text_dm_fraction"]
-            to = rng.choice(node_rows).num if dm else BROADCAST
-            add(t, sender.num, to, 1, text.encode("utf-8"), ch=ch)
-            if dm and rng.random() < P["ack_ratio"]:
-                add(t + rng.randint(1, 5), to, sender.num, 5, _pl_routing_ack(), ch=ch, hop=0)
+            burst = min(budget, max(1, int(rng.lognormvariate(0.9, 0.8))))
+            budget -= burst
+            t = t0 + rng.randint(0, 3599)
+            party = rng.sample(node_rows, min(len(node_rows), rng.randint(2, 4)))
+            for _ in range(burst):
+                sender = rng.choice(party)
+                text = _pick_text(rng, ch, node_rows)
+                dm = rng.random() < P["text_dm_fraction"]
+                to = rng.choice(node_rows).num if dm else BROADCAST
+                add(t, sender.num, to, 1, text.encode("utf-8"), ch=ch)
+                if dm and rng.random() < P["ack_ratio"]:
+                    add(t + rng.randint(1, 5), to, sender.num, 5, _pl_routing_ack(), ch=ch, hop=0)
+                t += 2 + int(rng.expovariate(1 / 45.0))
 
     # -- waypoints (some with geofence fields for client enter/exit alert testing) --
     pois = [
@@ -680,33 +721,6 @@ def generate(
                 ch="MeshCon" if "MeshCon" in ch_index else "LongFast",
                 hop=4,
             )
-
-    # -- encrypted/foreign traffic: packets on channels the viewer can't decode,
-    # from "heard but unknown" neighbor nodes (no NodeInfo). The fraction is of
-    # the *final* stream (DEF CON ran ~45%; default keeps it moderate). --
-    frac = P.get("encrypted_fraction", 0.0)
-    if frac > 0 and packets:
-        n_enc = int(len(packets) * frac / max(1e-6, 1.0 - frac))
-        foreign = [rng.randint(0x10000000, 0xEFFFFFFF) for _ in range(max(5, nodes // 8))]
-        foreign_hs = {f: int(_weighted(rng, P["hop_start_weights"])) for f in foreign}
-        # a handful of foreign channels, each with a realistic OTA hash byte
-        foreign_hashes = [rng.randint(1, 255) for _ in range(rng.randint(2, 4))]
-        added = attempts = 0
-        while added < n_enc and attempts < n_enc * 10:
-            attempts += 1
-            t = rng.randint(start_epoch, end_epoch - 1)
-            # foreign mesh traffic is largely independent of our conference rhythm
-            if rng.random() > _activity(hod(t)) * 0.4 + 0.6:
-                continue
-            f = rng.choice(foreign)
-            packets.append(
-                (
-                    t,
-                    _mp_enc(rng, next(pid_counter), f, foreign_hs[f], rng.choice(foreign_hashes)),
-                    "LongFast",
-                )
-            )
-            added += 1
 
     # -- range test: a couple of nodes beacon sequence numbers (DEF CON had ~4%) --
     for m in rng.sample(meta, min(len(meta), 2)):
@@ -763,6 +777,43 @@ def generate(
                 hop=3,
             )
             t += int(beacon_iv * rng.uniform(0.85, 1.15))
+
+    # -- device telemetry second pass: chutil tracks the actual per-hour
+    # generated load (real chutil follows the diurnal traffic envelope) --
+    hour_hist: dict[int, int] = {}
+    for t, _raw, _ch in packets:
+        hour_hist[(t - start_epoch) // 3600] = hour_hist.get((t - start_epoch) // 3600, 0) + 1
+    peak_rate = max(hour_hist.values()) if hour_hist else 1
+    for t, m in tel_pending:
+        load = hour_hist.get((t - start_epoch) // 3600, 0) / peak_rate
+        add(t, m["num"], BROADCAST, 67, _pl_tel_device(rng, m, t, load))
+
+    # -- encrypted/foreign traffic: packets on channels the viewer can't decode,
+    # from "heard but unknown" neighbor nodes (no NodeInfo). The fraction is of
+    # the *final* stream (DEF CON ran ~45%; default keeps it moderate). --
+    frac = P.get("encrypted_fraction", 0.0)
+    if frac > 0 and packets:
+        n_enc = int(len(packets) * frac / max(1e-6, 1.0 - frac))
+        foreign = [rng.randint(0x10000000, 0xEFFFFFFF) for _ in range(max(5, nodes // 8))]
+        foreign_hs = {f: int(_weighted(rng, P["hop_start_weights"])) for f in foreign}
+        # a handful of foreign channels, each with a realistic OTA hash byte
+        foreign_hashes = [rng.randint(1, 255) for _ in range(rng.randint(2, 4))]
+        added = attempts = 0
+        while added < n_enc and attempts < n_enc * 10:
+            attempts += 1
+            t = rng.randint(start_epoch, end_epoch - 1)
+            # foreign mesh traffic is largely independent of our conference rhythm
+            if rng.random() > _activity(hod(t)) * 0.4 + 0.6:
+                continue
+            f = rng.choice(foreign)
+            packets.append(
+                (
+                    t,
+                    _mp_enc(rng, next(pid_counter), f, foreign_hs[f], rng.choice(foreign_hashes)),
+                    "LongFast",
+                )
+            )
+            added += 1
 
     packets.sort(key=lambda p: p[0])
 
@@ -897,14 +948,17 @@ _PRECISION_WEIGHTS = [
 ]
 
 
-def _chutil(rng: random.Random) -> float:
-    # skewed low with a modest high tail (BM observed p50 ~7, p90 ~23, max ~39)
-    r = rng.random()
-    if r < 0.7:
-        return round(rng.uniform(1, 15), 3)
-    if r < 0.95:
-        return round(rng.uniform(15, 28), 3)
-    return round(rng.uniform(28, 45), 3)
+# Env-sensor personas: which fields a given board reports, with weights fit to
+# the observed field-presence ratios (BM: temperature 100%, lux 63%, humidity
+# 36%, pressure 17%, gas/IAQ 3.4%). T=temp L=lux H=humidity P=pressure G=gas+IAQ.
+_ENV_PERSONAS = [
+    ("TL", 40),
+    ("T", 20),
+    ("TLH", 15),
+    ("THP", 12),
+    ("TLHP", 8),
+    ("THPG", 4),
+]
 
 
 def _pl_position(rng, m, t):
@@ -929,32 +983,69 @@ def _pl_nodeinfo(nr: NodeRow):
     return u.SerializeToString()
 
 
-def _pl_tel_device(rng, t):
+def _pl_tel_device(rng, m, t, load):
+    """Device metrics with per-node battery state and load-derived chutil.
+
+    ``load`` is this hour's generated traffic normalised to the busiest hour,
+    so channel utilisation tracks the actual diurnal envelope (BM observed
+    p50 ~7, p90 ~23, max ~39). Battery follows the node's persona: plugged
+    nodes report 101; discharging nodes drain linearly and bottom out at 0.
+    """
     tm = telemetry_pb2.Telemetry()
     tm.time = t
     d = tm.device_metrics
-    # ~half of nodes report 101 (plugged in / charging); the rest spread 30-99
-    d.battery_level = 101 if rng.random() < 0.45 else rng.randint(30, 99)
-    d.voltage = (
-        0.0 if d.battery_level == 101 and rng.random() < 0.3 else round(rng.uniform(3.5, 4.2), 3)
+    start, rate = m["batt"]
+    if start >= 101:
+        d.battery_level = 101
+        d.voltage = 0.0 if rng.random() < 0.4 else round(rng.uniform(3.9, 4.25), 3)
+    else:
+        hours = max(0.0, (t - m["join_t"]) / 3600.0)
+        lvl = max(0, int(start - rate * hours))
+        d.battery_level = lvl
+        d.voltage = round(3.0 + 1.25 * lvl / 100.0 + rng.uniform(-0.05, 0.05), 3)
+    gain = m.get("ch_gain", 0.5)
+    d.channel_utilization = round(
+        min(60.0, 0.8 + 36.0 * load**1.6 * gain * rng.uniform(0.8, 1.2)), 3
     )
-    d.channel_utilization = _chutil(rng)
     # air-util skews very low; occasional busy node
     d.air_util_tx = round(
         rng.uniform(0.0, 0.2) if rng.random() < 0.85 else rng.uniform(0.2, 6.0), 4
     )
-    d.uptime_seconds = rng.randint(60, 400000)
+    d.uptime_seconds = max(60, t - m["join_t"] + rng.randint(0, 900))
     return tm.SerializeToString()
 
 
-def _pl_tel_env(rng, t):
+def _pl_tel_env(rng, climate, persona, hod_f, t):
+    """Environment metrics from the venue climate model + the node's persona.
+
+    Temperature is a diurnal sinusoid (peak mid-afternoon), humidity is
+    anti-correlated with temperature and occasionally NaN (real sensors emit
+    NaN — clients must cope), lux follows solar elevation, pressure random-
+    walks around the venue-altitude mode.
+    """
     tm = telemetry_pb2.Telemetry()
     tm.time = t
     e = tm.environment_metrics
-    e.temperature = round(rng.uniform(12, 33), 2)
-    e.relative_humidity = round(rng.uniform(8, 40), 2)
-    e.barometric_pressure = round(rng.uniform(770, 790), 2)
-    e.voltage = round(rng.uniform(3.7, 4.2), 3)
+    temp = (
+        climate["t_mean"]
+        + climate["t_amp"] * math.cos(2.0 * math.pi * (hod_f - 15.0) / 24.0)
+        + rng.gauss(0.0, 0.8)
+    )
+    e.temperature = round(temp, 2)
+    if "H" in persona:
+        if rng.random() < climate.get("nan_fraction", 0.0):
+            e.relative_humidity = float("nan")
+        else:
+            hum = 75.0 - 1.8 * (temp - 10.0) + rng.gauss(0.0, 6.0)
+            e.relative_humidity = round(min(96.0, max(4.0, hum)), 2)
+    if "P" in persona:
+        e.barometric_pressure = round(climate["pressure_hpa"] + rng.gauss(0.0, 2.5), 2)
+    if "L" in persona:
+        sun = math.sin(math.pi * (hod_f - 6.0) / 12.0) if 6.0 <= hod_f <= 18.0 else 0.0
+        e.lux = round(max(0.0, sun) * rng.uniform(20000.0, 90000.0) + rng.uniform(0.0, 40.0), 2)
+    if "G" in persona:
+        e.gas_resistance = round(rng.uniform(10000.0, 200000.0), 1)
+        e.iaq = rng.randint(10, 150)
     return tm.SerializeToString()
 
 
