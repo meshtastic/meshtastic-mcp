@@ -32,8 +32,7 @@ PROFILES = REPO / "src" / "meshtastic_mcp" / "replay" / "profiles"
 # committed (see .gitignore); the tests that assert against them skip when the
 # files are absent (e.g. in CI).
 requires_profiles = pytest.mark.skipif(
-    not (PROFILES / "burningman2025.json").exists()
-    or not (PROFILES / "defcon33.json").exists(),
+    not (PROFILES / "burningman2025.json").exists() or not (PROFILES / "defcon33.json").exists(),
     reason="locally generated golden profiles not present",
 )
 

@@ -71,20 +71,45 @@ PROFILE: dict = {
         ("STATION_G2", 3),
         ("NANO_G2_ULTRA", 1),
     ],
+    # Role mix from the real node DBs: events run ~6-13 routers per 1600 nodes,
+    # not dozens — the first 8 sim nodes are always infra, extras stay rare.
     "role_weights": [
-        ("CLIENT", 88),
-        ("CLIENT_MUTE", 6),
-        ("TRACKER", 2),
-        ("ROUTER", 2),
-        ("ROUTER_LATE", 1),
-        ("SENSOR", 1),
+        ("CLIENT", 880),
+        ("CLIENT_MUTE", 40),
+        ("TRACKER", 15),
+        ("SENSOR", 10),
+        ("ROUTER_CLIENT", 4),
+        ("CLIENT_HIDDEN", 4),
+        ("ROUTER", 3),
+        ("ROUTER_LATE", 3),
     ],
     "channels": ["LongFast", "MeshCon", "Talks", "Swap", "Hax", "Staff"],
     # periodic intervals (seconds) — Meshtastic firmware-default cadences
     "pos_interval": {"mobile": 300, "router": 1800, "default": 900},
-    "telemetry_interval": 900,
+    "telemetry_interval": 1800,
     "nodeinfo_refresh": 10800,
-    "neighborinfo_interval": 14400,
+    # NodeInfo economy — real meshes are NODEINFO-dominated (~35% of decoded
+    # traffic) because arrivals trigger want_response exchange storms and nodes
+    # keep re-requesting unknowns. Pairs per arrival + a background cadence.
+    "nodeinfo_exchange_pairs": (2, 6),
+    "nodeinfo_background_interval": 2700,
+    # Routing ACK economy: acks per ack-eligible event (DM text, traceroute,
+    # want_response exchange) plus a per-node background reliable-delivery hum.
+    "ack_ratio": 0.8,
+    "ack_background_interval": 3600,
+    # NeighborInfo is off by default in real firmware — only infra + a sliver
+    # of enthusiasts emit it (BM: 0.04% of traffic).
+    "neighborinfo_interval": 21600,
+    "neighborinfo_fraction": 0.005,
+    # ~3.5% of real nodes carry environment sensors (they are mostly CLIENTs
+    # with a BME/lux board attached, not SENSOR-role nodes).
+    "env_sensor_fraction": 0.035,
+    "env_interval": 10800,
+    # Per-node radio config: most run the default 3 hops, a subpopulation
+    # cranks it to 7 (observed at DEF CON), infra often uses 4.
+    "hop_start_weights": [("3", 80), ("4", 8), ("7", 6), ("2", 4), ("5", 2)],
+    # Text DMs are rare on-air (BM ~3.4%; DC DMs are PKI-invisible).
+    "text_dm_fraction": 0.03,
     # Observed text volume across the real captures was ~2.2 msgs/hr per 150
     # nodes (gateway-observed, an undercount); 4 keeps conference channels lively
     # while staying close to reality.
@@ -122,6 +147,15 @@ _SHORT = [
     "where you at",
     "radio check",
     "73",
+    # medium one-liners — real short messages skew a bit longer (p50 ~18-25)
+    "on my way back to camp",
+    "meet at the coffee truck?",
+    "anyone got a spare battery pack",
+    "heading to the north arm now",
+    "signal is great from up here",
+    "save me a seat at the talk",
+    "who else is hearing this hop",
+    "back online, swapped batteries",
 ]
 
 KM_PER_DEG_LAT = 110.574
@@ -275,39 +309,75 @@ def _text_env(hod: float) -> float:
     return base * 0.25
 
 
-# Observed hop_limit distribution across the real captures (gateways see packets
-# at varying remaining hops); used so the app's "hops away" looks realistic.
-_HOP_WEIGHTS = [(3, 32), (2, 28), (1, 26), (0, 20), (4, 14), (5, 1)]
+# How many hops a packet has already taken when the observer hears it (drives
+# hop_limit = hop_start - taken); matches the observed remaining-hop spread.
+_HOPS_TAKEN_WEIGHTS = [(0, 30), (1, 28), (2, 22), (3, 14), (4, 5), (5, 1)]
+
+# Per-portnum MeshPacket.priority (matches firmware behaviour: periodic beacons
+# are BACKGROUND, text is DEFAULT, ACKs are ACK, admin/traceroute RELIABLE).
+_PRIORITY = {1: 64, 5: 120, 6: 70, 70: 70}
+_PRIORITY_DEFAULT = 10  # BACKGROUND
 
 
-def _hop(rng: random.Random) -> int:
-    return int(_weighted(rng, [(str(h), w) for h, w in _HOP_WEIGHTS]))
+def _hops_taken(rng: random.Random, hop_start: int) -> int:
+    return min(hop_start, int(_weighted(rng, [(str(h), w) for h, w in _HOPS_TAKEN_WEIGHTS])))
 
 
-def _mp(frm, to, portnum, payload, hop_limit, ch_idx) -> bytes:
+def _mp(
+    frm,
+    to,
+    portnum,
+    payload,
+    hop_limit,
+    hop_start,
+    ch_idx,
+    *,
+    priority: int = 0,
+    want_response: bool = False,
+) -> bytes:
     mp = mesh_pb2.MeshPacket()
     setattr(mp, "from", frm & 0xFFFFFFFF)
     mp.to = to & 0xFFFFFFFF
     mp.id = next(_pid) & 0xFFFFFFFF
-    mp.hop_limit = max(0, hop_limit)
-    mp.hop_start = max(mp.hop_limit, 3)
+    mp.hop_start = max(0, hop_start)
+    mp.hop_limit = max(0, min(hop_limit, mp.hop_start))
     mp.channel = ch_idx
+    if priority:
+        mp.priority = priority
     mp.decoded.portnum = portnum
     mp.decoded.payload = payload
+    if want_response:
+        mp.decoded.want_response = True
     return mp.SerializeToString()
 
 
-def _mp_enc(rng, frm, hop_limit, ch_idx) -> bytes:
+# Encrypted-payload sizes mirror the underlying portnum mix (position ~24-32 B,
+# nodeinfo ~64-80 B, telemetry ~32 B, text variable with a long tail).
+_ENC_LEN_WEIGHTS = [
+    ("24", 30),
+    ("32", 25),
+    ("48", 15),
+    ("64", 10),
+    ("80", 8),
+    ("120", 6),
+    ("180", 4),
+    ("232", 2),
+]
+
+
+def _mp_enc(rng, frm, hop_start, ch_hash) -> bytes:
     """An encrypted (undecodable) packet — models traffic on a channel/key the
-    viewer lacks (a real mesh is ~40% such 'neighbor' traffic)."""
+    viewer lacks (DEF CON ran ~45% such 'foreign' traffic). ``ch_hash`` is the
+    OTA channel-hash byte a real radio would report (not a settings index)."""
     mp = mesh_pb2.MeshPacket()
     setattr(mp, "from", frm & 0xFFFFFFFF)
     mp.to = 0xFFFFFFFF
     mp.id = next(_pid) & 0xFFFFFFFF
-    mp.hop_limit = max(0, hop_limit)
-    mp.hop_start = max(mp.hop_limit, 3)
-    mp.channel = ch_idx
-    mp.encrypted = bytes(rng.randint(0, 255) for _ in range(rng.randint(16, 48)))
+    mp.hop_start = max(0, hop_start)
+    mp.hop_limit = max(0, hop_start - _hops_taken(rng, hop_start))
+    mp.channel = ch_hash & 0xFF
+    base = int(_weighted(rng, _ENC_LEN_WEIGHTS))
+    mp.encrypted = bytes(rng.randint(0, 255) for _ in range(max(16, base + rng.randint(-6, 6))))
     return mp.SerializeToString()
 
 
@@ -398,6 +468,7 @@ def generate(
                 "role": role,
                 "mobile": mobile,
                 "talk": talk,
+                "hop_start": int(_weighted(rng, P["hop_start_weights"])),
                 "join_t": start_epoch + int(join_h * 3600),
                 "leave_t": start_epoch + int((join_h + stay_h) * 3600),
             }
@@ -406,14 +477,32 @@ def generate(
     packets: list[tuple[int, bytes, str]] = []
     routers = [m for m in meta if m["role"].startswith("ROUTER")]
     sensors = [m for m, nr in zip(meta, node_rows, strict=False) if nr.role == "SENSOR"]
+    by_num = {nr.num: nr for nr in node_rows}
+    hop_starts = {m["num"]: m["hop_start"] for m in meta}
 
-    def add(t, frm, to, pn, payload, ch="LongFast", hop=None):
-        # default: a realistic per-packet hop_limit (gateways see varied remaining
-        # hops); callers pass an explicit hop for DMs/ACKs/traceroute.
-        h = _hop(rng) if hop is None else hop
-        packets.append((t, _mp(frm, to, pn, payload, h, ch_index.get(ch, 0)), ch))
-
-    {nr.num: nr for nr in node_rows}
+    def add(t, frm, to, pn, payload, ch="LongFast", hop=None, want_response=False):
+        # hop_limit derives from the sender's configured hop_start minus a
+        # realistic hops-already-taken draw; callers pass an explicit remaining
+        # `hop` for DMs/ACKs/traceroute (clamped to the sender's hop_start).
+        hs = hop_starts.get(frm & 0xFFFFFFFF, 3)
+        hl = (hs - _hops_taken(rng, hs)) if hop is None else min(hop, hs)
+        packets.append(
+            (
+                t,
+                _mp(
+                    frm,
+                    to,
+                    pn,
+                    payload,
+                    max(0, hl),
+                    hs,
+                    ch_index.get(ch, 0),
+                    priority=_PRIORITY.get(pn, _PRIORITY_DEFAULT),
+                    want_response=want_response,
+                ),
+                ch,
+            )
+        )
 
     # -- periodic per-node traffic (only while the node is present) --
     for m, nr in zip(meta, node_rows, strict=False):
@@ -421,6 +510,20 @@ def generate(
         node_end = min(end_epoch, m["leave_t"])
         if jt < node_end:
             add(jt, m["num"], BROADCAST, 4, _pl_nodeinfo(nr))
+            # arrival exchange storm: peers swap NodeInfo with the newcomer
+            # (want_response request -> reply, sometimes a routing ACK). This
+            # is what makes real meshes NODEINFO-dominated.
+            k = rng.randint(*P["nodeinfo_exchange_pairs"])
+            for peer in rng.sample(meta, min(len(meta), k + 1)):
+                if peer["num"] == m["num"]:
+                    continue
+                t0 = jt + rng.randint(2, 90)
+                peer_info = _pl_nodeinfo(by_num[peer["num"]])
+                add(t0, peer["num"], m["num"], 4, peer_info, want_response=True)
+                if rng.random() < 0.85:
+                    add(t0 + rng.randint(1, 6), m["num"], peer["num"], 4, _pl_nodeinfo(nr))
+                if rng.random() < P["ack_ratio"] * 0.4:
+                    add(t0 + rng.randint(2, 9), m["num"], peer["num"], 5, _pl_routing_ack(), hop=0)
         talk = m["talk"]
         pos_iv = (
             P["pos_interval"]["mobile"]
@@ -429,9 +532,12 @@ def generate(
             if m["role"].startswith("ROUTER")
             else P["pos_interval"]["default"]
         )
-        # chatty nodes beacon more often (skew), floored so nothing spams sub-15s
-        pos_iv = max(15, pos_iv / talk)
-        tel_iv = max(15, P["telemetry_interval"] / talk)
+        # Talkativeness skews *social* traffic hard, but periodic beacons only
+        # mildly (position cadence is device config, not personality) — real
+        # position intervals sit near the firmware defaults (p50 ~10 min).
+        beacon_talk = talk**0.35
+        pos_iv = max(30, pos_iv / beacon_talk)
+        tel_iv = max(60, P["telemetry_interval"] / beacon_talk)
         t = jt + rng.randint(0, 300)
         while t < node_end:
             if rng.random() < _activity(hod(t)) + 0.1:
@@ -446,18 +552,47 @@ def generate(
         while t < node_end:
             add(t, m["num"], BROADCAST, 4, _pl_nodeinfo(nr))
             t += int(P["nodeinfo_refresh"] * rng.uniform(0.8, 1.2))
+        # background NodeInfo exchanges: nodes keep requesting identities they
+        # don't know (churn means there is always someone unknown around)
+        t = jt + rng.randint(60, P["nodeinfo_background_interval"])
+        while t < node_end:
+            if rng.random() < _activity(hod(t)) + 0.2:
+                peer = rng.choice(meta)
+                if peer["num"] != m["num"]:
+                    add(t, m["num"], peer["num"], 4, _pl_nodeinfo(nr), want_response=True)
+                    if rng.random() < 0.8:
+                        add(
+                            t + rng.randint(1, 6),
+                            peer["num"],
+                            m["num"],
+                            4,
+                            _pl_nodeinfo(by_num[peer["num"]]),
+                        )
+            t += int(P["nodeinfo_background_interval"] * rng.uniform(0.7, 1.3))
+        # background reliable-delivery ACK hum (routing traffic tracks want_ack
+        # usage — BM ran ~12% ROUTING)
+        t = jt + rng.randint(0, P["ack_background_interval"])
+        while t < node_end:
+            if rng.random() < _activity(hod(t)):
+                other = rng.choice(meta)
+                if other["num"] != m["num"]:
+                    add(t, m["num"], other["num"], 5, _pl_routing_ack(), hop=0)
+            t += int(P["ack_background_interval"] * rng.uniform(0.7, 1.3))
 
-    # -- environment + power telemetry (sensors + a few routers) --
-    for m in sensors + routers[:3]:
-        t = start_epoch + rng.randint(0, 1800)
+    # -- environment + power telemetry: sensors, a few routers, plus the ~3.5%
+    # of ordinary nodes that carry an attached sensor board --
+    env_extra = [m for m in meta if rng.random() < P["env_sensor_fraction"]]
+    env_nodes = list({m["num"]: m for m in sensors + routers[:3] + env_extra}.values())
+    for m in env_nodes:
+        t = start_epoch + rng.randint(0, P["env_interval"])
         while t < end_epoch:
             add(t, m["num"], BROADCAST, 67, _pl_tel_env(rng, t))
-            if rng.random() < 0.4:
+            if rng.random() < 0.9:
                 add(t + 5, m["num"], BROADCAST, 67, _pl_tel_power(rng, t))
-            t += int(1800 * rng.uniform(0.8, 1.2))
+            t += int(P["env_interval"] * rng.uniform(0.8, 1.2))
 
-    # -- neighborinfo --
-    nbr = routers + [m for m in meta if rng.random() < 0.25]
+    # -- neighborinfo (off by default in real firmware: infra + a sliver) --
+    nbr = routers + [m for m in meta if rng.random() < P["neighborinfo_fraction"]]
     for m in nbr:
         t = start_epoch + rng.randint(0, 7200)
         while t < end_epoch:
@@ -474,7 +609,7 @@ def generate(
             t += int(P["neighborinfo_interval"] * rng.uniform(0.85, 1.15))
 
     # -- traceroutes + routing ACKs --
-    for _ in range(max(1, days * 24 * 4)):
+    for _ in range(max(1, days * 24 * 12)):
         t = rng.randint(start_epoch, end_epoch - 1)
         if rng.random() > _activity(hod(t)):
             continue
@@ -507,10 +642,10 @@ def generate(
                 ch = "LongFast"
             sender = rng.choice(node_rows)
             text = _pick_text(rng, ch, node_rows)
-            dm = rng.random() < 0.12
+            dm = rng.random() < P["text_dm_fraction"]
             to = rng.choice(node_rows).num if dm else BROADCAST
             add(t, sender.num, to, 1, text.encode("utf-8"), ch=ch)
-            if dm and rng.random() < 0.8:
+            if dm and rng.random() < P["ack_ratio"]:
                 add(t + rng.randint(1, 5), to, sender.num, 5, _pl_routing_ack(), ch=ch, hop=0)
 
     # -- waypoints (some with geofence fields for client enter/exit alert testing) --
@@ -537,17 +672,27 @@ def generate(
             )
 
     # -- encrypted/foreign traffic: packets on channels the viewer can't decode,
-    # from "heard but unknown" neighbor nodes (no NodeInfo) --
+    # from "heard but unknown" neighbor nodes (no NodeInfo). The fraction is of
+    # the *final* stream (DEF CON ran ~45%; default keeps it moderate). --
     frac = P.get("encrypted_fraction", 0.0)
     if frac > 0 and packets:
-        n_enc = int(len(packets) * frac)
+        n_enc = int(len(packets) * frac / max(1e-6, 1.0 - frac))
         foreign = [rng.randint(0x10000000, 0xEFFFFFFF) for _ in range(max(5, nodes // 8))]
-        for _ in range(n_enc):
+        foreign_hs = {f: int(_weighted(rng, P["hop_start_weights"])) for f in foreign}
+        # a handful of foreign channels, each with a realistic OTA hash byte
+        foreign_hashes = [rng.randint(1, 255) for _ in range(rng.randint(2, 4))]
+        added = attempts = 0
+        while added < n_enc and attempts < n_enc * 10:
+            attempts += 1
             t = rng.randint(start_epoch, end_epoch - 1)
             # foreign mesh traffic is largely independent of our conference rhythm
             if rng.random() > _activity(hod(t)) * 0.4 + 0.6:
                 continue
-            packets.append((t, _mp_enc(rng, rng.choice(foreign), _hop(rng), 0), "LongFast"))
+            f = rng.choice(foreign)
+            packets.append(
+                (t, _mp_enc(rng, f, foreign_hs[f], rng.choice(foreign_hashes)), "LongFast")
+            )
+            added += 1
 
     # -- range test: a couple of nodes beacon sequence numbers (DEF CON had ~4%) --
     for m in rng.sample(meta, min(len(meta), 2)):
@@ -557,7 +702,7 @@ def generate(
             if rng.random() < _activity(hod(t)):
                 seq += 1
                 add(t, m["num"], BROADCAST, 66, f"seq {seq}".encode())
-            t += int(rng.uniform(30, 90))
+            t += int(rng.uniform(150, 420))
 
     # -- paxcounter + storeforward + admin --
     for m in sensors[:3] or routers[:2]:
@@ -690,14 +835,21 @@ def _weighted_cluster(rng, pairs):
 
 
 def _pick_text(rng, ch, node_rows):
-    # ~60% short one-liners (matches the observed median ~18 chars), rest themed
-    if rng.random() < 0.6:
-        return rng.choice(_SHORT)
+    # ~55% short one-liners (observed median ~18 chars), mostly themed lines,
+    # plus a long tail of "wall of text" messages (real captures: p90 ~80,
+    # max ~230-246 — chunked rants, pasted scripts). Long texts are composed
+    # from the synthetic pools only.
+    r = rng.random()
     pool = _CHATTER.get(ch, _CHATTER["LongFast"])
-    t = rng.choice(pool)
+    if r < 0.55:
+        return rng.choice(_SHORT)
+    if r < 0.95:
+        t = rng.choice(pool)
+    else:
+        t = " ".join(rng.choice(pool) for _ in range(rng.randint(2, 4)))
     if "{h}" in t:
         t = t.replace("{h}", rng.choice(node_rows).long_name)
-    return t
+    return t[:236]
 
 
 # ── payload builders ─────────────────────────────────────────────────────────
@@ -707,23 +859,24 @@ def _pick_text(rng, ch, node_rows):
 # 32/13/14/17 bits). Synthetic values only.
 _PRECISION_WEIGHTS = [
     ("32", 34),
-    ("13", 30),
-    ("14", 12),
-    ("17", 8),
-    ("16", 6),
-    ("19", 6),
-    ("11", 4),
+    ("13", 29),
+    ("17", 3),
+    ("0", 2),
+    ("15", 2),
+    ("14", 1),
+    ("19", 1),
+    ("12", 1),
 ]
 
 
 def _chutil(rng: random.Random) -> float:
-    # skewed low with a long high tail (observed p50 ~7-15, p90 ~23-50, max ~75)
+    # skewed low with a modest high tail (BM observed p50 ~7, p90 ~23, max ~39)
     r = rng.random()
-    if r < 0.6:
-        return round(rng.uniform(1, 18), 3)
-    if r < 0.9:
-        return round(rng.uniform(18, 40), 3)
-    return round(rng.uniform(40, 75), 3)
+    if r < 0.7:
+        return round(rng.uniform(1, 15), 3)
+    if r < 0.95:
+        return round(rng.uniform(15, 28), 3)
+    return round(rng.uniform(28, 45), 3)
 
 
 def _pl_position(rng, m, t):
