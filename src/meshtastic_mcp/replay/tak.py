@@ -52,6 +52,12 @@ def _compressor() -> Any:
     return TakCompressor()
 
 
+# CoT type strings the bridge (SDK CotXmlBuilder) stamps onto the emitted CoT so
+# ATAK/iTAK render the right affiliation: a friendly-ground PLI, and a GeoChat.
+PLI_COT_TYPE = "a-f-G-U-C"
+CHAT_COT_TYPE = "b-t-f"
+
+
 def build_pli(
     *,
     callsign: str,
@@ -65,8 +71,14 @@ def build_pli(
     course: int,
     battery: int,
     device_callsign: str = "",
+    cot_type: str = PLI_COT_TYPE,
 ) -> Any:
-    """Build a TAKPacketV2 position/location-information report."""
+    """Build a TAKPacketV2 position/location-information report.
+
+    ``cot_type`` is carried so the bridged CoT event is typed (friendly ground
+    by default) rather than emitting an empty ``type=""`` that clients render
+    as an unknown affiliation.
+    """
     _require()
     from meshtastic_tak import atak_pb2 as v2
 
@@ -82,6 +94,7 @@ def build_pli(
     tp.speed = speed
     tp.course = course
     tp.battery = battery
+    tp.cot_type_str = cot_type
     return tp
 
 
@@ -106,6 +119,7 @@ def build_chat(
     tp.team = team
     tp.role = role
     tp.battery = battery
+    tp.cot_type_str = CHAT_COT_TYPE
     tp.chat.message = message
     tp.chat.to = to
     return tp
@@ -119,3 +133,28 @@ def compress(packet: Any) -> bytes:
 def decompress(wire: bytes) -> Any:
     """Decompress a wire payload back to a TAKPacketV2."""
     return _compressor().decompress(wire)
+
+
+def parse_cot(cot_xml: str, *, strip_for_mesh: bool = True) -> Any:
+    """Parse a CoT XML event (as ATAK/iTAK author it) into a TAKPacketV2.
+
+    The inbound half of the bridge (TAK client → mesh): when ``strip_for_mesh``
+    is set, non-essential detail is removed first (mirroring the app's
+    CoTDetailStripper) so the result fits the LoRa MTU.
+    """
+    _require()
+    from meshtastic_tak import CotXmlParser, strip_non_essential_for_mesh
+
+    if strip_for_mesh:
+        cot_xml = strip_non_essential_for_mesh(cot_xml)
+    return CotXmlParser().parse(cot_xml)
+
+
+def cot_to_wire(cot_xml: str, *, strip_for_mesh: bool = True) -> bytes:
+    """Convert an ATAK/iTAK-authored CoT event to a mesh TAKPacketV2 wire payload.
+
+    What an app's TAK server does when a connected client sends a marker/PLI/
+    GeoChat: parse → (strip) → compress. The bytes belong on portnum 78
+    (``ATAK_PLUGIN_V2``).
+    """
+    return compress(parse_cot(cot_xml, strip_for_mesh=strip_for_mesh))
