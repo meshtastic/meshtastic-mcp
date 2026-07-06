@@ -121,6 +121,13 @@ PROFILE: dict = {
     # MESH_BEACON_APP packets, and the broadcast interval in seconds.
     "beacon_fraction": 0.4,
     "beacon_interval": 1800,
+    # Observer / RF gateway model (see replay/observer.py): when enabled, the
+    # generated "all traffic that exists" stream is filtered + duplicated into
+    # what a single gateway at the venue would have heard — RF loss with
+    # distance, rebroadcast copies with decremented hop_limit and their own
+    # SNR/RSSI, relay_node stamps, optional via_mqtt bridging. Keys mirror
+    # ObserverParams (lat/lon/seed default to the venue/generate seed).
+    "observer": {"enabled": False},
 }
 
 # Real text is short: median ~18 chars, p90 ~79. About half of messages are
@@ -255,8 +262,6 @@ _CHATTER = {
     ],
 }
 
-_pid = itertools.count(0x10000001)
-
 
 def _weighted(rng: random.Random, pairs: list[tuple[str, int]]) -> str:
     total = sum(w for _, w in pairs)
@@ -324,6 +329,7 @@ def _hops_taken(rng: random.Random, hop_start: int) -> int:
 
 
 def _mp(
+    pid,
     frm,
     to,
     portnum,
@@ -338,7 +344,7 @@ def _mp(
     mp = mesh_pb2.MeshPacket()
     setattr(mp, "from", frm & 0xFFFFFFFF)
     mp.to = to & 0xFFFFFFFF
-    mp.id = next(_pid) & 0xFFFFFFFF
+    mp.id = pid & 0xFFFFFFFF
     mp.hop_start = max(0, hop_start)
     mp.hop_limit = max(0, min(hop_limit, mp.hop_start))
     mp.channel = ch_idx
@@ -365,14 +371,14 @@ _ENC_LEN_WEIGHTS = [
 ]
 
 
-def _mp_enc(rng, frm, hop_start, ch_hash) -> bytes:
+def _mp_enc(rng, pid, frm, hop_start, ch_hash) -> bytes:
     """An encrypted (undecodable) packet — models traffic on a channel/key the
     viewer lacks (DEF CON ran ~45% such 'foreign' traffic). ``ch_hash`` is the
     OTA channel-hash byte a real radio would report (not a settings index)."""
     mp = mesh_pb2.MeshPacket()
     setattr(mp, "from", frm & 0xFFFFFFFF)
     mp.to = 0xFFFFFFFF
-    mp.id = next(_pid) & 0xFFFFFFFF
+    mp.id = pid & 0xFFFFFFFF
     mp.hop_start = max(0, hop_start)
     mp.hop_limit = max(0, hop_start - _hops_taken(rng, hop_start))
     mp.channel = ch_hash & 0xFF
@@ -479,6 +485,9 @@ def generate(
     sensors = [m for m, nr in zip(meta, node_rows, strict=False) if nr.role == "SENSOR"]
     by_num = {nr.num: nr for nr in node_rows}
     hop_starts = {m["num"]: m["hop_start"] for m in meta}
+    # packet-id counter is local so a given (seed, nodes, days, start) is
+    # byte-for-byte reproducible across calls in the same process
+    pid_counter = itertools.count(0x10000001)
 
     def add(t, frm, to, pn, payload, ch="LongFast", hop=None, want_response=False):
         # hop_limit derives from the sender's configured hop_start minus a
@@ -490,6 +499,7 @@ def generate(
             (
                 t,
                 _mp(
+                    next(pid_counter),
                     frm,
                     to,
                     pn,
@@ -690,7 +700,11 @@ def generate(
                 continue
             f = rng.choice(foreign)
             packets.append(
-                (t, _mp_enc(rng, f, foreign_hs[f], rng.choice(foreign_hashes)), "LongFast")
+                (
+                    t,
+                    _mp_enc(rng, next(pid_counter), f, foreign_hs[f], rng.choice(foreign_hashes)),
+                    "LongFast",
+                )
             )
             added += 1
 
@@ -751,6 +765,20 @@ def generate(
             t += int(beacon_iv * rng.uniform(0.85, 1.15))
 
     packets.sort(key=lambda p: p[0])
+
+    # -- observer stage: collapse the omniscient stream into a gateway view --
+    obs_cfg = dict(P.get("observer") or {})
+    if obs_cfg.pop("enabled", False):
+        from .observer import ObserverParams, observe
+
+        obs_cfg.setdefault("lat", P["venue"]["lat"])
+        obs_cfg.setdefault("lon", P["venue"]["lon"])
+        obs_cfg.setdefault("seed", seed)
+        if "dup_weights" in obs_cfg:
+            obs_cfg["dup_weights"] = tuple(tuple(x) for x in obs_cfg["dup_weights"])
+        positions = {m["num"]: (m["lat_i"] / 1e7, m["lon_i"] / 1e7) for m in meta}
+        packets = observe(packets, positions, ObserverParams(**obs_cfg))
+
     cap = Capture(
         nodes=node_rows, channels=chans, packets=packets, label=f"meshcon-{nodes}n-{days}d"
     )
