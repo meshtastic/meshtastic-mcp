@@ -358,7 +358,9 @@ class ReplaySession:
                 self._srv.close()
             except OSError:
                 pass
-            self.state.ended = True
+            # Write the terminal log line *before* flipping `ended` so any
+            # observer polling `state.ended` is guaranteed to see `session_ended`
+            # already on disk (avoids a stop_requested-is-last race).
             self._log_event(
                 "session_ended",
                 packets_sent_total=self.state.packets_sent,
@@ -366,6 +368,7 @@ class ReplaySession:
                 fuzz=self.fuzzer.status() if self.fuzzer is not None else None,
             )
             self._log.close()
+            self.state.ended = True
 
     def _serve_client(self, client: socket.socket) -> None:
         send_lock = threading.Lock()
