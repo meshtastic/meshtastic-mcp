@@ -414,3 +414,46 @@ def test_ninja_fuzz_preset_spoofs_nodeinfo_without_key_change():
             spoofed += 1
     assert spoofed > 0
     assert f.status()["counts"].get("ninja_flood", 0) > 0
+
+
+# ── WS-A: opt-in ATAK squad ──────────────────────────────────────────────────
+
+
+def test_tak_squad_is_opt_in_and_well_formed():
+    from meshtastic.protobuf import atak_pb2
+
+    from meshtastic_mcp.replay import sim as _sim
+
+    # off by default and in the fitted event presets
+    for profile in (None, "defcon", "burningman"):
+        cap = _sim.generate(nodes=150, days=1, seed=8, start=1_700_000_000, profile=profile)
+        assert metrics.capture_stats(cap)["tak_packets"] == 0
+
+    prof = {"tak": {"team_nodes": 5, "pli_interval": 45, "chat_per_hour": 3, "team": "Cyan"}}
+    cap = _sim.generate(nodes=200, days=1, seed=8, start=1_700_000_000, profile=prof)
+    stats = metrics.capture_stats(cap)
+    assert stats["tak_packets"] > 0
+    assert "ATAK_PLUGIN" in stats["portnum_mix"]
+
+    pli = chat = 0
+    callsigns = set()
+    teams = set()
+    for _t, raw, _ch in cap.packets:
+        mp = mesh_pb2.MeshPacket()
+        mp.ParseFromString(raw)
+        if mp.WhichOneof("payload_variant") != "decoded" or mp.decoded.portnum != 72:
+            continue
+        tp = atak_pb2.TAKPacket()
+        tp.ParseFromString(mp.decoded.payload)  # must be a valid TAKPacket
+        callsigns.add(tp.contact.callsign)
+        teams.add(tp.group.team)
+        assert tp.status.battery <= 100
+        if tp.HasField("pli"):
+            pli += 1
+            assert -900_000_000 <= tp.pli.latitude_i <= 900_000_000
+        if tp.HasField("chat"):
+            chat += 1
+            assert tp.chat.message
+    assert pli > 0 and chat > 0
+    assert len(callsigns) == 5  # one per squad member
+    assert teams == {atak_pb2.Team.Value("Cyan")}

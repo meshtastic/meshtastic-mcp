@@ -250,15 +250,36 @@ TAK-free; `[tak]` extra round-trips an SDK fixture.
 | Phase | Depends on | Size |
 |---|---|---|
 | WS0 metrics + fixtures | — | ✅ done |
-| WS1 traffic economy | WS0 | M |
-| WS2 observer model | WS0 | M |
-| WS3 temporal coherence | WS1 | M |
-| WS-T sensor telemetry | WS3 (climate/clock model) | S–M |
-| WS4 fit v2 + presets | WS1+WS2 | M |
-| WS-A ATAK layer | WS3 (mobility/battery), opt-in | S–M |
-| WS5 regression tests | all | S |
+| WS1 traffic economy | WS0 | ✅ done |
+| WS2 observer model | WS0 | ✅ done |
+| WS3 temporal coherence | WS1 | ✅ done |
+| WS-T sensor telemetry | WS3 (climate/clock model) | ✅ done |
+| WS4 fit v2 + presets | WS1+WS2 | ✅ done |
+| WS-A ATAK layer | WS3 (mobility/battery), opt-in | ✅ done |
+| WS5 regression tests | all | ✅ done |
 
-WS1 and WS2 are independent after WS0 and can proceed in parallel.
+All workstreams landed. Follow-ups if wanted: a `capture-stats` CLI
+subcommand (WS0 deferred), TAKPacketV2 wire-format via the optional `[tak]`
+extra + TAKPacket-SDK fixtures (WS-A stretch), and re-fitting the preset
+constants whenever fresh real captures land (feed `fit_profile` output back
+into `PRESETS`).
+
+## Outcome (measured, 1600 nodes / 3 days unless noted)
+
+| Axis | Pre-calibration | Now | Real (BM / DC) |
+|---|---|---|---|
+| Portnum mix | TEL 48%, NODEINFO 1.3%, ROUTING 0.08% | NODEINFO 35%, POS 29%, TEL 17%, ROUTING 9% | NODEINFO 34-38%, POS 31-34%, TEL 11-24%, ROUTING ≤12% |
+| Observed pkts/hr | 4,919 | 1,036 (defcon preset) | 643 / 977 |
+| Duplicate rebroadcasts | none | dup≥2 id-fraction 0.29 | — / 0.29 |
+| RX SNR / RSSI | absent | modelled (p50 6.25 / −97) | 3..10 / −84..−100 |
+| Position interval p50 | 164 s | ~700 s | 583 s |
+| Text p50 / max | 10 / 66 | 28 / ~235 | 17-25 / 227-246 |
+| Battery | i.i.d. per packet | bimodal (101 + curve + 0) | bimodal |
+| chutil | i.i.d. | tracks diurnal load (ρ≈0.99) | follows load |
+| Sensor telemetry | uniform, temp-only | personas + climate + lux/IAQ + NaN | fielded, diurnal |
+| Scenarios | MeshCon only | meshcon / burningman / defcon presets | — |
+| Adversary | parser/adversary/chaos | + `ninja` (DC33 NodeInfo spoof) | — |
+| ATAK | none | opt-in TAK squad (portnum 72) | none in captures |
 
 ## Invariants (do not break)
 

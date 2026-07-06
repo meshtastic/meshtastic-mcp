@@ -29,6 +29,7 @@ import time
 
 from meshtastic.protobuf import (
     admin_pb2,
+    atak_pb2,
     config_pb2,
     mesh_pb2,
     paxcount_pb2,
@@ -134,6 +135,16 @@ PROFILE: dict = {
     # (real captures show both a 101 mode and a 0 spike). Infra is always
     # plugged and emits disproportionately, so the client fraction stays low.
     "plugged_fraction": 0.12,
+    # ATAK squad (opt-in): when team_nodes > 0, a squad emits TAKPacket PLI +
+    # GeoChat + status (portnum 72). Off by default — no TAK traffic appeared
+    # in the real captures. See WS-A in docs/sim-realism-plan.md.
+    "tak": {
+        "team_nodes": 0,
+        "pli_interval": 45,
+        "chat_per_hour": 2.0,
+        "team": "Cyan",
+        "channel": "LongFast",
+    },
     # Observed text volume across the real captures was ~2.2 msgs/hr per 150
     # nodes (gateway-observed, an undercount); 4 keeps conference channels lively
     # while staying close to reality.
@@ -905,6 +916,39 @@ def generate(
             )
             t += int(beacon_iv * rng.uniform(0.85, 1.15))
 
+    # -- ATAK squad (opt-in, off by default): a team of nodes emitting TAKPacket
+    # (portnum 72) PLI + GeoChat + status, for exercising the ATAK plugin /
+    # forwarder / map-PLI paths. No TAK traffic appeared in the real captures,
+    # so this is a scenario knob, not part of the fitted event profiles. --
+    tak_cfg = P.get("tak") or {}
+    tak_n = int(tak_cfg.get("team_nodes", 0))
+    if tak_n > 0 and meta:
+        team_val = _enum(atak_pb2.Team, tak_cfg.get("team", "Cyan"), 0)
+        tak_ch = tak_cfg.get("channel", "LongFast")
+        if tak_ch not in ch_index:
+            tak_ch = chans[0]
+        pli_iv = int(tak_cfg.get("pli_interval", 45))
+        chat_iv = 3600.0 / max(float(tak_cfg.get("chat_per_hour", 2.0)), 0.01)
+        squad = rng.sample(meta, min(len(meta), tak_n))
+        for i, m in enumerate(squad):
+            role_name = "TeamLead" if i == 0 else "Medic" if i == 1 else "TeamMember"
+            role_val = _enum(atak_pb2.MemberRole, role_name, 1)
+            callsign = f"{rng.choice(_ADJ)}-{i + 1}"
+            node_end = min(end_epoch, m["leave_t"])
+            t = m["join_t"] + rng.randint(0, pli_iv)
+            while t < node_end:
+                lat_i = m["lat_i"] + rng.randint(-4000, 4000)
+                lon_i = m["lon_i"] + rng.randint(-4000, 4000)
+                pl = _pl_tak_pli(rng, callsign, team_val, role_val, lat_i, lon_i, _batt_level(m, t))
+                add(t, m["num"], BROADCAST, 72, pl, ch=tak_ch)
+                t += int(pli_iv * rng.uniform(0.8, 1.2))
+            t = m["join_t"] + rng.randint(0, int(chat_iv))
+            while t < node_end:
+                if rng.random() < _activity(hod(t)) + 0.2:
+                    pl = _pl_tak_chat(rng, callsign, team_val, role_val, _batt_level(m, t))
+                    add(t, m["num"], BROADCAST, 72, pl, ch=tak_ch)
+                t += int(chat_iv * rng.uniform(0.7, 1.3))
+
     # -- device telemetry second pass: chutil tracks the actual per-hour
     # generated load (real chutil follows the diurnal traffic envelope) --
     hour_hist: dict[int, int] = {}
@@ -1133,6 +1177,62 @@ def _pl_nodeinfo(nr: NodeRow):
     return u.SerializeToString()
 
 
+def _batt_level(m, t) -> int:
+    """Battery % for node ``m`` at time ``t``: 101 if plugged, else a linear
+    discharge from its start level bottoming out at 0."""
+    start, rate = m["batt"]
+    if start >= 101:
+        return 101
+    hours = max(0.0, (t - m["join_t"]) / 3600.0)
+    return max(0, int(start - rate * hours))
+
+
+def _pl_tak_pli(rng, callsign, team_val, role_val, lat_i, lon_i, batt) -> bytes:
+    """A TAKPacket (portnum 72) position/location-information report."""
+    tp = atak_pb2.TAKPacket()
+    tp.is_compressed = False
+    tp.contact.callsign = callsign
+    tp.contact.device_callsign = callsign
+    tp.group.team = team_val
+    tp.group.role = role_val
+    tp.status.battery = min(100, batt)
+    p = tp.pli
+    p.latitude_i = lat_i
+    p.longitude_i = lon_i
+    p.altitude = rng.randint(2000, 2500)
+    p.speed = rng.randint(0, 8)
+    p.course = rng.randint(0, 359)
+    return tp.SerializeToString()
+
+
+_TAK_CHAT = [
+    "moving to OP",
+    "eyes on objective",
+    "hold position",
+    "copy all",
+    "rally at CP1",
+    "requesting sitrep",
+    "green light",
+    "RTB",
+    "checkpoint clear",
+    "need a medic",
+]
+
+
+def _pl_tak_chat(rng, callsign, team_val, role_val, batt) -> bytes:
+    """A TAKPacket (portnum 72) GeoChat message to the team room."""
+    tp = atak_pb2.TAKPacket()
+    tp.is_compressed = False
+    tp.contact.callsign = callsign
+    tp.contact.device_callsign = callsign
+    tp.group.team = team_val
+    tp.group.role = role_val
+    tp.status.battery = min(100, batt)
+    tp.chat.message = rng.choice(_TAK_CHAT)
+    tp.chat.to = "All Chat Rooms"
+    return tp.SerializeToString()
+
+
 def _pl_tel_device(rng, m, t, load):
     """Device metrics with per-node battery state and load-derived chutil.
 
@@ -1144,14 +1244,11 @@ def _pl_tel_device(rng, m, t, load):
     tm = telemetry_pb2.Telemetry()
     tm.time = t
     d = tm.device_metrics
-    start, rate = m["batt"]
-    if start >= 101:
-        d.battery_level = 101
+    lvl = _batt_level(m, t)
+    d.battery_level = lvl
+    if lvl >= 101:
         d.voltage = 0.0 if rng.random() < 0.4 else round(rng.uniform(3.9, 4.25), 3)
     else:
-        hours = max(0.0, (t - m["join_t"]) / 3600.0)
-        lvl = max(0, int(start - rate * hours))
-        d.battery_level = lvl
         d.voltage = round(3.0 + 1.25 * lvl / 100.0 + rng.uniform(-0.05, 0.05), 3)
     gain = m.get("ch_gain", 0.5)
     d.channel_utilization = round(
