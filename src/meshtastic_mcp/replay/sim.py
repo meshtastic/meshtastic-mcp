@@ -1003,10 +1003,11 @@ def generate(
             )
             t += int(beacon_iv * rng.uniform(0.85, 1.15))
 
-    # -- ATAK squad (opt-in, off by default): a team of nodes emitting TAKPacket
-    # (portnum 72) PLI + GeoChat + status, for exercising the ATAK plugin /
-    # forwarder / map-PLI paths. No TAK traffic appeared in the real captures,
-    # so this is a scenario knob, not part of the fitted event profiles. --
+    # -- ATAK squad (opt-in, off by default): a team of nodes emitting TAK PLI +
+    # GeoChat + status, for exercising an app's TAK plane (the Meshtastic app's
+    # in-app TAK server bridges these to ATAK/iTAK over CoT). Legacy v1 rides
+    # ATAK_PLUGIN (72); v2 wire rides ATAK_PLUGIN_V2 (78). No TAK traffic
+    # appeared in the real captures, so this is a scenario knob, not fitted. --
     tak_cfg = P.get("tak") or {}
     tak_n = int(tak_cfg.get("team_nodes", 0))
     if tak_n > 0 and meta:
@@ -1017,6 +1018,9 @@ def generate(
         pli_iv = int(tak_cfg.get("pli_interval", 45))
         chat_iv = 3600.0 / max(float(tak_cfg.get("chat_per_hour", 2.0)), 0.01)
         v2_wire = tak_cfg.get("wire", "v1") == "v2"
+        # Firmware >= 2.8 carries compressed TAKPacketV2 on ATAK_PLUGIN_V2 (78);
+        # legacy uncompressed TAKPacket stays on ATAK_PLUGIN (72).
+        tak_port = 78 if v2_wire else 72
         if v2_wire:
             from . import tak as _tak
 
@@ -1049,7 +1053,7 @@ def generate(
                     pl = _tak.compress(pkt)
                 else:
                     pl = _pl_tak_pli(rng, callsign, team_val, role_val, lat_i, lon_i, batt_lvl)
-                add(t, m["num"], BROADCAST, 72, pl, ch=tak_ch)
+                add(t, m["num"], BROADCAST, tak_port, pl, ch=tak_ch)
                 t += int(pli_iv * rng.uniform(0.8, 1.2))
             t = m["join_t"] + rng.randint(0, int(chat_iv))
             while t < node_end:
@@ -1067,7 +1071,7 @@ def generate(
                         pl = _tak.compress(pkt)
                     else:
                         pl = _pl_tak_chat(rng, callsign, team_val, role_val, batt_lvl)
-                    add(t, m["num"], BROADCAST, 72, pl, ch=tak_ch)
+                    add(t, m["num"], BROADCAST, tak_port, pl, ch=tak_ch)
                 t += int(chat_iv * rng.uniform(0.7, 1.3))
 
     # -- device telemetry second pass: chutil tracks the actual per-hour

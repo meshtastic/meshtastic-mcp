@@ -48,6 +48,7 @@ PORT_NAMES = {
     70: "TRACEROUTE",
     71: "NEIGHBORINFO",
     72: "ATAK_PLUGIN",
+    78: "ATAK_PLUGIN_V2",
     257: "ATAK_FORWARDER",
 }
 
@@ -223,7 +224,7 @@ def capture_stats(cap: Capture) -> dict[str, Any]:
         },
         "rx": {"snr": summarize(rx_snr), "rssi": summarize(rx_rssi)},
         "dup_id_multiplicity": {str(k): v for k, v in dup_mult.most_common(8)},
-        "tak_packets": portnums.get(72, 0) + portnums.get(257, 0),
+        "tak_packets": portnums.get(72, 0) + portnums.get(78, 0) + portnums.get(257, 0),
     }
 
 
