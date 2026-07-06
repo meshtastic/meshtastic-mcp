@@ -298,6 +298,22 @@ def _resolve_profile(profile: dict | str | None) -> dict:
     return _deep_merge(PROFILE, profile)
 
 
+def preset_profile(name: str, override: dict | None = None) -> dict:
+    """Resolve a preset name to a full profile dict, optionally deep-merging an
+    override on top.
+
+    The public, path-free entry point the ``replay_start`` MCP tool uses to
+    expose scenario tunables (observer/tak/spikes/climate/…) without accepting
+    a filesystem path from an untrusted caller. ``name`` must be a known preset
+    (see :data:`PRESETS`); ``override`` is a partial profile dict merged with the
+    same nested-dict rules as :func:`generate`'s ``profile=`` argument.
+    """
+    if name not in PRESETS:
+        raise ValueError(f"unknown preset {name!r}: expected one of {sorted(PRESETS)}")
+    base = _resolve_profile(name)
+    return _deep_merge(base, override) if override else base
+
+
 # Real text is short: median ~18 chars, p90 ~79. About half of messages are
 # terse one-liners / acks / emoji, so the generator mixes these in with the
 # themed lines below to match the observed length distribution (synthetic only).

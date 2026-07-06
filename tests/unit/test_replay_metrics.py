@@ -537,3 +537,68 @@ def test_capture_stats_cli_bad_source_errors(capsys):
         cli.main(["capture-stats", "/nonexistent/path.db"])
     assert exc.value.code == 1
     assert "error:" in capsys.readouterr().err
+
+
+# ── replay_start sim_profile passthrough (MCP surface) ───────────────────────
+
+
+def test_preset_profile_helper():
+    import pytest
+
+    from meshtastic_mcp.replay import sim as _sim
+
+    # unknown preset rejected
+    with pytest.raises(ValueError, match="unknown preset"):
+        _sim.preset_profile("nope")
+    # override deep-merges over the preset base (keeps other tak defaults)
+    prof = _sim.preset_profile("defcon", {"tak": {"team_nodes": 4}})
+    assert prof["tak"]["team_nodes"] == 4
+    assert prof["tak"]["pli_interval"] == _sim.PROFILE["tak"]["pli_interval"]
+    assert prof["encrypted_fraction"] == _sim.PRESETS["defcon"]["encrypted_fraction"]
+
+
+def test_replay_start_sim_profile_override_dict_and_json():
+    from meshtastic_mcp import server
+
+    common = {
+        "kind": "auto",
+        "limit_nodes": 0,
+        "sim_nodes": 120,
+        "sim_days": 1,
+        "sim_seed": 3,
+        "sim_start": 1_700_000_000,
+    }
+    # dict override enables a TAK squad the presets leave off
+    cap = server._load_replay_capture("defcon", sim_profile={"tak": {"team_nodes": 4}}, **common)
+    assert metrics.capture_stats(cap)["tak_packets"] > 0
+    # JSON-string override (as an MCP client passes it)
+    cap2 = server._load_replay_capture(
+        "burningman",
+        sim_profile='{"spikes": [{"start_h": 5, "hours": 1, "text_x": 12}]}',
+        **common,
+    )
+    assert cap2.packets
+    # no override still works
+    cap3 = server._load_replay_capture("defcon", **common)
+    assert metrics.capture_stats(cap3)["tak_packets"] == 0
+
+
+def test_replay_start_sim_profile_rejects_non_object_and_paths():
+    import pytest
+
+    from meshtastic_mcp import server
+
+    common = {
+        "kind": "auto",
+        "limit_nodes": 0,
+        "sim_nodes": 10,
+        "sim_days": 1,
+        "sim_seed": 1,
+        "sim_start": 1_700_000_000,
+    }
+    # a JSON array is not a profile dict
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        server._load_replay_capture("defcon", sim_profile="[1,2,3]", **common)
+    # a file path is not valid JSON -> rejected before any open() (no traversal)
+    with pytest.raises(json.JSONDecodeError):
+        server._load_replay_capture("defcon", sim_profile="/etc/passwd", **common)
