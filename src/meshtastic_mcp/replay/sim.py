@@ -138,12 +138,16 @@ PROFILE: dict = {
     # ATAK squad (opt-in): when team_nodes > 0, a squad emits TAKPacket PLI +
     # GeoChat + status (portnum 72). Off by default — no TAK traffic appeared
     # in the real captures. See WS-A in docs/sim-realism-plan.md.
+    # ``wire``: "v1" (default) emits the legacy uncompressed TAKPacket; "v2"
+    # emits real zstd-dictionary-compressed TAKPacketV2 payloads and requires
+    # the [tak] extra (meshtastic-tak SDK) — see replay/tak.py.
     "tak": {
         "team_nodes": 0,
         "pli_interval": 45,
         "chat_per_hour": 2.0,
         "team": "Cyan",
         "channel": "LongFast",
+        "wire": "v1",
     },
     # Observed text volume across the real captures was ~2.2 msgs/hr per 150
     # nodes (gateway-observed, an undercount); 4 keeps conference channels lively
@@ -929,23 +933,57 @@ def generate(
             tak_ch = chans[0]
         pli_iv = int(tak_cfg.get("pli_interval", 45))
         chat_iv = 3600.0 / max(float(tak_cfg.get("chat_per_hour", 2.0)), 0.01)
+        v2_wire = tak_cfg.get("wire", "v1") == "v2"
+        if v2_wire:
+            from . import tak as _tak
+
+            _tak._require()  # fail fast with an install hint if the extra is absent
         squad = rng.sample(meta, min(len(meta), tak_n))
         for i, m in enumerate(squad):
             role_name = "TeamLead" if i == 0 else "Medic" if i == 1 else "TeamMember"
             role_val = _enum(atak_pb2.MemberRole, role_name, 1)
             callsign = f"{rng.choice(_ADJ)}-{i + 1}"
+            uid = f"MESH-{m['num']:08x}"
             node_end = min(end_epoch, m["leave_t"])
             t = m["join_t"] + rng.randint(0, pli_iv)
             while t < node_end:
                 lat_i = m["lat_i"] + rng.randint(-4000, 4000)
                 lon_i = m["lon_i"] + rng.randint(-4000, 4000)
-                pl = _pl_tak_pli(rng, callsign, team_val, role_val, lat_i, lon_i, _batt_level(m, t))
+                batt_lvl = _batt_level(m, t)
+                if v2_wire:
+                    pkt = _tak.build_pli(
+                        callsign=callsign,
+                        uid=uid,
+                        team=team_val,
+                        role=role_val,
+                        lat_i=lat_i,
+                        lon_i=lon_i,
+                        altitude=rng.randint(2000, 2500),
+                        speed=rng.randint(0, 8),
+                        course=rng.randint(0, 359),
+                        battery=min(100, batt_lvl),
+                    )
+                    pl = _tak.compress(pkt)
+                else:
+                    pl = _pl_tak_pli(rng, callsign, team_val, role_val, lat_i, lon_i, batt_lvl)
                 add(t, m["num"], BROADCAST, 72, pl, ch=tak_ch)
                 t += int(pli_iv * rng.uniform(0.8, 1.2))
             t = m["join_t"] + rng.randint(0, int(chat_iv))
             while t < node_end:
                 if rng.random() < _activity(hod(t)) + 0.2:
-                    pl = _pl_tak_chat(rng, callsign, team_val, role_val, _batt_level(m, t))
+                    batt_lvl = _batt_level(m, t)
+                    if v2_wire:
+                        pkt = _tak.build_chat(
+                            callsign=callsign,
+                            uid=uid,
+                            team=team_val,
+                            role=role_val,
+                            battery=min(100, batt_lvl),
+                            message=rng.choice(_TAK_CHAT),
+                        )
+                        pl = _tak.compress(pkt)
+                    else:
+                        pl = _pl_tak_chat(rng, callsign, team_val, role_val, batt_lvl)
                     add(t, m["num"], BROADCAST, 72, pl, ch=tak_ch)
                 t += int(chat_iv * rng.uniform(0.7, 1.3))
 

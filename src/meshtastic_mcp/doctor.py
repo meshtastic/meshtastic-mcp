@@ -241,6 +241,31 @@ def _sdr_check() -> Check:
     )
 
 
+def _tak_check() -> Check:
+    """TAKPacketV2 wire compression (replay sim `profile tak.wire="v2"`): needs the
+    meshtastic-tak SDK (the `tak` extra). Optional — the sim emits legacy
+    uncompressed TAKPacket without it.
+    """
+    from .replay import tak
+
+    if tak.available():
+        return Check(
+            "meshtastic-tak",
+            "tak",
+            STATUS_OK,
+            'TAKPacketV2 zstd wire compression (replay sim tak.wire="v2")',
+            detail="meshtastic-tak importable",
+        )
+    return Check(
+        "meshtastic-tak",
+        "tak",
+        STATUS_MISSING,
+        'TAKPacketV2 zstd wire compression (replay sim tak.wire="v2")',
+        detail="meshtastic-tak not importable (legacy TAKPacket still works)",
+        fix="pip install 'meshtastic-mcp[tak]'  # meshtastic-tak SDK (git) + zstandard",
+    )
+
+
 def _sdk_cli_check() -> Check:
     """Kotlin-SDK device-IO bridge (`sdk_*` tools): needs the meshtastic-sdk sample
     `cli` launcher resolvable via $MESHTASTIC_MCP_SDK_CLI or a $MESHTASTIC_SDK_ROOT
@@ -629,6 +654,8 @@ def run() -> DoctorReport:
         ),
         # sdr capability (RF compliance oracle)
         _sdr_check(),
+        # tak capability (TAKPacketV2 wire compression for the replay sim)
+        _tak_check(),
         # sdk capability (experimental Kotlin-SDK device-IO bridge)
         _sdk_cli_check(),
     ]

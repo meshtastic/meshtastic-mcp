@@ -258,11 +258,19 @@ TAK-free; `[tak]` extra round-trips an SDK fixture.
 | WS-A ATAK layer | WS3 (mobility/battery), opt-in | ✅ done |
 | WS5 regression tests | all | ✅ done |
 
-All workstreams landed. Follow-ups if wanted: a `capture-stats` CLI
-subcommand (WS0 deferred), TAKPacketV2 wire-format via the optional `[tak]`
-extra + TAKPacket-SDK fixtures (WS-A stretch), and re-fitting the preset
-constants whenever fresh real captures land (feed `fit_profile` output back
-into `PRESETS`).
+All workstreams landed, plus the deferred stretch items:
+
+- ✅ `capture-stats` CLI subcommand (`meshtastic-mcp capture-stats <db|preset>`,
+  `--json`) — read-only wrapper over `metrics.capture_stats`.
+- ✅ TAKPacketV2 wire-format via the optional `[tak]` extra (meshtastic-tak
+  SDK): `profile tak.wire="v2"` emits real zstd-dictionary-compressed
+  TAKPacketV2 payloads (median ~59 B, cross-instance byte-compatible with the
+  SDK). Gated by the new `tak` capability + doctor probe; legacy TAKPacket
+  stays the dependency-free default. (The SDK owns the shared dictionaries +
+  CoT conversion, so it's the right dep even though we only exercise the wire
+  path — `kzstd` is the Kotlin-side binding, N/A for Python.)
+- Remaining, process-only: re-fit the preset constants whenever fresh real
+  captures land (feed `fit_profile` output back into `PRESETS`).
 
 ## Outcome (measured, 1600 nodes / 3 days unless noted)
 
