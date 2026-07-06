@@ -571,34 +571,60 @@ def _mp_enc(rng, pid, frm, hop_start, ch_hash) -> bytes:
     return mp.SerializeToString()
 
 
-def generate(
+def _emit_encrypted(
+    rng: random.Random,
+    P: dict,
+    packets: list[tuple[int, bytes, str]],
+    pid_counter: itertools.count,
     *,
-    nodes: int = 800,
-    days: int = 3,
-    start: int | None = None,
-    seed: int = 1337,
-    channels: list[str] | None = None,
-    text_scale: float = 1.0,
-    profile: dict | str | None = None,
-) -> Capture:
-    """Generate a synthetic capture in memory.
-
-    ``profile`` is a partial :data:`PROFILE` override: a dict, a path to a JSON
-    file (e.g. one produced by :func:`fit_profile`), or a preset name from
-    :data:`PRESETS` (``meshcon`` / ``burningman`` / ``defcon``). Nested config
-    dicts (venue/observer/climate/pos_interval) deep-merge over the defaults.
+    nodes: int,
+    start_epoch: int,
+    end_epoch: int,
+    hod,
+) -> None:
+    """Append encrypted/foreign traffic: packets on channels the viewer can't
+    decode, from "heard but unknown" neighbour nodes (no NodeInfo). The count is
+    sized so encrypted packets are ``encrypted_fraction`` of the *final* stream
+    (DEF CON ran ~45%). Foreign traffic is largely independent of the event's
+    diurnal rhythm. Mutates ``packets`` in place.
     """
-    P = _resolve_profile(profile)
-    rng = random.Random(seed)
-    chans = channels or list(P["channels"])
-    ch_index = {c: i for i, c in enumerate(chans)}
-    start_epoch = int(start if start is not None else time.time())
-    end_epoch = start_epoch + days * 86400
+    frac = P.get("encrypted_fraction", 0.0)
+    if frac <= 0 or not packets:
+        return
+    n_enc = int(len(packets) * frac / max(1e-6, 1.0 - frac))
+    foreign = [rng.randint(0x10000000, 0xEFFFFFFF) for _ in range(max(5, nodes // 8))]
+    foreign_hs = {f: int(_weighted(rng, P["hop_start_weights"])) for f in foreign}
+    # a handful of foreign channels, each with a realistic OTA hash byte
+    foreign_hashes = [rng.randint(1, 255) for _ in range(rng.randint(2, 4))]
+    added = attempts = 0
+    while added < n_enc and attempts < n_enc * 10:
+        attempts += 1
+        t = rng.randint(start_epoch, end_epoch - 1)
+        if rng.random() > _activity(hod(t)) * 0.4 + 0.6:
+            continue
+        f = rng.choice(foreign)
+        packets.append(
+            (
+                t,
+                _mp_enc(rng, next(pid_counter), f, foreign_hs[f], rng.choice(foreign_hashes)),
+                "LongFast",
+            )
+        )
+        added += 1
 
-    def hod(t):
-        return ((t - start_epoch) / 3600.0) % 24
 
-    # -- build nodes --
+def _build_nodes(
+    rng: random.Random, P: dict, *, nodes: int, days: int, start_epoch: int
+) -> tuple[list[NodeRow], list[dict]]:
+    """Construct the node DB: ``(node_rows, meta)``.
+
+    The first 8 nodes are always infrastructure (4 ROUTER + 4 ROUTER_LATE) named
+    from :data:`_ROUTER_NAMES`; the rest draw role/cluster/hardware from the
+    profile weights. ``meta`` carries the per-node simulation state the emitters
+    need (position, talkativeness, hop_start, battery persona, chutil gain, and
+    presence window). All draws come from ``rng`` in a fixed order so the
+    capture stays byte-for-byte reproducible.
+    """
     node_rows: list[NodeRow] = []
     meta: list[dict] = []
     used: set[int] = set()
@@ -679,6 +705,37 @@ def generate(
                 "leave_t": start_epoch + int((join_h + stay_h) * 3600),
             }
         )
+    return node_rows, meta
+
+
+def generate(
+    *,
+    nodes: int = 800,
+    days: int = 3,
+    start: int | None = None,
+    seed: int = 1337,
+    channels: list[str] | None = None,
+    text_scale: float = 1.0,
+    profile: dict | str | None = None,
+) -> Capture:
+    """Generate a synthetic capture in memory.
+
+    ``profile`` is a partial :data:`PROFILE` override: a dict, a path to a JSON
+    file (e.g. one produced by :func:`fit_profile`), or a preset name from
+    :data:`PRESETS` (``meshcon`` / ``burningman`` / ``defcon``). Nested config
+    dicts (venue/observer/climate/pos_interval) deep-merge over the defaults.
+    """
+    P = _resolve_profile(profile)
+    rng = random.Random(seed)
+    chans = channels or list(P["channels"])
+    ch_index = {c: i for i, c in enumerate(chans)}
+    start_epoch = int(start if start is not None else time.time())
+    end_epoch = start_epoch + days * 86400
+
+    def hod(t):
+        return ((t - start_epoch) / 3600.0) % 24
+
+    node_rows, meta = _build_nodes(rng, P, nodes=nodes, days=days, start_epoch=start_epoch)
 
     packets: list[tuple[int, bytes, str]] = []
     routers = [m for m in meta if m["role"].startswith("ROUTER")]
@@ -1023,32 +1080,16 @@ def generate(
         load = hour_hist.get((t - start_epoch) // 3600, 0) / peak_rate
         add(t, m["num"], BROADCAST, 67, _pl_tel_device(rng, m, t, load))
 
-    # -- encrypted/foreign traffic: packets on channels the viewer can't decode,
-    # from "heard but unknown" neighbor nodes (no NodeInfo). The fraction is of
-    # the *final* stream (DEF CON ran ~45%; default keeps it moderate). --
-    frac = P.get("encrypted_fraction", 0.0)
-    if frac > 0 and packets:
-        n_enc = int(len(packets) * frac / max(1e-6, 1.0 - frac))
-        foreign = [rng.randint(0x10000000, 0xEFFFFFFF) for _ in range(max(5, nodes // 8))]
-        foreign_hs = {f: int(_weighted(rng, P["hop_start_weights"])) for f in foreign}
-        # a handful of foreign channels, each with a realistic OTA hash byte
-        foreign_hashes = [rng.randint(1, 255) for _ in range(rng.randint(2, 4))]
-        added = attempts = 0
-        while added < n_enc and attempts < n_enc * 10:
-            attempts += 1
-            t = rng.randint(start_epoch, end_epoch - 1)
-            # foreign mesh traffic is largely independent of our conference rhythm
-            if rng.random() > _activity(hod(t)) * 0.4 + 0.6:
-                continue
-            f = rng.choice(foreign)
-            packets.append(
-                (
-                    t,
-                    _mp_enc(rng, next(pid_counter), f, foreign_hs[f], rng.choice(foreign_hashes)),
-                    "LongFast",
-                )
-            )
-            added += 1
+    _emit_encrypted(
+        rng,
+        P,
+        packets,
+        pid_counter,
+        nodes=nodes,
+        start_epoch=start_epoch,
+        end_epoch=end_epoch,
+        hod=hod,
+    )
 
     packets.sort(key=lambda p: p[0])
 
