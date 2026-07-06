@@ -48,3 +48,6 @@ htmlcov/
 
 # hatch-vcs generated
 src/meshtastic_mcp/_version.py
+
+# Locally generated capture-derived stat profiles (from private datasets - do not commit)
+src/meshtastic_mcp/replay/profiles/*.json
