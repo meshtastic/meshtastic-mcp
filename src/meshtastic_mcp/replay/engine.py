@@ -237,6 +237,13 @@ class ReplaySession:
         self._ch_index = {name: i for i, name in enumerate(capture.channels)}
         # live-injection queue: (MeshPacket, channel_name, fuzz) drained per client
         self._inject_q: queue.Queue[tuple[mesh_pb2.MeshPacket, str, bool]] = queue.Queue()
+        # live-injection queue for top-level FromRadio messages (FileInfo, MyInfo, Config,
+        # ModuleConfig, Channel, ...) -- the handshake-phase counterpart to _inject_q. These
+        # oneofs are only ever sent during _send_config_phase/_send_db_phase today, so there was
+        # no way to exercise a handler for them (e.g. handleFileInfo) outside the initial
+        # handshake window. Most app-side handlers don't gate on handshake state, so injecting
+        # one mid-session is a legitimate way to fuzz/exercise that code path on demand.
+        self._inject_fr_q: queue.Queue[mesh_pb2.FromRadio] = queue.Queue()
         self.fuzzer: Fuzzer | None = (
             Fuzzer(params.fuzz, capture.nodes, self._ch_index) if params.fuzz else None
         )
@@ -351,7 +358,9 @@ class ReplaySession:
                 self._srv.close()
             except OSError:
                 pass
-            self.state.ended = True
+            # Write the terminal log line *before* flipping `ended` so any
+            # observer polling `state.ended` is guaranteed to see `session_ended`
+            # already on disk (avoids a stop_requested-is-last race).
             self._log_event(
                 "session_ended",
                 packets_sent_total=self.state.packets_sent,
@@ -359,6 +368,7 @@ class ReplaySession:
                 fuzz=self.fuzzer.status() if self.fuzzer is not None else None,
             )
             self._log.close()
+            self.state.ended = True
 
     def _serve_client(self, client: socket.socket) -> None:
         send_lock = threading.Lock()
@@ -378,6 +388,13 @@ class ReplaySession:
             args=(send,),
             daemon=True,
             name=f"replay-inject-{self.state.id}",
+        ).start()
+        # same, for raw top-level FromRadio injection (inject_fromradio()).
+        threading.Thread(
+            target=self._inject_fromradio_loop,
+            args=(send,),
+            daemon=True,
+            name=f"replay-inject-fr-{self.state.id}",
         ).start()
 
         while not self.state.stop.is_set():
@@ -641,6 +658,33 @@ class ReplaySession:
         send(fr)
 
     # -- live injection --
+    def inject_fromradio(self, messages: list[mesh_pb2.FromRadio]) -> int:
+        """Queue raw top-level FromRadio messages to emit onto the live connection.
+
+        Unlike `inject()` (which wraps a MeshPacket for normal mesh traffic), this sends
+        the FromRadio as-is -- for handshake-only oneofs like `fileInfo`, `my_info`,
+        `config`, `moduleConfig`, `channel` that have no MeshPacket envelope. Still goes
+        through the same `send()` path as everything else, so frame-level fuzz corruption
+        (`maybe_corrupt_frame`) still applies if the session has `fuzz` configured.
+        """
+        for fr in messages:
+            self._inject_fr_q.put(fr)
+        return len(messages)
+
+    def _inject_fromradio_loop(self, send: Any) -> None:
+        stop = self.state.stop
+        while not stop.is_set():
+            try:
+                fr = self._inject_fr_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                send(fr)
+            except (OSError, ConnectionError):
+                return
+            self.state.packets_sent += 1
+            self.state.injected += 1
+
     def inject(
         self, packets: list[mesh_pb2.MeshPacket], *, channel: str = "LongFast", fuzz: bool = False
     ) -> int:
@@ -798,6 +842,14 @@ class ReplayManager:
         if sess is None:
             return {"error": f"no session {sid}"}
         n = sess.inject(packets, channel=channel, fuzz=fuzz)
+        return {"id": sid, "queued": n, "connected": sess.state.connected}
+
+    def inject_fromradio(self, sid: str, messages: list[mesh_pb2.FromRadio]) -> dict[str, Any]:
+        with self._lock:
+            sess = self._sessions.get(sid)
+        if sess is None:
+            return {"error": f"no session {sid}"}
+        n = sess.inject_fromradio(messages)
         return {"id": sid, "queued": n, "connected": sess.state.connected}
 
     def stop(self, sid: str | None = None) -> dict[str, Any]:
