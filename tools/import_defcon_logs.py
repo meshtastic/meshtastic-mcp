@@ -136,6 +136,13 @@ def _upsert_node(conn: sqlite3.Connection, mp: mesh_pb2.MeshPacket) -> None:
         except Exception:
             return
         if pos.latitude_i or pos.longitude_i:
+            # A node's first-seen record is often a POSITION (beacons outnumber
+            # NodeInfo), so ensure a row exists before updating — a bare UPDATE
+            # would silently drop the fix.
+            conn.execute(
+                "INSERT INTO node (id, node_id) VALUES (?,?) ON CONFLICT(node_id) DO NOTHING",
+                (f"!{frm:08x}", frm),
+            )
             conn.execute(
                 "UPDATE node SET last_lat=?, last_long=? WHERE node_id=?",
                 (pos.latitude_i, pos.longitude_i, frm),

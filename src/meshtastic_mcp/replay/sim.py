@@ -279,6 +279,16 @@ def _resolve_profile(profile: dict | str | None) -> dict:
     if isinstance(profile, str):
         if profile in PRESETS:
             return _deep_merge(PROFILE, PRESETS[profile])
+        # Non-preset strings are only ever treated as JSON files (e.g. a
+        # fit_profile() dump) and must be an explicit .json path — this keeps
+        # a mistyped preset name from silently opening some other file, and
+        # gives a clear error. Note the MCP replay_start tool only ever passes
+        # a validated preset name here, never caller-controlled paths.
+        if not profile.endswith(".json"):
+            raise ValueError(
+                f"unknown profile {profile!r}: expected one of {sorted(PRESETS)} "
+                "or a path to a .json profile file"
+            )
         import json
 
         with open(profile) as fh:

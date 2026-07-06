@@ -96,6 +96,7 @@ def test_telemetry_realism(preset_stats):
         # battery is bimodal: a plugged (101) mode AND a drained (0) spike
         batt = dict(tel["battery_top"])
         assert 101 in batt
+        assert 0 in batt
         # device metrics dominate, env + power present
         vm = tel["variant_mix"]
         assert vm.get("device_metrics", 0) > vm.get("environment_metrics", 0)

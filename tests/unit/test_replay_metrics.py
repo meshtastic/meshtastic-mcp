@@ -179,6 +179,32 @@ def test_import_defcon_logs_roundtrip(tmp_path):
     assert extra["rx"]["snr"]["n"] == 3  # encrypted record had no snr
 
 
+def test_import_defcon_position_before_nodeinfo(tmp_path):
+    """A node whose first-seen record is a POSITION must still get a node row
+    (beacons outnumber NodeInfo, so this is the common case) — a bare UPDATE
+    would silently drop the fix."""
+    imp = _load_importer()
+    pos = mesh_pb2.Position(latitude_i=407_864_000, longitude_i=-1_192_065_000)
+    # POSITION arrives first, NODEINFO only later
+    pos_pkt = _mk_packet(201, 55, 3, pos.SerializeToString(), 1_700_000_010)
+    user = mesh_pb2.User(id="!00000037", long_name="Late Info", short_name="LATE", hw_model=43)
+    info = _mk_packet(202, 55, 4, user.SerializeToString(), 1_700_000_500)
+
+    log = tmp_path / "posfirst_LongFast.txt"
+    log.write_text("".join(_dict_record(p) for p in (pos_pkt, info)))
+    db = tmp_path / "posfirst.db"
+    imp.import_logs(str(db), [log])
+
+    conn = sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT last_lat, last_long, long_name FROM node WHERE node_id=55"
+    ).fetchone()
+    conn.close()
+    assert row is not None, "POSITION-first node must exist in the node table"
+    assert row[0] == 407_864_000 and row[1] == -1_192_065_000  # fix not dropped
+    assert row[2] == "Late Info"  # later NodeInfo still merges in
+
+
 # ── golden profiles ──────────────────────────────────────────────────────────
 
 
@@ -360,6 +386,13 @@ def test_profile_accepts_dict_json_and_deep_merges(tmp_path):
     cap = _sim.generate(nodes=80, days=1, seed=1, start=1_700_000_000, profile=str(p))
     assert cap.packets
     assert metrics.capture_stats(cap)["encrypted_fraction"] == 0.0
+
+    # a non-preset, non-.json string is rejected with a clear error (no stray
+    # file open) rather than surfacing a FileNotFoundError
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown profile"):
+        _sim._resolve_profile("deffcon")  # typo'd preset name
 
 
 def test_fit_profile_v2_emits_full_schema_and_round_trips():
