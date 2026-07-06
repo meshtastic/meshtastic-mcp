@@ -43,6 +43,7 @@ BROADCAST = 0xFFFFFFFF
 
 # ── Tunable profile (fit to real captures as they become available) ──────────
 PROFILE: dict = {
+    "label_prefix": "meshcon",
     "venue": {"name": "VLA, New Mexico", "lat": 34.0784, "lon": -107.6184},
     # (label, lat, lon, spread_km, weight)
     "clusters": [
@@ -84,6 +85,17 @@ PROFILE: dict = {
         ("ROUTER_LATE", 3),
     ],
     "channels": ["LongFast", "MeshCon", "Talks", "Swap", "Hax", "Staff"],
+    # Where text lands, by channel (name, weight). Names absent from the active
+    # channel lineup collapse to LongFast; presets override this to match their
+    # own channel names.
+    "text_channel_weights": [
+        ("LongFast", 34),
+        ("MeshCon", 10),
+        ("Talks", 16),
+        ("Swap", 14),
+        ("Hax", 14),
+        ("Staff", 6),
+    ],
     # periodic intervals (seconds) — Meshtastic firmware-default cadences
     "pos_interval": {"mobile": 300, "router": 1800, "default": 900},
     "telemetry_interval": 1800,
@@ -141,6 +153,125 @@ PROFILE: dict = {
     # ObserverParams (lat/lon/seed default to the venue/generate seed).
     "observer": {"enabled": False},
 }
+
+# ── Scenario presets ─────────────────────────────────────────────────────────
+# Partial PROFILE overrides for whole-event scenarios, deep-merged over the
+# defaults. Tunables are reviewed constants informed by the real captures
+# (Burning Man 2025, DEF CON 33) — no dataset files are shipped. Geo uses public
+# venue coordinates; channel names are the events' published public channels.
+PRESETS: dict[str, dict] = {
+    # The default synthetic conference (VLA / MeshCon) — PROFILE as-is.
+    "meshcon": {},
+    # Burning Man: Black Rock City playa. Sparse/open terrain (high path-loss
+    # exponent), mild talker skew, a 10-day arc, the Aug-26 flood emergency +
+    # subsequent shitposting spike. Observer at centre camp.
+    "burningman": {
+        "label_prefix": "burningman",
+        "venue": {"name": "Black Rock City, NV", "lat": 40.7864, "lon": -119.2065},
+        "clusters": [
+            ("Center Camp", 40.7864, -119.2065, 0.6, 40),
+            ("2 o'clock", 40.7920, -119.2000, 0.8, 12),
+            ("10 o'clock", 40.7930, -119.2140, 0.8, 12),
+            ("4 o'clock", 40.7800, -119.1980, 0.8, 11),
+            ("8 o'clock", 40.7800, -119.2150, 0.8, 11),
+            ("Deep Playa", 40.8000, -119.2060, 2.5, 8),
+            ("The Man", 40.7864, -119.2065, 0.3, 4),
+            ("Gate/Greeters", 40.7550, -119.2330, 1.0, 2),
+        ],
+        "channels": ["LongFast", "Everyone", "BRC", "Playa", "Rangers"],
+        "text_channel_weights": [
+            ("LongFast", 30),
+            ("Everyone", 34),
+            ("BRC", 14),
+            ("Playa", 14),
+            ("Rangers", 8),
+        ],
+        "encrypted_fraction": 0.15,
+        "climate": {"t_mean": 26.0, "t_amp": 16.0, "pressure_hpa": 858.0, "nan_fraction": 0.03},
+        "observer": {
+            "enabled": True,
+            "path_loss_exp": 3.1,
+            "sigma_db": 9.0,
+            "loss_floor": 0.45,
+            "mqtt_fraction": 0.03,
+            "fade_good_s": 240.0,
+            "fade_bad_s": 90.0,
+        },
+        # day-2 evening: dust-storm flood emergency, then late-night shitposting
+        "spikes": [
+            {"start_h": 42, "hours": 3, "text_x": 6.0},
+            {"start_h": 45, "hours": 4, "text_x": 2.5},
+        ],
+    },
+    # DEF CON: dense indoor convention. Lower path-loss but heavy collisions
+    # (high loss floor), ~45% foreign/encrypted, ~40% via MQTT bridge, a
+    # ShortTurbo-flavoured second plane, con-hours envelope, hop-7 crankers.
+    "defcon": {
+        "label_prefix": "defcon",
+        "venue": {"name": "Las Vegas Convention Center", "lat": 36.1312, "lon": -115.1516},
+        "clusters": [
+            ("Contest Area", 36.1312, -115.1516, 0.15, 44),
+            ("Village Halls", 36.1330, -115.1500, 0.20, 22),
+            ("Talks", 36.1300, -115.1530, 0.20, 14),
+            ("Chillout", 36.1290, -115.1510, 0.20, 8),
+            ("Vendor", 36.1320, -115.1490, 0.20, 6),
+            ("Hotels", 36.1250, -115.1600, 1.2, 4),
+            ("Hallway", 36.1312, -115.1516, 0.10, 2),
+        ],
+        "channels": ["LongFast", "DEFCONnect", "HackerComms", "NodeChat", "MeshCon"],
+        "text_channel_weights": [
+            ("LongFast", 20),
+            ("DEFCONnect", 34),
+            ("HackerComms", 20),
+            ("NodeChat", 18),
+            ("MeshCon", 8),
+        ],
+        "encrypted_fraction": 0.45,
+        "hop_start_weights": [("3", 68), ("7", 18), ("4", 6), ("2", 5), ("5", 3)],
+        "climate": {"t_mean": 22.0, "t_amp": 2.0, "pressure_hpa": 940.0, "nan_fraction": 0.02},
+        "observer": {
+            "enabled": True,
+            "path_loss_exp": 2.6,
+            "sigma_db": 8.0,
+            "loss_floor": 0.62,
+            "mqtt_fraction": 0.40,
+            "fade_good_s": 150.0,
+            "fade_bad_s": 70.0,
+        },
+        "spikes": [{"start_h": 33, "hours": 6, "text_x": 2.0}],
+    },
+}
+
+# Config keys whose values are themselves dicts and should deep-merge (rather
+# than wholesale-replace) when a profile override is applied.
+_MERGE_DICT_KEYS = frozenset({"venue", "observer", "climate", "pos_interval"})
+
+
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        if k in _MERGE_DICT_KEYS and isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = {**out[k], **v}
+        else:
+            out[k] = v
+    return out
+
+
+def _resolve_profile(profile: dict | str | None) -> dict:
+    """Merge a profile override (dict / preset name / JSON path) over PROFILE."""
+    if profile is None:
+        return dict(PROFILE)
+    if isinstance(profile, str):
+        if profile in PRESETS:
+            return _deep_merge(PROFILE, PRESETS[profile])
+        import json
+
+        with open(profile) as fh:
+            profile = json.load(fh)
+    if not isinstance(profile, dict):
+        raise TypeError(f"unsupported profile: {type(profile).__name__}")
+    return _deep_merge(PROFILE, profile)
+
 
 # Real text is short: median ~18 chars, p90 ~79. About half of messages are
 # terse one-liners / acks / emoji, so the generator mixes these in with the
@@ -407,10 +538,16 @@ def generate(
     seed: int = 1337,
     channels: list[str] | None = None,
     text_scale: float = 1.0,
-    profile: dict | None = None,
+    profile: dict | str | None = None,
 ) -> Capture:
-    """Generate a MeshCon capture in memory."""
-    P = {**PROFILE, **(profile or {})}
+    """Generate a synthetic capture in memory.
+
+    ``profile`` is a partial :data:`PROFILE` override: a dict, a path to a JSON
+    file (e.g. one produced by :func:`fit_profile`), or a preset name from
+    :data:`PRESETS` (``meshcon`` / ``burningman`` / ``defcon``). Nested config
+    dicts (venue/observer/climate/pos_interval) deep-merge over the defaults.
+    """
+    P = _resolve_profile(profile)
     rng = random.Random(seed)
     chans = channels or list(P["channels"])
     ch_index = {c: i for i, c in enumerate(chans)}
@@ -672,17 +809,7 @@ def generate(
                 mult *= sp.get("text_x", 1.0)
         budget = int(rng.gauss(base * _text_env(hod(t0)) * mult, base * 0.25))
         while budget > 0:
-            ch = _weighted(
-                rng,
-                [
-                    ("LongFast", 34),
-                    ("MeshCon", 10),
-                    ("Talks", 16),
-                    ("Swap", 14),
-                    ("Hax", 14),
-                    ("Staff", 6),
-                ],
-            )
+            ch = _weighted(rng, P["text_channel_weights"])
             if ch not in ch_index:
                 ch = "LongFast"
             burst = min(budget, max(1, int(rng.lognormvariate(0.9, 0.8))))
@@ -831,7 +958,10 @@ def generate(
         packets = observe(packets, positions, ObserverParams(**obs_cfg))
 
     cap = Capture(
-        nodes=node_rows, channels=chans, packets=packets, label=f"meshcon-{nodes}n-{days}d"
+        nodes=node_rows,
+        channels=chans,
+        packets=packets,
+        label=f"{P.get('label_prefix', 'meshcon')}-{nodes}n-{days}d",
     )
     return cap
 
@@ -840,9 +970,11 @@ def fit_profile(capture, *, base: dict | None = None) -> dict:
     """Derive a sim PROFILE from a real capture, to make synthetic output match.
 
     Returns a dict mergeable into :data:`PROFILE` / passable as ``generate(
-    profile=...)``: hardware + role mixes and channels from the node DB, a text
-    rate and per-node POSITION/TELEMETRY intervals from observed traffic. Geo
-    (venue/clusters) is left to the base profile. Pass the result straight to
+    profile=...)``: hardware + role mixes and channels from the node DB, text
+    rate + DM fraction, per-node POSITION/TELEMETRY intervals, hop_start
+    distribution, encrypted fraction, and the channel-hash text weighting, all
+    derived from observed traffic. Geo (venue/clusters/climate) is left to the
+    base profile. Pass the result straight to
     ``sim.generate(profile=fit_profile(cap))`` to synthesize a comparable mesh.
     """
     import itertools
@@ -861,22 +993,32 @@ def fit_profile(capture, *, base: dict | None = None) -> dict:
     if capture.channels:
         prof["channels"] = list(capture.channels)
 
-    # walk packets once: portnum mix + per-(node,portnum) timestamps
+    # walk packets once: portnum mix, hop starts, per-(node,portnum) times,
+    # per-channel text volume, DM fraction, encrypted fraction
     times: dict[tuple[int, int], list[int]] = defaultdict(list)
     portnums: Counter = Counter()
-    text_n = 0
-    for rxt, raw, _ch in capture.packets:
+    hop_starts: Counter = Counter()
+    text_by_ch: Counter = Counter()
+    text_n = text_dm = total = encrypted = 0
+    for rxt, raw, ch in capture.packets:
         mp = mesh_pb2.MeshPacket()
         try:
             mp.ParseFromString(raw)
         except Exception:
             continue
+        total += 1
+        if mp.hop_start:
+            hop_starts[mp.hop_start] += 1
         if mp.WhichOneof("payload_variant") != "decoded":
+            encrypted += 1
             continue
         pn = mp.decoded.portnum
         portnums[pn] += 1
         if pn == 1:
             text_n += 1
+            text_by_ch[ch] += 1
+            if mp.to != BROADCAST:
+                text_dm += 1
         if pn in (3, 67):
             times[(getattr(mp, "from"), pn)].append(rxt)
 
@@ -885,6 +1027,14 @@ def fit_profile(capture, *, base: dict | None = None) -> dict:
     n_nodes = max(len(nodes), 1)
     # text messages/hour normalised to the generator's 150-node baseline
     prof["text_base_msgs_per_hour"] = round(text_n / hours * (150.0 / n_nodes), 2)
+    if text_n:
+        prof["text_dm_fraction"] = round(text_dm / text_n, 3)
+    if total:
+        prof["encrypted_fraction"] = round(encrypted / total, 3)
+    if hop_starts:
+        prof["hop_start_weights"] = [(str(h), c) for h, c in hop_starts.most_common()]
+    if text_by_ch:
+        prof["text_channel_weights"] = [(ch, c) for ch, c in text_by_ch.most_common()]
 
     def _median_interval(portnum: int, default: int) -> int:
         deltas = []

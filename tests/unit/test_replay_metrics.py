@@ -316,3 +316,101 @@ def test_text_spike_multiplies_hourly_budget():
     spike = (texts[10] + texts[11]) / 2
     rest = [v for h, v in texts.items() if h not in (10, 11)]
     assert spike > 2 * max(rest, default=0)
+
+
+# ── WS4: scenario presets, profile plumbing, fit_profile v2 ──────────────────
+
+
+def test_scenario_presets_shape_the_mesh():
+    from meshtastic_mcp.replay import sim as _sim
+
+    assert set(_sim.PRESETS) == {"meshcon", "burningman", "defcon"}
+    bm = _sim.generate(nodes=500, days=2, seed=7, start=1_700_000_000, profile="burningman")
+    dc = _sim.generate(nodes=500, days=2, seed=7, start=1_700_000_000, profile="defcon")
+    assert bm.label.startswith("burningman") and dc.label.startswith("defcon")
+    # each preset uses its own published channel lineup
+    assert "Everyone" in bm.channels and "DEFCONnect" in dc.channels
+    bs = metrics.capture_stats(bm)
+    ds = metrics.capture_stats(dc)
+    # DEF CON runs much more foreign/encrypted traffic than the playa
+    assert ds["encrypted_fraction"] > 0.35
+    assert bs["encrypted_fraction"] < 0.25
+    # both presets enable the observer -> RX metadata + rebroadcast duplicates
+    assert ds["rx"]["rssi"]["n"] > 0
+    dup2 = sum(int(v) for k, v in ds["dup_id_multiplicity"].items() if k != "1")
+    assert dup2 > 0
+    # DEF CON cranks a hop-7 subpopulation harder than the default
+    assert int(ds["hop_start"].get("7", 0)) > 0
+
+
+def test_profile_accepts_dict_json_and_deep_merges(tmp_path):
+    from meshtastic_mcp.replay import sim as _sim
+
+    # nested config dicts deep-merge (observer.enabled stays off unless set)
+    prof = {"observer": {"path_loss_exp": 3.5}}
+    merged = _sim._resolve_profile(prof)
+    assert merged["observer"]["path_loss_exp"] == 3.5
+    assert merged["observer"]["enabled"] is False  # untouched default preserved
+    assert merged["venue"]["name"] == _sim.PROFILE["venue"]["name"]
+    # JSON path load
+    import json
+
+    p = tmp_path / "prof.json"
+    p.write_text(json.dumps({"text_base_msgs_per_hour": 1.0, "encrypted_fraction": 0.0}))
+    cap = _sim.generate(nodes=80, days=1, seed=1, start=1_700_000_000, profile=str(p))
+    assert cap.packets
+    assert metrics.capture_stats(cap)["encrypted_fraction"] == 0.0
+
+
+def test_fit_profile_v2_emits_full_schema_and_round_trips():
+    from meshtastic_mcp.replay import sim as _sim
+
+    src = _sim.generate(nodes=300, days=2, seed=4, start=1_700_000_000, profile="defcon")
+    prof = _sim.fit_profile(src)
+    for key in (
+        "hw_weights",
+        "role_weights",
+        "hop_start_weights",
+        "encrypted_fraction",
+        "text_dm_fraction",
+        "text_channel_weights",
+        "pos_interval",
+        "telemetry_interval",
+    ):
+        assert key in prof, key
+    # a capture generated from the fitted profile is comparable on encryption
+    regen = _sim.generate(nodes=300, days=2, seed=9, start=1_700_000_000, profile=prof)
+    a = metrics.capture_stats(src)["encrypted_fraction"]
+    b = metrics.capture_stats(regen)["encrypted_fraction"]
+    assert abs(a - b) < 0.12
+
+
+def test_ninja_fuzz_preset_spoofs_nodeinfo_without_key_change():
+    from meshtastic.protobuf import mesh_pb2
+
+    from meshtastic_mcp.replay import fuzz
+    from meshtastic_mcp.replay import sim as _sim
+
+    assert "ninja" in fuzz.PRESET_NAMES
+    cfg = fuzz.preset("ninja", seed=3)
+    assert cfg.ninja_flood and cfg.ninja_flood_batch > 0
+    cap = _sim.generate(nodes=40, days=1, seed=5, start=1_700_000_000)
+    ch_index = {c: i for i, c in enumerate(cap.channels)}
+    f = fuzz.Fuzzer(cfg, cap.nodes, ch_index)
+    # drive the time-based campaign
+    out = []
+    for i in range(400):
+        out += f.on_tick(1_000_000.0 + i)
+    assert out, "ninja campaign should emit NodeInfo spoofs"
+    real_nums = {n.num for n in cap.nodes}
+    spoofed = 0
+    for mp in out:
+        assert mp.decoded.portnum == 4  # NODEINFO
+        u = mesh_pb2.User()
+        u.ParseFromString(mp.decoded.payload)
+        assert getattr(mp, "from") in real_nums  # uses a real node's number
+        assert not u.public_key  # no key change -> dodges the app's warning
+        if "🥷" in u.long_name or "🥷" in u.short_name:
+            spoofed += 1
+    assert spoofed > 0
+    assert f.status()["counts"].get("ninja_flood", 0) > 0

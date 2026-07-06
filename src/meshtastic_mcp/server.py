@@ -1913,8 +1913,11 @@ def _load_replay_capture(
     channels: list[dict[str, Any]] | None = None,
 ) -> Any:
     """Resolve `source`/`kind` into a Capture for the replay engine."""
-    if kind == "sim" or source in ("meshcon", "sim"):
-        return replay_sim.generate(nodes=sim_nodes, days=sim_days, seed=sim_seed, start=sim_start)
+    if kind == "sim" or source in ("sim", *replay_sim.PRESETS):
+        preset = "meshcon" if source in ("sim", "meshcon") else source
+        return replay_sim.generate(
+            nodes=sim_nodes, days=sim_days, seed=sim_seed, start=sim_start, profile=preset
+        )
     if kind == "jsonl" or source.endswith(".jsonl"):
         return replay_capture.from_recorder_jsonl(source)
     return replay_capture.from_sqlite(source, limit_nodes=limit_nodes, channel_specs=channels)
@@ -1955,6 +1958,9 @@ def replay_start(
 
     `source` / `kind`:
       - `meshcon` / `sim`     → generate a synthetic MeshCon mesh (no file).
+      - `burningman` / `defcon` → generate a calibrated event scenario (playa /
+                                convention geo, channels, RF observer model,
+                                encrypted+MQTT mix, and scripted traffic spikes).
       - a `*.db` / `*.db.gz`  → SQLite capture (Burning Man / DEF CON / MeshCon
                                 schema; full-fidelity payloads). `kind="sqlite"`.
       - a `*.jsonl`           → recorder packets.jsonl (best-effort, truncated
@@ -2281,6 +2287,8 @@ def replay_fuzz_presets() -> dict[str, Any]:
         "forged_acks_interval": "forged_acks",
         "rogue_admin_interval": "rogue_admin",
         "waypoint_spam_interval": "waypoint_spam",
+        "ninja_flood_interval": "ninja_flood",
+        "ninja_flood_batch": "ninja_flood",
     }
     out = {}
     for nm in replay_fuzz.PRESET_NAMES:
