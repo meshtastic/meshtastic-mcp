@@ -93,6 +93,18 @@ def has_llama_server() -> bool:
     return llama_server.available()
 
 
+def has_tak() -> bool:
+    """True when the meshtastic-tak SDK is importable (the ``[tak]`` extra).
+
+    Optional: enables real TAKPacketV2 zstd-dictionary wire compression for the
+    replay sim's ATAK squad (``profile tak.wire="v2"``). Install with
+    ``pip install 'meshtastic-mcp[tak]'``.
+    """
+    from .replay import tak
+
+    return tak.available()
+
+
 def has_sdk_cli() -> bool:
     """True when the Meshtastic Kotlin SDK ``cli`` launcher is resolvable.
 
@@ -114,6 +126,7 @@ class Capabilities:
     local_model: bool
     llama_server: bool
     sdr: bool
+    tak: bool
     sdk_cli: bool
 
     def summary(self) -> str:
@@ -127,6 +140,7 @@ class Capabilities:
                 ("local_model", self.local_model),
                 ("llama_server", self.llama_server),
                 ("sdr", self.sdr),
+                ("tak", self.tak),
                 ("sdk_cli", self.sdk_cli),
             )
             if on
@@ -143,5 +157,6 @@ def detect() -> Capabilities:
         local_model=has_local_model(),
         llama_server=has_llama_server(),
         sdr=has_sdr(),
+        tak=has_tak(),
         sdk_cli=has_sdk_cli(),
     )

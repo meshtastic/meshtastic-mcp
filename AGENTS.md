@@ -96,6 +96,7 @@ uv run meshtastic-mcp boards get heltec-v3  # full metadata for one board
 uv run meshtastic-mcp info /dev/ttyUSB0     # firmware/region/node info
 uv run meshtastic-mcp nodes /dev/ttyUSB0    # mesh peers visible to this node
 uv run meshtastic-mcp watch packets         # live-tail recorder stream (logs/packets/events)
+uv run meshtastic-mcp capture-stats defcon  # realism stats for a capture (*.db/*.jsonl) or sim preset
 uv run meshtastic-mcp completion bash        # shell completion (eval "$(...)")
 # All read-only subcommands accept --json for machine-readable output.
 

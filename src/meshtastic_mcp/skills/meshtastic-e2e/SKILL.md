@@ -169,6 +169,36 @@ assert the app shows the node go **offline → online** and that a queued messag
 once the path heals. This is the app-facing mirror of the firmware suite's
 `test_peer_offline_recovery`.
 
+## Loop 6 — ATAK/iTAK render (sim TAK squad → TAK client)
+
+Validates the TAK plane. Meshtastic apps (≥2.8) bridge mesh TAK traffic to a
+connected ATAK/iTAK client via an **in-app local TAK server** that emits CoT
+(the deprecated `IMeshService` plugin is gone). Two layers:
+
+- **Bridge-semantics (no emulator, in CI):** the sim emits a TAKPacketV2 squad
+  (`replay_start(source=..., sim_profile={"tak": {"team_nodes": N, "wire": "v2"}})`
+  — v2 rides portnum 78 `ATAK_PLUGIN_V2`; v1 rides 72). `replay/tak_server.py`
+  `capture_to_cot_events()` reproduces the bridge's wire→TAKPacketV2→CoT path;
+  `tests/unit/test_tak_bridge.py` asserts the CoT is well-formed, typed
+  (`a-f-G-U-C` PLI), and carries the right callsign/position/GeoChat. Needs the
+  `[tak]` extra (meshtastic-tak SDK).
+- **App-plane (opt-in, needs an emulator + ATAK-CIV), bidirectional:**
+  `scripts/ci_atak_app_loop.py` stands up `CotTakServer` from that squad, points
+  ATAK-CIV at `10.0.2.2:<port>` (a pushed streaming-input `.pref`), launches it,
+  and asserts (receive) a squad callsign marker renders **and** (send) ATAK's
+  own self-PLI streams back, is captured, and converts to a mesh TAKPacketV2.
+  ATAK-CIV is free (`com.atakmap.app.civ`, Play Store / tak.gov / GitHub; needs
+  GLES 3.0). Emits `LOOP atak-render …` + `LOOP atak-send …`. iTAK is iOS-only
+  and App-Store-distributed, so in-simulator automation isn't practical —
+  physical device only.
+
+Both directions are unit-tested without hardware: `test_tak_bridge.py` covers
+receive (mesh→CoT) and send (`cot_to_wire`, CoT→mesh); `test_tak_server.py`
+asserts the server streams to a client **and** captures a client-authored CoT.
+
+You can also point a real ATAK/WinTAK at `CotTakServer` directly (host:port,
+plain TCP streaming input) to eyeball the sim's squad on a live map.
+
 ## Reporting
 
 Emit a compact verdict per loop: `LOOP <n> <PASS|FAIL> token=<...> latency=<ms> hops=<n>`.

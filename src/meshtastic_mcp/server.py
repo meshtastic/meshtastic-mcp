@@ -1911,10 +1911,27 @@ def _load_replay_capture(
     sim_seed: int,
     sim_start: int | None,
     channels: list[dict[str, Any]] | None = None,
+    sim_profile: str | dict[str, Any] | None = None,
 ) -> Any:
     """Resolve `source`/`kind` into a Capture for the replay engine."""
-    if kind == "sim" or source in ("meshcon", "sim"):
-        return replay_sim.generate(nodes=sim_nodes, days=sim_days, seed=sim_seed, start=sim_start)
+    if kind == "sim" or source in ("sim", *replay_sim.PRESETS):
+        preset = "meshcon" if source in ("sim", "meshcon") else source
+        override: dict[str, Any] | None = None
+        if sim_profile is not None:
+            if isinstance(sim_profile, str):
+                import json
+
+                sim_profile = json.loads(sim_profile)
+            if not isinstance(sim_profile, dict):
+                raise ValueError(
+                    "sim_profile must be a JSON object / dict of profile overrides "
+                    "(preset base is chosen via `source`; file paths are not accepted)"
+                )
+            override = sim_profile
+        prof = replay_sim.preset_profile(preset, override)
+        return replay_sim.generate(
+            nodes=sim_nodes, days=sim_days, seed=sim_seed, start=sim_start, profile=prof
+        )
     if kind == "jsonl" or source.endswith(".jsonl"):
         return replay_capture.from_recorder_jsonl(source)
     return replay_capture.from_sqlite(source, limit_nodes=limit_nodes, channel_specs=channels)
@@ -1943,6 +1960,7 @@ def replay_start(
     sim_nodes: int = 800,
     sim_days: int = 3,
     sim_seed: int = 1337,
+    sim_profile: str | dict[str, Any] | None = None,
     fuzz: str | dict[str, Any] | None = None,
     fuzz_seed: int = 0,
 ) -> dict[str, Any]:
@@ -1955,6 +1973,9 @@ def replay_start(
 
     `source` / `kind`:
       - `meshcon` / `sim`     → generate a synthetic MeshCon mesh (no file).
+      - `burningman` / `defcon` → generate a calibrated event scenario (playa /
+                                convention geo, channels, RF observer model,
+                                encrypted+MQTT mix, and scripted traffic spikes).
       - a `*.db` / `*.db.gz`  → SQLite capture (Burning Man / DEF CON / MeshCon
                                 schema; full-fidelity payloads). `kind="sqlite"`.
       - a `*.jsonl`           → recorder packets.jsonl (best-effort, truncated
@@ -1964,7 +1985,15 @@ def replay_start(
     Pacing: `rate` (steady packets/sec, ignores capture timing) takes priority;
     otherwise `speed` multiplies the original cadence, capped by `max_gap` idle.
     `start`/`end` (ISO-8601 UTC) window the capture. `loop` restarts at the end.
-    `limit_nodes` caps the node DB (file sources). `sim_*` tune the generator.
+    `limit_nodes` caps the node DB (file sources). `sim_nodes`/`sim_days`/
+    `sim_seed` size and seed the synthetic generator; `sim_profile` tunes it
+    further for sim/preset sources — a dict (or JSON-object string) of profile
+    overrides deep-merged over the `source` preset. Use it to enable/shape
+    features the presets leave off, e.g. an ATAK squad
+    `{"tak": {"team_nodes": 6, "wire": "v2"}}`, a scripted spike
+    `{"spikes": [{"start_h": 20, "hours": 2, "text_x": 8}]}`, or the RF gateway
+    model `{"observer": {"enabled": true, "loss_floor": 0.5, "mqtt_fraction": 0.3}}`.
+    A preset base is chosen via `source`; `sim_profile` is never a file path.
 
     `channels` (SQLite sources) is a caller-supplied list of channels that routes
     packets by their OTA channel hash and advertises the real PSKs so the app
@@ -1979,8 +2008,9 @@ def replay_start(
     can see from inside the app that it's a replay. `modem_preset` sets the
     advertised LoRa preset (e.g. `LONG_FAST`, `SHORT_TURBO`); `firmware_edition`
     sets the app's event banner (`VANILLA`, `DEFCON`, `BURNING_MAN`, `HAMVENTION`,
-    …). `observer_lat`/
-    `observer_lon` (1e-7 degrees) place the connected node; default is the
+    …). `observer_lat`/`observer_lon` (1e-7 degrees) place the *connected* node
+    (the app's "you are here" on the map) — distinct from the sim's RF gateway
+    observer, which is configured via `sim_profile["observer"]`. Default is the
     capture's median position so the map and node distances look right.
 
     `fuzz` turns the stream hostile (fault injection + bad actors): a preset name
@@ -1998,7 +2028,8 @@ def replay_start(
     sim_start = None
     s_epoch = _parse_iso_epoch(start) if start else None
     e_epoch = _parse_iso_epoch(end) if end else None
-    if (kind == "sim" or source in ("meshcon", "sim")) and s_epoch is None:
+    is_sim = kind == "sim" or source in ("sim", *replay_sim.PRESETS)
+    if is_sim and s_epoch is None:
         # default the synthetic capture to end "now" so a fresh app sees recent data
         import time as _t
 
@@ -2012,6 +2043,7 @@ def replay_start(
         sim_seed=sim_seed,
         sim_start=sim_start,
         channels=channels,
+        sim_profile=sim_profile,
     )
     params = ReplayParams(
         host=host,
@@ -2281,6 +2313,8 @@ def replay_fuzz_presets() -> dict[str, Any]:
         "forged_acks_interval": "forged_acks",
         "rogue_admin_interval": "rogue_admin",
         "waypoint_spam_interval": "waypoint_spam",
+        "ninja_flood_interval": "ninja_flood",
+        "ninja_flood_batch": "ninja_flood",
     }
     out = {}
     for nm in replay_fuzz.PRESET_NAMES:

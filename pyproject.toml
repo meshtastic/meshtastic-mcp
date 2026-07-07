@@ -73,6 +73,12 @@ web = [
 # (`apt install librtlsdr-dev rtl-sdr`), it must be the librtlsdr/librtlsdr (keenerd)
 # fork; pyrtlsdrlib is harmless alongside it (loader falls back to the system lib).
 sdr = ["pyrtlsdr>=0.3", "pyrtlsdrlib>=0.0.4", "numpy>=1.26"]
+# The `tak` capability enables real TAKPacketV2 zstd-dictionary wire compression
+# for the replay sim (profile tak.wire="v2"), via the meshtastic-tak SDK. Not on
+# PyPI, so this is a git dependency; it pulls `zstandard`.
+tak = [
+    "meshtastic-tak @ git+https://github.com/meshtastic/TAKPacket-SDK.git#subdirectory=python",
+]
 # The `firmware` capability needs a Meshtastic firmware checkout + PlatformIO `pio`
 # on PATH (not pip-installable) — set MESHTASTIC_FIRMWARE_ROOT.
 # The `emulator` capability needs the `android` CLI + `adb` on PATH (not pip-installable).
@@ -91,6 +97,10 @@ Issues = "https://github.com/meshtastic/meshtastic-mcp/issues"
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# The [tak] extra pulls meshtastic-tak from git (not on PyPI); allow the direct ref.
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.version]
 source = "vcs"

@@ -419,6 +419,67 @@ def _cmd_nodes(args) -> int:
     return 0
 
 
+def _cmd_capture_stats(args) -> int:
+    """Compute the realism stat schema for a capture (SQLite / JSONL / preset)."""
+    from meshtastic_mcp.replay import capture as _capture
+    from meshtastic_mcp.replay import metrics as _metrics
+    from meshtastic_mcp.replay import sim as _sim
+
+    src = args.source
+    try:
+        if src in _sim.PRESETS or src == "sim":
+            profile = "meshcon" if src == "sim" else src
+            cap = _sim.generate(
+                nodes=args.sim_nodes, days=args.sim_days, seed=args.sim_seed, profile=profile
+            )
+        elif src.endswith(".jsonl"):
+            cap = _capture.from_recorder_jsonl(src)
+        else:
+            cap = _capture.from_sqlite(src, limit_nodes=0)
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    stats = _metrics.capture_stats(cap)
+    # observation-level extras only the SQLite packet_seen table carries
+    if not (src in _sim.PRESETS or src == "sim" or src.endswith(".jsonl")):
+        try:
+            stats["observed"] = _metrics.sqlite_extra_stats(_capture._resolve_db(src))
+        except Exception:
+            pass
+    if args.json:
+        print(_json_mod.dumps(stats, indent=2, default=str))
+        return 0
+    dec = sum(stats["portnum_mix"].values()) or 1
+    print(
+        f"capture: {stats['label']}  ({stats['packets']} pkts, {stats['span_hours']} h, "
+        f"{stats['nodes']['count']} nodes, {stats['pkts_per_hour']} pkts/hr)"
+    )
+    print(f"  encrypted: {stats['encrypted_fraction']}   tak_packets: {stats['tak_packets']}")
+    print("  portnum mix:")
+    for name, n in list(stats["portnum_mix"].items())[:10]:
+        print(f"    {name:<16} {n:>8}  ({100 * n / dec:4.1f}%)")
+    txt = stats["text"]["len"]
+    print(
+        f"  text: n={stats['text']['n']} p50={txt['p50']} p90={txt['p90']} max={txt['max']} "
+        f"dm={stats['text']['dm_fraction']}"
+    )
+    print(
+        f"  talker skew (top1/top10): {stats['talker_skew']['top1pct_share']} / "
+        f"{stats['talker_skew']['top10pct_share']}"
+    )
+    print(f"  position interval p50: {stats['position']['interval_s']['p50']} s")
+    tel = stats["telemetry"]
+    print(f"  telemetry variants: {tel['variant_mix']}")
+    ch = tel["chutil"]
+    print(f"  chutil p50/p90/max: {ch['p50']}/{ch['p90']}/{ch['max']}")
+    if tel["env_fields"]:
+        print(f"  env fields: {tel['env_fields']}")
+    rx = stats["rx"]
+    if rx["rssi"]["n"]:
+        print(f"  rx snr p50={rx['snr']['p50']}  rssi p50={rx['rssi']['p50']}")
+    return 0
+
+
 def _cmd_watch(args) -> int:
     """Live-tail a recorder JSONL stream. Ctrl-C to stop."""
     import time
@@ -582,6 +643,19 @@ def main(argv=None) -> None:
     )
     wat.add_argument("--interval", type=float, default=2.0, help="poll interval seconds")
 
+    cst = sub.add_parser(
+        "capture-stats",
+        help="compute realism statistics for a capture (SQLite/JSONL) or a sim preset",
+    )
+    cst.add_argument(
+        "source",
+        help="path to a *.db/*.db.gz/*.jsonl capture, or a sim preset (meshcon/burningman/defcon)",
+    )
+    cst.add_argument("--sim-nodes", type=int, default=800, help="nodes when source is a preset")
+    cst.add_argument("--sim-days", type=int, default=3, help="days when source is a preset")
+    cst.add_argument("--sim-seed", type=int, default=1337, help="seed when source is a preset")
+    cst.add_argument("--json", action="store_true", help="emit JSON")
+
     comp = sub.add_parser("completion", help="print a shell completion script")
     comp.add_argument("shell", choices=("bash", "zsh"), help="target shell")
 
@@ -628,6 +702,9 @@ def main(argv=None) -> None:
 
     if args.cmd == "watch":
         raise SystemExit(_cmd_watch(args))
+
+    if args.cmd == "capture-stats":
+        raise SystemExit(_cmd_capture_stats(args))
 
     if args.cmd == "completion":
         raise SystemExit(_cmd_completion(args))

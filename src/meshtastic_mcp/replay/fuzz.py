@@ -84,6 +84,9 @@ class FuzzConfig:
     rogue_admin_interval: float = 30.0
     waypoint_spam: bool = False  # oversized / malicious waypoints
     waypoint_spam_interval: float = 25.0
+    ninja_flood: bool = False  # DC33-style mass NodeInfo display-name spoof
+    ninja_flood_interval: float = 12.0
+    ninja_flood_batch: int = 6  # real nodes whose names get overwritten per fire
 
 
 @dataclass
@@ -191,6 +194,8 @@ class Fuzzer:
             out.append(self._rogue_admin())
         if c.waypoint_spam and self._due("wpt", now, c.waypoint_spam_interval):
             out.append(self._waypoint_spam())
+        if c.ninja_flood and self.nodes and self._due("ninja", now, c.ninja_flood_interval):
+            out.extend(self._ninja_flood())
         return out
 
     # ── transport hook ───────────────────────────────────────────────────────
@@ -350,6 +355,24 @@ class Fuzzer:
         self.stats.log("rogue_admin", f"{which} from !{frm:08x}")
         return self._new(frm, OBSERVER_NUM, 6, a.SerializeToString())
 
+    def _ninja_flood(self) -> list[mesh_pb2.MeshPacket]:
+        """Replayed NodeInfo that overwrites real nodes' display names (the DC33
+        🥷 attack). Uses each victim's *real* node num and omits public_key, so
+        (unlike evil_twin's key swap) the mobile client's key-change warning is
+        NOT triggered — the spoof silently corrupts everyone's node DB."""
+        batch = min(self.cfg.ninja_flood_batch, len(self.nodes))
+        out: list[mesh_pb2.MeshPacket] = []
+        for victim in self.rng.sample(self.nodes, batch):
+            u = mesh_pb2.User()
+            u.id = victim.node_id
+            base = victim.long_name or "node"
+            u.long_name = self.rng.choice([f"{base} 🥷", f"🥷 {base}", "🥷🥷🥷"])
+            u.short_name = self.rng.choice(["🥷", (victim.short_name or "ninj")[:4]])
+            # deliberately NO public_key -> presents as "same key", no warning
+            out.append(self._new(victim.num, BROADCAST, 4, u.SerializeToString(), hop_limit=3))
+        self.stats.log("ninja_flood", f"n={batch}")
+        return out
+
     def _waypoint_spam(self) -> mesh_pb2.MeshPacket:
         w = mesh_pb2.Waypoint()
         w.id = self.rng.randint(1, 0x7FFFFFFF)
@@ -420,6 +443,15 @@ def preset(name: str, seed: int = 0) -> FuzzConfig:
             hop_anomaly=0.05,
             duplicate=0.03,
         )
+    if name == "ninja":
+        # DC33 NodeInfo display-name spoofing campaign (name corruption at scale)
+        return FuzzConfig(
+            seed=seed,
+            name="ninja",
+            ninja_flood=True,
+            ninja_flood_interval=10.0,
+            ninja_flood_batch=8,
+        )
     if name == "adversary":
         # bad-actor campaigns; light protocol noise
         return FuzzConfig(
@@ -434,6 +466,7 @@ def preset(name: str, seed: int = 0) -> FuzzConfig:
             forged_acks=True,
             rogue_admin=True,
             waypoint_spam=True,
+            ninja_flood=True,
         )
     if name == "chaos":
         # everything cranked, including transport-level frame corruption
@@ -458,11 +491,12 @@ def preset(name: str, seed: int = 0) -> FuzzConfig:
             forged_acks=True,
             rogue_admin=True,
             waypoint_spam=True,
+            ninja_flood=True,
         )
     raise ValueError(f"unknown fuzz preset: {name!r}")
 
 
-PRESET_NAMES = ["off", "light", "parser", "adversary", "chaos"]
+PRESET_NAMES = ["off", "light", "parser", "ninja", "adversary", "chaos"]
 
 
 def from_spec(spec: str | dict | None, seed: int = 0) -> FuzzConfig | None:
