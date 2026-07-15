@@ -119,19 +119,19 @@ def _rand_id() -> int:
 
 
 def _send(
-    iface,
+    iface: Any,
     *,
-    from_node,
-    to_node,
-    packet_id,
-    ch_hash,
-    inner_portnum,
-    inner_bytes,
-    encrypted,
-    pki_encrypted=False,
-    public_key=b"",
-    want_ack=False,
-    hop_limit=3,
+    from_node: int,
+    to_node: int,
+    packet_id: int,
+    ch_hash: int,
+    inner_portnum: int,
+    inner_bytes: bytes,
+    encrypted: bool,
+    pki_encrypted: bool = False,
+    public_key: bytes = b"",
+    want_ack: bool = False,
+    hop_limit: int = 3,
 ) -> dict[str, Any]:
     comp = mesh_pb2.Compressed()
     comp.portnum = UNKNOWN_APP if encrypted else inner_portnum
