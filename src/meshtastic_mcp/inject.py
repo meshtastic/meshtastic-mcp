@@ -18,10 +18,15 @@ import random
 import struct
 from typing import Any
 
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from meshtastic import admin_pb2, mesh_pb2, portnums_pb2
 
 from .connection import connect
+
+
+def _require_confirm(confirm: bool) -> None:
+    if not confirm:
+        raise ValueError("inject_frame forges over-the-air traffic and requires confirm=True.")
+
 
 # Public "default" PSK family (src/mesh/Channels.h). 1-byte PSK index N -> this, last byte += N-1.
 DEFAULT_PSK = bytes(
@@ -63,8 +68,10 @@ def _expand_psk(psk: bytes) -> bytes:
         k = bytearray(DEFAULT_PSK)
         k[-1] = (k[-1] + idx - 1) & 0xFF
         return bytes(k)
-    if len(psk) < 16:
+    if len(psk) < 16:  # firmware pads a short AES128 key with zeros
         return psk + b"\x00" * (16 - len(psk))
+    if len(psk) < 32 and len(psk) != 16:  # firmware pads a 17-31 byte key up to AES256
+        return psk + b"\x00" * (32 - len(psk))
     return psk
 
 
@@ -74,6 +81,13 @@ def _channel_hash(name: str, key: bytes) -> int:
 
 def _aes_ctr(key: bytes, from_node: int, packet_id: int, data: bytes) -> bytes:
     """Meshtastic channel crypto: AES-CTR, IV = packetId(8 LE) | fromNode(4 LE) | 0(4)."""
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError as e:  # cryptography is an optional extra (see pyproject `[inject]`)
+        raise RuntimeError(
+            "encrypted injection needs the 'cryptography' package: "
+            "pip install 'meshtastic-mcp[inject]' (or use encrypt=false / a raw ciphertext)"
+        ) from e
     nonce = struct.pack("<QII", packet_id & 0xFFFFFFFFFFFFFFFF, from_node & 0xFFFFFFFF, 0)
     enc = Cipher(algorithms.AES(key), modes.CTR(nonce)).encryptor()
     return enc.update(data) + enc.finalize()
@@ -81,6 +95,8 @@ def _aes_ctr(key: bytes, from_node: int, packet_id: int, data: bytes) -> bytes:
 
 def _resolve_channel(iface, ch_index: int) -> tuple[str, bytes, int]:
     ch = iface.localNode.getChannelByChannelIndex(ch_index)
+    if ch is None:
+        raise ValueError(f"channel index {ch_index} is not configured on this node")
     key = _expand_psk(bytes(ch.settings.psk))
     name = ch.settings.name
     if not name:
@@ -121,6 +137,8 @@ def _send(
     comp.portnum = UNKNOWN_APP if encrypted else inner_portnum
     comp.data = inner_bytes
 
+    from_node &= 0xFFFFFFFF  # wrap to uint32 like replay/build.py, so a bad value doesn't raise
+    to_node &= 0xFFFFFFFF
     mp = mesh_pb2.MeshPacket()
     setattr(mp, "from", from_node)  # 'from' is a Python keyword
     mp.to = to_node
@@ -170,9 +188,11 @@ def inject_frame(
     public_key_b64: str | None = None,
     fuzz_count: int = 10,
     fuzz_seed: int = 1,
+    confirm: bool = False,
     port: str | None = None,
 ) -> dict[str, Any]:
     """Craft frame(s) and inject via SIMULATOR_APP. See module docstring for the wire format."""
+    _require_confirm(confirm)
     frm = int(from_node, 0) if isinstance(from_node, str) else int(from_node)
     pubkey = None
     if public_key_b64:
@@ -186,11 +206,9 @@ def inject_frame(
         name, key, chash = _resolve_channel(iface, channel_index)
 
         def _pid() -> int:
-            return (
-                (int(packet_id, 0) if isinstance(packet_id, str) else int(packet_id))
-                if packet_id
-                else _rand_id()
-            )
+            if packet_id is None:  # not `if packet_id` - an explicit 0/"0x0" is a valid id
+                return _rand_id()
+            return int(packet_id, 0) if isinstance(packet_id, str) else int(packet_id)
 
         def _inject_payload(pn: int, payload: bytes) -> dict[str, Any]:
             pid = _pid()

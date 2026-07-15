@@ -1063,7 +1063,6 @@ wheels = [
 name = "meshtastic-mcp"
 source = { editable = "." }
 dependencies = [
-    { name = "cryptography" },
     { name = "mcp" },
     { name = "meshtastic" },
     { name = "platformdirs" },
@@ -1075,6 +1074,9 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
+]
+inject = [
+    { name = "cryptography" },
 ]
 sdr = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1121,7 +1123,7 @@ web = [
 requires-dist = [
     { name = "aiosqlite", marker = "extra == 'web'", specifier = ">=0.19" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'test'", specifier = ">=7" },
-    { name = "cryptography", specifier = ">=42.0" },
+    { name = "cryptography", marker = "extra == 'inject'", specifier = ">=42.0" },
     { name = "easyocr", marker = "(platform_machine != 'x86_64' and extra == 'ui') or (sys_platform != 'darwin' and extra == 'ui')", specifier = ">=1.7" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.110" },
     { name = "mcp", specifier = ">=1.2" },
@@ -1153,7 +1155,7 @@ requires-dist = [
     { name = "textual", marker = "extra == 'test'", specifier = ">=0.50" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.27" },
 ]
-provides-extras = ["dev", "sdr", "tak", "test", "ui", "ui-min", "web"]
+provides-extras = ["dev", "inject", "sdr", "tak", "test", "ui", "ui-min", "web"]
 
 [[package]]
 name = "meshtastic-tak"

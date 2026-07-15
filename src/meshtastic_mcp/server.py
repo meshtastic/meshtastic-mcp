@@ -1364,9 +1364,12 @@ def inject_frame(
     public_key_b64: str | None = None,
     fuzz_count: int = 10,
     fuzz_seed: int = 1,
+    confirm: bool = False,
     port: str | None = None,
 ) -> dict[str, Any]:
     """Inject a packet into a connected board AS IF it arrived off the LoRa radio.
+
+    Destructive/`confirm=True`-gated: it forges over-the-air traffic (incl. admin) into the target.
 
     The target must run firmware built with `-D MESHTASTIC_ENABLE_FRAME_INJECTION=1` (portduino
     sim nodes support it unconditionally). The frame enters the real receive pipeline, so it gets
@@ -1407,6 +1410,7 @@ def inject_frame(
         public_key_b64=public_key_b64,
         fuzz_count=fuzz_count,
         fuzz_seed=fuzz_seed,
+        confirm=confirm,
         port=port,
     )
 
