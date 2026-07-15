@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Inject packets into a locally-connected board as if they arrived off the LoRa radio.
 
 Requires the target to run firmware built with ``-D MESHTASTIC_ENABLE_FRAME_INJECTION=1``

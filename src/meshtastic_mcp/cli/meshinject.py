@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Meshtastic contributors
+# SPDX-License-Identifier: GPL-3.0-only
 """
 meshinject - inject packets into a locally-connected Meshtastic board as if they arrived off the LoRa
 radio. Requires the target to run firmware built with -D MESHTASTIC_ENABLE_FRAME_INJECTION=1 (portduino
