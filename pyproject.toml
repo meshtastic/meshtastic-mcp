@@ -25,6 +25,7 @@ dependencies = [
   "pyserial>=3.5",
   "meshtastic>=2.7.8",
   "platformdirs>=4.0",
+  "cryptography>=42.0",  # inject_frame: channel AES-CTR frame crafting
 ]
 
 [project.optional-dependencies]

@@ -12,8 +12,8 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 
 - **core** (always registered): `devices`, `serial_session`, `registry`, `connection`
   (serial + TCP), `info`, `admin`, `recorder/` + `log_query`, `replay/` (simulated-device
-  streaming + `sim` synthetic mesh + `fuzz` adversary layer), `input_events`, `camera`/`ocr`,
-  `uhubctl`, `hw_tools`.
+  streaming + `sim` synthetic mesh + `fuzz` adversary layer), `inject` (frame injection into
+  real hardware — see below), `input_events`, `camera`/`ocr`, `uhubctl`, `hw_tools`.
 - **firmware capability** (needs `MESHTASTIC_FIRMWARE_ROOT` + `pio`): `flash`, `boards`,
   `userprefs`, `pio`, `fixtures`.
 - **android capability** (needs `android` + `adb`): `emulator/` native-node + AVD
@@ -44,6 +44,39 @@ external dependency and emits the exact, platform-aware acquisition command for 
 or degraded. Call it first when a capability tool fails on a missing prerequisite, or to
 self-provision before an e2e run. Keep its hints current — it is the single source of truth for
 "how do I get dep X" (don't scatter stale `brew install` strings).
+
+## Frame injection: testing the off-air receive path
+
+`inject_frame` (module `inject.py`) delivers a crafted frame into a connected board's **real receive
+pipeline as if it arrived off the LoRa radio** — so it gets `from != 0` enforcement, channel/PKC
+decryption, admin authorization, hop handling, dedup, and promiscuous module dispatch. This reaches
+code the phone/`toRadio` API cannot: that path forces `from = 0` (locally-originated), which bypasses
+the session-key gate and every "from a remote node" branch. Use it to reproduce over-the-air-only bugs
+(remote admin, PKC decrypt, the admin session-passkey flow), and to fuzz the decoder on real silicon.
+
+- **Firmware prerequisite.** The target must run firmware built with `-D
+  MESHTASTIC_ENABLE_FRAME_INJECTION=1` (off by default — it forges over-the-air traffic and must never
+  ship enabled). Portduino `sim` nodes support it unconditionally. Firmware seam:
+  `MeshService::injectAsReceived` (extends the existing portduino `SIMULATOR_APP` path to real hardware).
+- **Wire format.** The frame rides in a `Compressed` envelope wrapped in a `MeshPacket` sent on
+  `SIMULATOR_APP` (portnum 69): `Compressed.portnum == UNKNOWN_APP` → `data` is verbatim ciphertext the
+  firmware decrypts; otherwise → `data` is the decoded payload for that portnum. The outer packet carries
+  the forged `from`/`to`/`id`/`channel` (+ `pki_encrypted`/`public_key`). The crafter replicates
+  meshtastic channel crypto (default-PSK expansion, `xorHash` channel hash, AES-CTR with the
+  `packetId|from|0` nonce).
+- **Modes:** `text`, `raw` (portnum + payload), `admin` (set_owner; pair with `pki=true` +
+  `public_key_b64` to hit the PKC-admin path), `ciphertext` (verbatim bytes), `fuzz` (random/malformed
+  frames for decode-path robustness). `encrypt=true` (default) channel-encrypts; `encrypt=false` injects
+  already-decoded (needed with `pki`). A standalone CLI lives at `cli/meshinject.py`.
+- **Example — reproduce remote-admin "no session key":** set the target's `admin_key[0]` to a key you
+  hold, then `inject_frame(mode="admin", from_node="0x...", pki=true, public_key_b64=<that key>,
+  encrypt=false, session_hex="2904b478...")`. The board logs `PKC admin payload with authorized sender
+  key` → `Expected session key: 00…` → `Admin message without session_key!` (capture via
+  `set_debug_log_api` on the same connection).
+- **nRF52 gotcha.** The nRF52 USB CDC wedges under rapid `SerialInterface` open/close churn (unrelated to
+  injection). Keep a single connection for setup + inject + log capture. If it hangs (zero serial
+  output, connect timeout) and `uhubctl` can't power-cycle the port, recover with a 1200 bps-touch DFU
+  reflash (`pio run -e <env> -t upload`) — the bootloader survives the hung app.
 
 ## Rules
 

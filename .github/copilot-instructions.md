@@ -12,6 +12,10 @@ Key points for Copilot:
 - **Destructive tools require `confirm=True`** (`reboot`, `factory_reset`, `erase_and_flash`,
   `uhubctl_*`). Don't remove or bypass the gate. New destructive tools must add it.
 - **One MCP call per serial port at a time** (exclusive lock): open → act → close.
+- **Frame injection** (`inject_frame` / `inject.py`): delivers a crafted frame into a board's
+  real receive pipeline as if it arrived off LoRa (reaches `from != 0` / decrypt / remote-admin
+  paths the `toRadio` API can't). Needs firmware built with `-D
+  MESHTASTIC_ENABLE_FRAME_INJECTION=1`; sim nodes always. See AGENTS.md § "Frame injection".
 - **No type debt.** mypy runs with no per-module `ignore_errors`; fix types, don't exclude.
 - **Gates before every push:**
   ```
