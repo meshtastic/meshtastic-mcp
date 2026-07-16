@@ -28,6 +28,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Channel AES-CTR frame crafting for `inject_frame` / `meshinject` (encrypted mode).
+# Lazy-imported (inject.py); decoded/ciphertext/fuzz modes work without it.
+inject = ["cryptography>=42.0"]
 # Hardware test harness (pytest + live TUI).
 test = [
   "pytest>=8",

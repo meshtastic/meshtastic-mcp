@@ -39,6 +39,9 @@ from . import (
 from . import (
     doctor as doctor_mod,
 )
+from . import (
+    inject as inject_mod,
+)
 from . import sdk_cli as sdk_cli_mod
 from . import userprefs as userprefs_mod
 from .recorder import get_recorder
@@ -1342,6 +1345,77 @@ def send_text(
 
 
 @app.tool()
+def inject_frame(
+    mode: str = "text",
+    body: str | None = None,
+    portnum: int | None = None,
+    payload_hex: str = "",
+    ciphertext_hex: str = "",
+    long_name: str = "INJECTED",
+    short_name: str = "INJ",
+    session_hex: str = "",
+    from_node: str = "0xdeadbeef",
+    to: str | None = None,
+    channel_index: int = 0,
+    packet_id: str | None = None,
+    want_response: bool = False,
+    encrypt: bool = True,
+    pki: bool = False,
+    public_key_b64: str | None = None,
+    fuzz_count: int = 10,
+    fuzz_seed: int = 1,
+    confirm: bool = False,
+    port: str | None = None,
+) -> dict[str, Any]:
+    """Inject a packet into a connected board AS IF it arrived off the LoRa radio.
+
+    Destructive/`confirm=True`-gated: it forges over-the-air traffic (incl. admin) into the target.
+
+    The target must run firmware built with `-D MESHTASTIC_ENABLE_FRAME_INJECTION=1` (portduino
+    sim nodes support it unconditionally). The frame enters the real receive pipeline, so it gets
+    from!=0 enforcement, channel/PKC decryption, hop handling, dedup, and module dispatch — just
+    like an over-the-air packet. Firmware seam: `MeshService::injectAsReceived`.
+
+    `mode`:
+      - "text":       inject a text message `body` from `from_node`.
+      - "raw":        inject `payload_hex` on `portnum`.
+      - "admin":      inject a set_owner admin (`long_name`/`short_name`, optional `session_hex`);
+                      pair with pki=true + public_key_b64 to exercise the PKC-admin path.
+      - "ciphertext": inject `ciphertext_hex` verbatim as encrypted bytes (fed to the decoder).
+      - "fuzz":       inject `fuzz_count` random/malformed frames (decode-path robustness testing).
+
+    `from_node` is the sender to forge (from==0 is dropped like real RX). `to` defaults to the
+    target's own num. `encrypt` (default true) channel-AES-CTR-encrypts the payload so the firmware
+    decrypts it as if received; set false to inject already-decoded (needed with `pki`).
+    `channel_index` selects which configured channel's key/hash to use.
+
+    Returns: {ok, target, channel, channel_hash, injected, frames:[{from,to,id,portnum,bytes,...}]}
+    """
+    return inject_mod.inject_frame(
+        mode=mode,
+        body=body,
+        portnum=portnum,
+        payload_hex=payload_hex,
+        ciphertext_hex=ciphertext_hex,
+        long_name=long_name,
+        short_name=short_name,
+        session_hex=session_hex,
+        from_node=from_node,
+        to=to,
+        channel_index=channel_index,
+        packet_id=packet_id,
+        want_response=want_response,
+        encrypt=encrypt,
+        pki=pki,
+        public_key_b64=public_key_b64,
+        fuzz_count=fuzz_count,
+        fuzz_seed=fuzz_seed,
+        confirm=confirm,
+        port=port,
+    )
+
+
+@app.tool()
 def reboot(port: str | None = None, confirm: bool = False, seconds: int = 10) -> dict[str, Any]:
     """Reboot the connected node in `seconds` seconds. Requires confirm=True.
 
@@ -2467,6 +2541,7 @@ _DESTRUCTIVE = {
     "set_channel_url",
     "set_debug_log_api",
     "send_text",  # injects a mesh packet; cannot be recalled
+    "inject_frame",  # injects a forged frame into the RX pipeline; cannot be recalled
     "rf_confirm_tx",  # calls send_text internally; injects a mesh packet
     "send_input_event",  # drives device button/GPIO; side-effect on hardware
     "reboot",
@@ -2534,6 +2609,7 @@ _OPEN_WORLD = {
     "set_owner",
     "set_debug_log_api",
     "send_text",
+    "inject_frame",
     "reboot",
     "shutdown",
     "factory_reset",
