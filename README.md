@@ -179,6 +179,7 @@ hardware and a fully controllable, reproducible mesh.
 ```python
 replay_start(source="meshcon")                       # generated synthetic mesh (no file)
 replay_start(source="capture.db", speed=30)          # SQLite capture (full-fidelity payloads)
+replay_start(source="capture.db", duration=150)      # whole capture in 2.5 min (stress test)
 replay_start(source="event.db", channels=[             # split by OTA hash + decrypt
     {"name": "Primary", "psk": "AQ==", "primary": True},
     {"name": "Secret", "psk": "<base64-key>"},

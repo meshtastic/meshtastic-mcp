@@ -524,6 +524,7 @@ def _mp(
     *,
     priority: int = 0,
     want_response: bool = False,
+    request_id: int = 0,
 ) -> bytes:
     mp = mesh_pb2.MeshPacket()
     setattr(mp, "from", frm & 0xFFFFFFFF)
@@ -538,6 +539,8 @@ def _mp(
     mp.decoded.payload = payload
     if want_response:
         mp.decoded.want_response = True
+    if request_id:  # nonzero => this packet is a response to that request
+        mp.decoded.request_id = request_id & 0xFFFFFFFF
     return mp.SerializeToString()
 
 
@@ -748,17 +751,20 @@ def generate(
 
     tel_pending: list[tuple[int, dict]] = []
 
-    def add(t, frm, to, pn, payload, ch="LongFast", hop=None, want_response=False):
+    def add(t, frm, to, pn, payload, ch="LongFast", hop=None, want_response=False, request_id=0):
         # hop_limit derives from the sender's configured hop_start minus a
         # realistic hops-already-taken draw; callers pass an explicit remaining
         # `hop` for DMs/ACKs/traceroute (clamped to the sender's hop_start).
+        # Returns the packet id so a later packet can respond to this one
+        # (decoded.request_id — how a traceroute response references its request).
         hs = hop_starts.get(frm & 0xFFFFFFFF, 3)
         hl = (hs - _hops_taken(rng, hs)) if hop is None else min(hop, hs)
+        pid = next(pid_counter)
         packets.append(
             (
                 t,
                 _mp(
-                    next(pid_counter),
+                    pid,
                     frm,
                     to,
                     pn,
@@ -768,10 +774,12 @@ def generate(
                     ch_index.get(ch, 0),
                     priority=_PRIORITY.get(pn, _PRIORITY_DEFAULT),
                     want_response=want_response,
+                    request_id=request_id,
                 ),
                 ch,
             )
         )
+        return pid
 
     # -- periodic per-node traffic (only while the node is present) --
     for m, nr in zip(meta, node_rows, strict=False):
@@ -881,17 +889,41 @@ def generate(
             )
             t += int(P["neighborinfo_interval"] * rng.uniform(0.85, 1.15))
 
-    # -- traceroutes + routing ACKs --
+    # -- traceroutes (request -> response pairs) + routing ACKs --
+    # Real traceroutes are two packets: an in-flight request (empty
+    # RouteDiscovery, want_response, request_id 0) and — usually — a response
+    # from the destination whose decoded.request_id references the request.
+    # Apps only surface *responses* (their traceroute logs gate on a nonzero
+    # request_id), so a capture without pairs shows an empty traceroute log.
+    # Child RNG: this block's draw count depends on route shapes, so isolating
+    # it keeps later sections' draws (text chatter etc.) stable when it evolves.
+    tr_rng = random.Random(rng.getrandbits(64))
     for _ in range(max(1, days * 24 * 12)):
-        t = rng.randint(start_epoch, end_epoch - 1)
-        if rng.random() > _activity(hod(t)):
+        t = tr_rng.randint(start_epoch, end_epoch - 1)
+        if tr_rng.random() > _activity(hod(t)):
             continue
-        na, nb = rng.sample(meta, 2)
-        relays = rng.sample(routers, min(len(routers), rng.randint(0, 3))) if routers else []
-        route = [na["num"]] + [r["num"] for r in relays] + [nb["num"]]
-        add(t, na["num"], nb["num"], 70, _pl_traceroute(rng, route), hop=len(route))
-        if rng.random() < 0.7:
-            add(t + rng.randint(1, 4), nb["num"], na["num"], 5, _pl_routing_ack(), hop=0)
+        na, nb = tr_rng.sample(meta, 2)
+        # intermediate relays only — never the endpoints themselves
+        relay_pool = [r for r in routers if r["num"] not in (na["num"], nb["num"])]
+        relays = (
+            tr_rng.sample(relay_pool, min(len(relay_pool), tr_rng.randint(0, 3)))
+            if relay_pool
+            else []
+        )
+        relay_nums = [r["num"] for r in relays]
+        req_id = add(t, na["num"], nb["num"], 70, b"", hop=len(relay_nums) + 1, want_response=True)
+        if tr_rng.random() < 0.75:  # most requests draw a response off-air
+            add(
+                t + tr_rng.randint(1, 8),
+                nb["num"],
+                na["num"],
+                70,
+                _pl_traceroute(tr_rng, relay_nums),
+                hop=len(relay_nums) + 1,
+                request_id=req_id,
+            )
+        if tr_rng.random() < 0.7:
+            add(t + tr_rng.randint(1, 4), nb["num"], na["num"], 5, _pl_routing_ack(), hop=0)
 
     # -- text chatter: conversation bursts, not a uniform smear. A burst is a
     # few nodes trading messages ~45 s apart on one channel (real inter-arrival
@@ -1420,12 +1452,24 @@ def _pl_routing_ack():
     return r.SerializeToString()
 
 
-def _pl_traceroute(rng, route):
+def _pl_traceroute(rng, relays):
+    """A RouteDiscovery *response* payload, firmware semantics.
+
+    ``route``/``route_back`` list the intermediate relays only — requester and
+    destination are implied by the enclosing packet's from/to (apps render the
+    endpoints themselves, so including them draws a duplicated hop list). SNR
+    lists carry one entry per *receiving* hop including the endpoint, so
+    ``len == len(route) + 1``, encoded as SNR×4 ints.
+    """
     rd = mesh_pb2.RouteDiscovery()
-    for nn in route:
+    for nn in relays:
         rd.route.append(nn & 0xFFFFFFFF)
-    for _ in route:
-        rd.snr_towards.append(rng.randint(-120, 40))
+    for _ in range(len(relays) + 1):
+        rd.snr_towards.append(rng.randint(-80, 48))
+    for nn in reversed(relays):
+        rd.route_back.append(nn & 0xFFFFFFFF)
+    for _ in range(len(relays) + 1):
+        rd.snr_back.append(rng.randint(-80, 48))
     return rd.SerializeToString()
 
 

@@ -218,12 +218,15 @@ telemetry_timeline(port=<port>, start="-1h")  # battery/environment over time
 ```
 replay_start(source="meshcon")              # synthetic mesh; app/AVD connects to host:4403
 replay_start(source="capture.db", speed=30) # replay a real SQLite capture, 30x
+replay_start(source="capture.db", duration=150)  # whole capture in 2.5 min (stress test)
 replay_start(source="meshcon", fuzz="adversary")  # inject bad actors / malformed packets
 replay_status()                             # connection state, packets_sent, fuzz activity
 replay_stop()
 ```
 App/AVD connects to `10.0.2.2:<port>` (emulator) or the host IP (device). `fuzz` presets:
-`light`/`parser`/`adversary`/`chaos` — list them with `replay_fuzz_presets`.
+`light`/`parser`/`adversary`/`chaos` — list them with `replay_fuzz_presets`. Pacing priority:
+`duration` (whole capture in N wall-clock seconds) > `rate` (steady pkts/sec) > `speed`
+(cadence multiplier); `replay_status` reports `target_rate` vs live `achieved_rate`.
 
 ## Handling overflow / large result sets
 

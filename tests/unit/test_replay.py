@@ -520,6 +520,149 @@ def test_replay_clock_and_observer_position_and_preset():
         sess.stop()
 
 
+def test_rate_is_accurately_paced():
+    """A requested steady `rate` must actually be delivered.
+
+    Regression for drift-prone pacing: the old loop slept a fixed `1/rate` each
+    packet, so the per-packet protobuf work + OS wait-overshoot were *added* on
+    top of every interval and the achieved rate sagged ~15-25% below target
+    (requesting 120/s yielded ~99/s). Deadline-anchored pacing absorbs that, so
+    the measured rate tracks the request closely. Tolerance is generous to stay
+    non-flaky on a loaded CI box; the pre-fix behavior missed the lower bound.
+    """
+    cap = sim.generate(nodes=60, days=1, seed=13, start=1_700_000_000)
+    target = 200.0
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession(
+        "paced",
+        cap,
+        ReplayParams(host="127.0.0.1", port=port, rate=target, node_delay=0, loop=True),
+    )
+    sess.start()
+    try:
+        deadline = time.time() + 5
+        client = None
+        while time.time() < deadline:
+            try:
+                client = socket.create_connection(("127.0.0.1", port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        assert client is not None
+        client.settimeout(10)
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+        # drain handshake, then skip the node-DB burst so we measure the stream
+        t0 = time.time()
+        while time.time() - t0 < 5 and not sess.state.connected:
+            _read_frame(client)
+        skip_until = time.time() + 0.4
+        while time.time() < skip_until:
+            _read_frame(client)
+        # measure achieved stream rate over a ~2s window
+        pkts = 0
+        start = time.time()
+        while time.time() - start < 2.0:
+            fr = _read_frame(client)
+            if fr.WhichOneof("payload_variant") == "packet":
+                pkts += 1
+        measured = pkts / (time.time() - start)
+        client.close()
+        assert 0.88 * target <= measured <= 1.15 * target, (
+            f"measured {measured:.1f}/s vs {target}/s"
+        )
+    finally:
+        sess.stop()
+
+
+def test_client_disconnect_mid_stream_survives_with_loop():
+    """A mid-stream client disconnect must not kill a `loop=True` session.
+
+    Regression: the stream thread treated any send failure as session-fatal
+    (`stop.set()`), so an app closing/reconnecting mid-pass tore down the whole
+    listener despite `loop=True` (found live: a real app disconnect ended the
+    session with 'Connection reset by peer'). Now the stream severs only its own
+    connection; the accept loop keeps listening and a reconnect streams again.
+    """
+
+    def _connect(port):
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                return socket.create_connection(("127.0.0.1", port), timeout=1)
+            except OSError:
+                time.sleep(0.05)
+        return None
+
+    def _handshake_and_get_packet(client):
+        client.settimeout(10)
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+        t0 = time.time()
+        while time.time() - t0 < 5:
+            fr = _read_frame(client)
+            if fr.WhichOneof("payload_variant") == "packet":
+                return True
+        return False
+
+    cap = sim.generate(nodes=20, days=1, seed=8, start=1_700_000_000)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession(
+        "reconnect",
+        cap,
+        ReplayParams(host="127.0.0.1", port=port, rate=300, node_delay=0, loop=True),
+    )
+    sess.start()
+    try:
+        first = _connect(port)
+        assert first is not None
+        assert _handshake_and_get_packet(first)  # stream is flowing
+        # hard-disconnect mid-stream (app closed / reset by peer)
+        first.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        first.close()
+        # the session must survive: not ended, stop not set
+        deadline = time.time() + 3
+        while time.time() < deadline and sess.state.connected:
+            time.sleep(0.05)
+        assert not sess.state.stop.is_set()
+        assert sess.state.ended is False
+        # and a reconnect must handshake + stream again
+        second = _connect(port)
+        assert second is not None, "listener gone after mid-stream disconnect"
+        assert _handshake_and_get_packet(second), "no stream after reconnect"
+        second.close()
+    finally:
+        sess.stop()
+
+
+def test_duration_derives_steady_rate():
+    """`duration` compresses the whole windowed capture into a fixed wall-clock
+    span by deriving a steady rate of `len(window) / duration`, overriding any
+    `rate`. Status must surface the duration mode + target/achieved rate.
+    """
+    cap = sim.generate(nodes=40, days=1, seed=17, start=1_700_000_000)
+    n = len(cap.packets)
+    assert n > 0
+    sess = ReplaySession(
+        "dur",
+        cap,
+        # duration wins over the (contradictory) rate below
+        ReplayParams(host="127.0.0.1", port=0, rate=999.0, duration=30.0, node_delay=0),
+    )
+    assert sess.params.rate == pytest.approx(n / 30.0)
+    from meshtastic_mcp.replay.engine import _status_dict
+
+    st = _status_dict(sess)
+    assert st["target_rate"] == pytest.approx(round(n / 30.0, 2))
+    assert "duration 30.0s" in st["mode"]
+
+
 def test_status_includes_connect_hint():
     from meshtastic_mcp.replay import get_manager
 
@@ -957,6 +1100,65 @@ def test_from_kind_waypoint_wires_description():
     assert w.description == "geofenced POI"
 
 
+def test_sim_traceroutes_are_request_response_pairs():
+    """The sim must emit traceroute *responses*, not just in-flight requests.
+
+    Apps only surface traceroute responses — their logs gate on a nonzero
+    `decoded.request_id` (a zero id is an in-flight request they ignore). A
+    capture of request-style-only traceroutes therefore renders an empty
+    traceroute log (found live streaming to the Apple app). Responses must
+    reference a real request id and follow firmware RouteDiscovery semantics:
+    intermediate relays only in route (endpoints implied by from/to), SNR lists
+    one-per-receiving-hop (len == len(route) + 1), mirrored route_back.
+    """
+    cap = sim.generate(nodes=60, days=2, seed=7, start=1_700_000_000)
+    requests: dict[int, mesh_pb2.MeshPacket] = {}
+    responses = []
+    for _ts, raw, _ch in cap.packets:
+        mp = mesh_pb2.MeshPacket()
+        mp.ParseFromString(raw)
+        if mp.decoded.portnum != 70:
+            continue
+        if mp.decoded.request_id:
+            responses.append(mp)
+        else:
+            requests[mp.id] = mp
+    assert requests, "no traceroute requests in the sim"
+    assert responses, "no traceroute responses in the sim (apps would log nothing)"
+    for resp in responses:
+        req = requests.get(resp.decoded.request_id)
+        assert req is not None, "response references a request id that was never emitted"
+        # response flows dest -> requester
+        assert getattr(resp, "from") == req.to
+        assert resp.to == getattr(req, "from")
+        assert resp.hop_start > 0  # apps gate route-back rendering on this
+        rd = mesh_pb2.RouteDiscovery()
+        rd.ParseFromString(resp.decoded.payload)
+        assert getattr(req, "from") not in rd.route  # endpoints implied, not listed
+        assert req.to not in rd.route
+        assert len(rd.snr_towards) == len(rd.route) + 1
+        assert len(rd.snr_back) == len(rd.route_back) + 1
+        assert list(rd.route_back) == list(reversed(rd.route))
+    # requests are want_response probes with an empty RouteDiscovery
+    for req in requests.values():
+        assert req.decoded.want_response is True
+
+
+def test_from_kind_traceroute_request_id_builds_response():
+    from meshtastic_mcp.replay import build
+
+    mp = build.from_kind(
+        "traceroute",
+        {"route": [0x2222], "snr_towards": [10, 20], "request_id": 0xAB12},
+        from_node=0x3333,
+        to_node=0x1111,
+    )
+    assert mp.decoded.request_id == 0xAB12
+    # default stays a request (0 = unset on the wire)
+    mp2 = build.from_kind("traceroute", {"route": []}, from_node=1, to_node=2)
+    assert mp2.decoded.request_id == 0
+
+
 # ── Traceroute responder ──────────────────────────────────────────────────────
 
 
@@ -1059,11 +1261,20 @@ def test_traceroute_responder_replies_to_client_request():
             "no RouteDiscovery response from the replay traceroute responder"
         )
         assert response.decoded.request_id == 0x1234ABCD
+        assert getattr(response, "from") == dest_num & 0xFFFFFFFF  # responder = traced node
         rd_resp = mesh_pb2.RouteDiscovery()
         rd_resp.ParseFromString(response.decoded.payload)
-        # route must include at least the origin and destination
-        assert len(rd_resp.route) >= 2
-        assert len(rd_resp.snr_towards) >= 1
+        # Firmware RouteDiscovery semantics: route lists *intermediate* hops only
+        # — the requester and destination are implied by the packet from/to and
+        # must not appear (apps add the endpoints when rendering). SNR lists have
+        # one entry per receiving hop including the endpoint: len(route) + 1.
+        assert 0x42524331 not in rd_resp.route  # OBSERVER_NUM (requester)
+        assert dest_num & 0xFFFFFFFF not in rd_resp.route
+        assert len(rd_resp.snr_towards) == len(rd_resp.route) + 1
+        assert len(rd_resp.snr_back) == len(rd_resp.route_back) + 1
+        assert list(rd_resp.route_back) == list(reversed(rd_resp.route))
+        # apps gate the "route back" rendering on a nonzero hop_start
+        assert response.hop_start > 0
     finally:
         sess.stop()
 

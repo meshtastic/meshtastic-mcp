@@ -3,6 +3,41 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com); versions follow SemVer.
 
+## [Unreleased]
+
+### Added
+- **Replay `duration` pacing** (`replay_start(duration=…)`) — compress the whole (windowed)
+  capture into a fixed wall-clock span by deriving a steady rate of `packets / duration`
+  (e.g. `duration=150` replays an entire DEF CON capture in 2.5 minutes regardless of packet
+  count). Takes precedence over `rate`. `replay_status` now reports `target_rate` and the live
+  `achieved_rate`, so a stress run is self-verifying.
+
+### Fixed
+- **Traceroutes now surface in app traceroute logs** — the sim emitted only in-flight
+  traceroute *requests* (`request_id` 0), which apps ignore: their traceroute logs persist
+  only *responses* (nonzero `decoded.request_id`), so a whole capture streamed with an empty
+  traceroute log (found live against the Apple app). The sim now emits request → response
+  pairs, and `RouteDiscovery` payloads follow firmware semantics everywhere (sim + the live
+  traceroute responder): `route`/`route_back` carry intermediate relays only — endpoints are
+  implied by the packet from/to, so listing them drew duplicated hop lists — SNR lists carry
+  one entry per receiving hop (`len(route) + 1`, SNR×4), and responses set `hop_start > 0`
+  (apps gate route-back rendering on it). `build.from_kind("traceroute", ...)` accepts
+  `request_id` to craft responses; the traceroute block runs on an isolated child RNG so
+  future changes there can't reshuffle other sections' seeded draws.
+- **Replay survives mid-stream client disconnects** — the stream thread treated any send
+  failure as session-fatal (`stop.set()`), so an app closing or resetting the connection
+  mid-pass tore down the whole listener even with `loop=true` (found live: a real app
+  disconnect ended a stress session with `Connection reset by peer`). The stream now severs
+  only its own connection (a `shutdown()` that also unblocks the reader for the
+  stalled-but-connected send-timeout case); the accept loop keeps listening and a reconnect
+  handshakes and streams again. `achieved_rate` re-anchors per connection so reconnect gaps
+  don't dilute it.
+- **Replay pacing drift** — the stream loop slept a fixed `1/rate` per packet, so per-packet
+  protobuf work and OS wait-overshoot accumulated on top of every interval and the achieved
+  rate sagged ~15–25% below target (requesting 120 pkt/s delivered ~99 pkt/s; the gap widened
+  with rate). Pacing (both `rate` and `speed` modes) is now anchored to absolute deadlines, so
+  the requested rate is delivered exactly up to the raw send ceiling (thousands/sec).
+
 ## [0.1.0] — 2026-07-02 (first public release)
 
 ### Added

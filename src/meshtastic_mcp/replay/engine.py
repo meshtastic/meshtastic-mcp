@@ -181,6 +181,9 @@ class ReplayParams:
     port: int = 4403
     speed: float = 1.0  # playback multiplier (preserves cadence)
     rate: float | None = None  # steady packets/sec (ignores capture timing)
+    # compress the whole windowed capture into this many wall-clock seconds
+    # (derives a steady rate = packets / duration); takes precedence over rate.
+    duration: float | None = None
     max_gap: float = 20.0  # cap idle seconds between packets
     start: int | None = None  # window start epoch
     end: int | None = None  # window end epoch
@@ -212,6 +215,12 @@ class _SessionState:
     client_addr: str | None = None
     packets_sent: int = 0
     injected: int = 0
+    # wall-clock time the current connection's stream began emitting packets and
+    # the streamed-packet count at that instant, so status can report the
+    # *achieved* stream rate (self-verifying stress tests). Reset per connection
+    # so idle gaps between a disconnect and a reconnect don't dilute the rate.
+    stream_started_at: float | None = None
+    stream_base: int = 0
     connected: bool = False
     error: str | None = None
     ended: bool = False
@@ -222,6 +231,12 @@ class ReplaySession:
 
     def __init__(self, sid: str, capture: Capture, params: ReplayParams):
         window = capture.window(params.start, params.end)
+        # `duration` compresses the whole windowed capture into a fixed wall-clock
+        # span: derive the steady rate from the packet count so "replay the whole
+        # of X in T seconds" is exact regardless of how many packets X holds. It
+        # overrides `rate` (the more specific intent wins).
+        if params.duration and params.duration > 0 and window:
+            params.rate = len(window) / params.duration
         self.capture = capture
         self.params = params
         self.window = window
@@ -260,6 +275,7 @@ class ReplaySession:
                 "host": params.host,
                 "port": params.port,
                 "rate": params.rate,
+                "duration": params.duration,
                 "speed": params.speed,
                 "loop": params.loop,
                 "send_timeout": params.send_timeout,
@@ -409,7 +425,7 @@ class ReplaySession:
                         streaming[0] = True
                         threading.Thread(
                             target=self._stream,
-                            args=(send,),
+                            args=(send, client),
                             daemon=True,
                             name=f"replay-stream-{self.state.id}",
                         ).start()
@@ -513,10 +529,10 @@ class ReplaySession:
         clients (e.g. the Kotlin SDK) can reach a ready state.
 
         ``TRACEROUTE_APP`` requests addressed to any synthetic node are answered
-        with a synthesised ``RouteDiscovery`` response that carries a plausible
-        two-hop route (observer → random router → destination) and realistic SNR
-        values, so apps can exercise the traceroute UI (hop list, SNR colouring,
-        map flyover) without real hardware.
+        with a synthesised ``RouteDiscovery`` response carrying a plausible
+        intermediate relay and realistic SNR values (firmware semantics: hops
+        only, endpoints implied), so apps can exercise the traceroute UI (hop
+        list, SNR colouring, map flyover) without real hardware.
         """
         portnum = pkt.decoded.portnum
 
@@ -560,38 +576,38 @@ class ReplaySession:
     def _handle_traceroute(self, pkt: mesh_pb2.MeshPacket, send: Any) -> None:
         """Synthesise a RouteDiscovery response to a client traceroute request.
 
-        The response route is: observer → (optional random relay from the node
-        DB) → destination.  SNR values are randomised in a realistic range
-        (-120 … +40, as stored by firmware in units of SNR×4).
+        Firmware `RouteDiscovery` semantics: `route`/`route_back` carry the
+        *intermediate* hops only — each relay appends its own num while the
+        request (then response) travels; the requester and destination are
+        implied by the packet's from/to and must NOT appear in the lists (apps
+        add the endpoints when rendering, so including them draws a duplicated
+        "You → You → … → Dest → Dest" hop list). SNR lists carry one entry per
+        *receiving* hop including the endpoint, so len == len(route) + 1, in
+        firmware's SNR×4 int encoding.
         """
         import random as _random
 
         dest = pkt.to & 0xFFFFFFFF
         requester = getattr(pkt, "from", 0) or OBSERVER_NUM
 
-        # Build a plausible relay list from the capture node DB.
+        # Plausible intermediate relay from the capture node DB (or direct).
         routers = [
             n.num
             for n in self.capture.nodes
             if n.num not in (dest, requester, OBSERVER_NUM)
             and getattr(n, "role", "") in ("ROUTER", "ROUTER_LATE", "")
         ]
-        relay = [_random.choice(routers)] if routers else []
-
-        forward_route = [OBSERVER_NUM, *relay, dest]
-        snr_towards = [_random.randint(-100, 40) for _ in forward_route]
-        back_route = list(reversed(forward_route))
-        snr_back = [_random.randint(-100, 40) for _ in forward_route]
+        relays = [_random.choice(routers)] if routers else []
 
         rd = mesh_pb2.RouteDiscovery()
-        for nn in forward_route:
+        for nn in relays:
             rd.route.append(nn & 0xFFFFFFFF)
-        for snr in snr_towards:
-            rd.snr_towards.append(snr)
-        for nn in back_route:
+        for _ in range(len(relays) + 1):  # one per receiving hop incl. dest
+            rd.snr_towards.append(_random.randint(-40, 48))  # -10..+12 dB × 4
+        for nn in reversed(relays):
             rd.route_back.append(nn & 0xFFFFFFFF)
-        for snr in snr_back:
-            rd.snr_back.append(snr)
+        for _ in range(len(relays) + 1):  # one per receiving hop incl. requester
+            rd.snr_back.append(_random.randint(-40, 48))
 
         fr = mesh_pb2.FromRadio()
         mp = fr.packet
@@ -600,7 +616,11 @@ class ReplaySession:
         mp.id = int(time.time() * 1000) & 0x7FFFFFFF
         mp.rx_time = int(time.time())
         mp.channel = pkt.channel
-        mp.hop_limit = 0
+        # hop_start must be nonzero: apps gate the "route back" rendering on it
+        # (a 0 hop_start reads as a legacy/hopless packet and drops the return
+        # leg). hop_limit = hop_start - hops actually taken.
+        mp.hop_start = 3
+        mp.hop_limit = 3 - len(relays)
         mp.decoded.portnum = _TRACEROUTE_APP
         if pkt.id:
             mp.decoded.request_id = pkt.id
@@ -722,7 +742,22 @@ class ReplaySession:
                 self.state.injected += 1
 
     # -- stream loop --
-    def _stream(self, send: Any) -> None:
+    @staticmethod
+    def _sever(client: socket.socket) -> None:
+        """Sever one client connection after a failed/timed-out send.
+
+        A send failure means *this connection* is dead (peer reset) or wedged (a
+        stalled reader tripping SO_SNDTIMEO) — not that the session is done. The
+        shutdown() unblocks the reader thread's recv() so `_serve_client` returns
+        and the accept loop logs the disconnect and, with `loop`, awaits the next
+        client. Setting the session-wide stop here instead (the old behavior)
+        killed the listener on any mid-stream client disconnect, making
+        `loop=True` unable to survive an app reconnect.
+        """
+        with contextlib.suppress(OSError):
+            client.shutdown(socket.SHUT_RDWR)
+
+    def _stream(self, send: Any, client: socket.socket) -> None:
         p = self.params
         pkts = self.window
         if not pkts:
@@ -748,24 +783,43 @@ class ReplaySession:
                     kick += f" — {_format_eta(eta)}"
                 self._announce(send, kick, ann_idx)
             except (OSError, ConnectionError):
-                stop.set()
+                self._sever(client)
                 return
+        # Rate anchor: once per stream thread (i.e. per connection). Loop-mode
+        # passes run back-to-back within one thread, so the cumulative rate stays
+        # accurate across wraps; a reconnect gets a fresh anchor + baseline so
+        # the idle gap between connections doesn't dilute the reading.
+        self.state.stream_started_at = time.time()
+        self.state.stream_base = self.state.packets_sent - self.state.injected
         while not stop.is_set():
             prev: int | None = None
             pass_start = time.time()
             last_ann = pass_start
             done = 0
-            for rxt, raw, ch_name in pkts:
+            # Compressed-timeline offset from `pass_start` at which the next packet
+            # is due (speed mode accumulates capped inter-packet gaps here).
+            sched = 0.0
+            for i, (rxt, raw, ch_name) in enumerate(pkts):
                 if stop.is_set():
                     return
+                # Drift-free pacing: wait until an *absolute* deadline anchored to
+                # `pass_start`, not a fresh `sleep(interval)` each packet. A fixed
+                # per-packet sleep re-adds this iteration's protobuf/serialize work
+                # AND the OS wait-overshoot (~1-2ms) on top of every interval, so
+                # the achieved rate sagged ~15-25% below target and drifted. With a
+                # deadline, a slow packet just shortens the next wait, so the mean
+                # rate converges to exactly the target (until raw send capacity is
+                # the binding limit — thousands/sec, far above any paced replay).
                 if fixed_delay is not None:
-                    if stop.wait(fixed_delay):
-                        return
-                elif prev is not None:
-                    delay = min((rxt - prev) / p.speed, p.max_gap)
-                    if delay > 0 and stop.wait(delay):
-                        return
+                    deadline = pass_start + i * fixed_delay
+                else:
+                    if prev is not None:
+                        sched += min((rxt - prev) / p.speed, p.max_gap)
+                    deadline = pass_start + sched
                 prev = rxt
+                wait = deadline - time.time()
+                if wait > 0 and stop.wait(wait):
+                    return
                 mp.Clear()
                 try:
                     mp.ParseFromString(raw)
@@ -782,7 +836,7 @@ class ReplaySession:
                     try:
                         send(fr)
                     except (OSError, ConnectionError):
-                        stop.set()
+                        self._sever(client)
                         return
                     self.state.packets_sent += 1
                 done += 1
@@ -795,7 +849,7 @@ class ReplaySession:
                                 send, f"⏱️ {_format_eta(eta)} — {done}/{total} packets", ann_idx
                             )
                         except (OSError, ConnectionError):
-                            stop.set()
+                            self._sever(client)
                             return
                         last_ann = now
             if announce and not stop.is_set():
@@ -871,12 +925,28 @@ def _status_dict(sess: ReplaySession) -> dict[str, Any]:
     st = sess.state
     p = st.params
     span = sess.capture.span
+    if p.duration:
+        mode = f"duration {p.duration}s (steady {round(p.rate, 2)}/s)" if p.rate else "duration"
+    elif p.rate:
+        mode = f"steady {round(p.rate, 2)}/s"
+    else:
+        mode = f"{p.speed}x"
+    # achieved stream rate over the current connection — lets a stress run verify
+    # it is actually hitting the requested rate (target vs. reality) directly.
+    achieved_rate = None
+    if st.stream_started_at is not None:
+        elapsed = time.time() - st.stream_started_at
+        streamed = (st.packets_sent - st.injected) - st.stream_base
+        if elapsed > 0 and streamed > 0:
+            achieved_rate = round(streamed / elapsed, 1)
     return {
         "id": st.id,
         "capture": st.capture_label,
         "listen": f"{p.host}:{p.port}",
         "connect": [f"{ip}:{p.port}" for ip in local_ips()],  # where to point an app
-        "mode": (f"steady {p.rate}/s" if p.rate else f"{p.speed}x"),
+        "mode": mode,
+        "target_rate": round(p.rate, 2) if p.rate else None,
+        "achieved_rate": achieved_rate,
         "loop": p.loop,
         "nodes": len(sess.capture.nodes),
         "channels": sess.capture.channels,

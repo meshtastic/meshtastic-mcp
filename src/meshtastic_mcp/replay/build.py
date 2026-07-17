@@ -263,6 +263,7 @@ def packet(
     hop_limit: int = 3,
     want_ack: bool = False,
     rx_time: int | None = None,
+    request_id: int = 0,
 ) -> mesh_pb2.MeshPacket:
     mp = mesh_pb2.MeshPacket()
     setattr(mp, "from", from_node & 0xFFFFFFFF)
@@ -276,6 +277,11 @@ def packet(
         mp.want_ack = True
     mp.decoded.portnum = portnum
     mp.decoded.payload = payload
+    # nonzero marks this packet a *response* to that request id — apps gate on
+    # it (e.g. a traceroute with request_id 0 is an in-flight request and is
+    # not persisted to any log; only responses are).
+    if request_id:
+        mp.decoded.request_id = request_id & 0xFFFFFFFF
     return mp
 
 
@@ -305,7 +311,9 @@ def from_kind(
     ``text`` (body), ``nodeinfo`` (id, long_name, short_name, hw_model, role),
     ``beacon`` (message, offer_channel_name, offer_channel_psk_hex,
     offer_region, offer_preset), ``traceroute`` (route: [node_num, …],
-    snr_towards: [int, …], route_back: [node_num, …], snr_back: [int, …]),
+    snr_towards: [int, …], route_back: [node_num, …], snr_back: [int, …],
+    request_id — set nonzero to build a *response*; apps only log traceroute
+    responses, a request_id of 0 is an in-flight request they ignore),
     ``raw`` (portnum, payload_hex).
     """
     a = args or {}
@@ -362,7 +370,14 @@ def from_kind(
             route_back=a.get("route_back"),
             snr_back=a.get("snr_back"),
         )
-        return packet(70, pl, from_node=from_node, to_node=to_node, channel_idx=channel_idx)
+        return packet(
+            70,
+            pl,
+            from_node=from_node,
+            to_node=to_node,
+            channel_idx=channel_idx,
+            request_id=int(a.get("request_id", 0)),
+        )
     if kind == "raw":
         return packet(
             int(a["portnum"]),

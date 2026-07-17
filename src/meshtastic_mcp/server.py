@@ -2019,6 +2019,7 @@ def replay_start(
     port: int = 4403,
     speed: float = 1.0,
     rate: float | None = None,
+    duration: float | None = None,
     max_gap: float = 20.0,
     start: str | None = None,
     end: str | None = None,
@@ -2056,8 +2057,14 @@ def replay_start(
                                 payloads). `kind="jsonl"`.
       - `kind="auto"` (default) infers from the source string.
 
-    Pacing: `rate` (steady packets/sec, ignores capture timing) takes priority;
-    otherwise `speed` multiplies the original cadence, capped by `max_gap` idle.
+    Pacing (highest priority first): `duration` compresses the whole windowed
+    capture into that many wall-clock seconds — a steady rate of
+    `packets / duration` — so you can "replay the whole of X in 2.5 min"
+    (`duration=150`) regardless of how many packets X holds. Else `rate` (steady
+    packets/sec, ignores capture timing). Else `speed` multiplies the original
+    cadence, capped by `max_gap` idle. Pacing is drift-compensated (deadline-
+    anchored), so a requested rate is actually delivered; `replay_status` reports
+    `target_rate` vs the live `achieved_rate` so a stress run is self-verifying.
     `start`/`end` (ISO-8601 UTC) window the capture. `loop` restarts at the end.
     `limit_nodes` caps the node DB (file sources). `sim_nodes`/`sim_days`/
     `sim_seed` size and seed the synthetic generator; `sim_profile` tunes it
@@ -2124,6 +2131,7 @@ def replay_start(
         port=port,
         speed=speed,
         rate=rate,
+        duration=duration,
         max_gap=max_gap,
         start=s_epoch,
         end=e_epoch,
