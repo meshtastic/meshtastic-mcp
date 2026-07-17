@@ -149,6 +149,24 @@ PROFILE: dict = {
         "channel": "LongFast",
         "wire": "v1",
     },
+    # BBS/bot plane (opt-in, off by default): `count` auto-reply bots in the
+    # meshing-around style (ping→pong pile-ons, cmd/motd/wx/joke/games menus),
+    # egged on by attendee nodes, with tapback (emoji-reaction) storms — one
+    # "legendary" broadcast collects `tapback_storm` reactions — periodic bot
+    # advertisement beacons, and attendee→bot traceroute request/response
+    # pairs. Modeled on real conference meshes where multiple BBS bots share a
+    # channel (e.g. SpudGunMan/meshing-around deployments at DEF CON); a
+    # scenario knob like `tak`, not fitted to a capture. The scene is emitted
+    # after the RF-observer stage: bots cluster within earshot of the gateway,
+    # and the exchanges are the app-facing content a stress test needs intact.
+    "bots": {
+        "count": 0,
+        "storms_per_day": 200,
+        "tapback_storm": 150,
+        "beacon_interval": 7200,
+        "traceroutes_per_day": 50,
+        "channels": [],  # default: primary + second channel of the lineup
+    },
     # Observed text volume across the real captures was ~2.2 msgs/hr per 150
     # nodes (gateway-observed, an undercount); 4 keeps conference channels lively
     # while staying close to reality.
@@ -259,7 +277,7 @@ PRESETS: dict[str, dict] = {
 
 # Config keys whose values are themselves dicts and should deep-merge (rather
 # than wholesale-replace) when a profile override is applied.
-_MERGE_DICT_KEYS = frozenset({"venue", "observer", "climate", "pos_interval", "tak"})
+_MERGE_DICT_KEYS = frozenset({"venue", "observer", "climate", "pos_interval", "tak", "bots"})
 
 
 def _deep_merge(base: dict, over: dict) -> dict:
@@ -446,6 +464,73 @@ _CHATTER = {
     ],
 }
 
+# ── BBS/bot plane pools (all synthetic; see PROFILE["bots"]) ─────────────────
+# Bot identities in the meshing-around style: (long_name, short_name, hw).
+_BOT_IDENTITIES = [
+    ("SpudBot BBS", "SPUD", "RAK4631"),
+    ("PongMaster 9000", "PONG", "HELTEC_V3"),
+    ("MOTD-Bot", "MOTD", "HELTEC_V3"),
+    ("JokeBot", "HAHA", "T_DECK"),
+    ("WX-Bot", "WX", "RAK4631"),
+    ("DopeWars Dealer", "DOPE", "T_DECK"),
+    ("Lemonade Stand", "LMND", "HELTEC_V3"),
+    ("Blackjack Table", "BJ21", "T_ECHO"),
+    ("MailRoom BBS", "MAIL", "RAK4631"),
+    ("Solar Oracle", "SOLR", "HELTEC_V3"),
+    ("TideBot", "TIDE", "T_ECHO"),
+    ("WikiGnome", "WIKI", "HELTEC_V3"),
+    ("AskAI Gremlin", "AI", "T_DECK"),
+    ("SysInfo Snitch", "SYS", "RAK4631"),
+    ("AlertBot", "ALRT", "HELTEC_V3"),
+    ("HamTest Elmer", "HAM", "T_ECHO"),
+    ("LastHeard Lurker", "LHRD", "HELTEC_V3"),
+]
+_BOT_BASE_NUM = 0xB0700001
+
+# attendee trigger -> ((min, max) bots that pile on, reply templates)
+_BOT_TRIGGERS: dict[str, tuple[tuple[int, int], list[str]]] = {
+    "ping": ((5, 17), ["🏓PONG", "🏓PONG @ SNR {snr}dB {hops} hops", "PONG! 🥔", "pong."]),
+    "cmd": ((1, 3), ["CMD: ping motd wx joke bbs mail games lheard whereami wiki: askai"]),
+    "motd": ((1, 2), ["MOTD: welcome to the con mesh! text 'cmd' for menu. be kind, mesh on 🥔"]),
+    "wx": ((1, 2), ["☀️ 104F clear, wind S 5mph, UV 11 — hydrate!", "🌡️ 40C. it's a dry heat."]),
+    "joke": (
+        (1, 3),
+        [
+            "why did the packet cross the mesh? to get 7 hops away 😂",
+            "I'd tell you a UDP joke but you might not get it",
+            "my other node is a potato 🥔",
+        ],
+    ),
+    "dopewars": ((1, 1), ["💊 DopeWars: cash $2000, 0 units. 'buy'/'sell'/'jet' to play"]),
+    "lemonstand": ((1, 1), ["🍋 Lemonade: day 1, 72F. cups 25c. how many pitchers?"]),
+    "blackjack": ((1, 1), ["🃏 Blackjack: you drew K♠ 7♦ (17). hit or stand?"]),
+    "bbslist": ((1, 2), ["📬 BBS: 3 unread. 'bbsread' to read, 'bbspost' to post"]),
+    "lheard": ((1, 2), ["Last heard: SPUD(1m) PONG(2m) HAHA(4m) WX(7m) DOPE(9m)"]),
+    "whereami": ((1, 1), ["📍 you are ~0.4mi from the Contest Area gateway"]),
+    "sysinfo": ((1, 1), ["⚙️ up 2d7h, batt 101%, ch util 41%, airtime 9.8%"]),
+    "hfcond": ((1, 1), ["📡 solar: SFI 142 A 8 K 2 — 20m open, 40m fair"]),
+    "askai": ((1, 1), ["🤖 pondering...", "🤖 42. next question."]),
+    "wiki: mesh": ((1, 1), ["📖 mesh: a network topology where nodes relay data..."]),
+}
+_BOT_EGGING = [
+    "PSA: all the bots reply to ping. do NOT ping",
+    "ping it. PING IT.",
+    "lmaooo the bots are talking to each other again",
+    "who let this many BBS bots on one channel",
+    "someone said ping and my phone had a seizure",
+    "bot fight! bot fight!",
+    "🥔🥔🥔",
+    "stop egging the bots (do it again)",
+    "channel util is 60% thanks to the pong storm",
+    "petition to rename this channel #botherd",
+    "the bots have achieved consciousness. they choose violence",
+    "I muted this channel and I can still hear the pongs",
+]
+# The one broadcast the whole con reacts to (PROFILE["bots"]["tapback_storm"]
+# reactions). Contains the word "tapback" on purpose — searchable in an app.
+_BOT_LEGENDARY = "PSA: all the bots reply to ping. do NOT ping. tapback this so people see it"
+_TAPBACK_EMOJI = ["👍", "😂", "🤣", "💀", "🔥", "❤️", "🏓", "🥔", "👀", "😮", "💯", "🫡"]
+
 
 def _weighted(rng: random.Random, pairs: list[tuple[str, int]]) -> str:
     total = sum(w for _, w in pairs)
@@ -525,6 +610,8 @@ def _mp(
     priority: int = 0,
     want_response: bool = False,
     request_id: int = 0,
+    reply_id: int = 0,
+    emoji: bool = False,
 ) -> bytes:
     mp = mesh_pb2.MeshPacket()
     setattr(mp, "from", frm & 0xFFFFFFFF)
@@ -541,6 +628,10 @@ def _mp(
         mp.decoded.want_response = True
     if request_id:  # nonzero => this packet is a response to that request
         mp.decoded.request_id = request_id & 0xFFFFFFFF
+    if reply_id:  # nonzero + emoji => a tapback (emoji reaction) on that message
+        mp.decoded.reply_id = reply_id & 0xFFFFFFFF
+    if emoji:
+        mp.decoded.emoji = 1
     return mp.SerializeToString()
 
 
@@ -614,6 +705,195 @@ def _emit_encrypted(
             )
         )
         added += 1
+
+
+def _emit_bots(
+    rng: random.Random,
+    P: dict,
+    node_rows: list[NodeRow],
+    ch_index: dict[str, int],
+    chans: list[str],
+    *,
+    start_epoch: int,
+    end_epoch: int,
+    pid_counter: itertools.count,
+) -> tuple[list[NodeRow], list[tuple[int, bytes, str]]]:
+    """The BBS/bot plane (see ``PROFILE["bots"]``): returns ``(bot_rows, packets)``.
+
+    Emits, across the capture span: attendee-trigger storms (``ping`` draws a
+    multi-bot pong pile-on plus bot-to-bot chain reactions; menu commands draw
+    1-3 replies), attendee egging commentary, tapback (emoji-reaction) storms —
+    a power-law long tail plus one legendary broadcast (:data:`_BOT_LEGENDARY`)
+    collecting ``tapback_storm`` reactions — per-bot advertisement beacons, and
+    attendee→bot traceroute request/response pairs. Everything references real
+    packet ids (tapbacks via ``reply_id``, traceroute responses via
+    ``request_id``) so apps thread the scene correctly.
+    """
+    cfg = dict(P.get("bots") or {})
+    n_bots = int(cfg.get("count", 0))
+    if n_bots <= 0 or not node_rows:
+        return [], []
+    span = end_epoch - start_epoch
+    days = max(1.0, span / 86400.0)
+    venue = P.get("venue") or {}
+    vlat, vlon = float(venue.get("lat", 0.0)), float(venue.get("lon", 0.0))
+
+    bot_rows: list[NodeRow] = []
+    for i in range(n_bots):
+        ln, sn, hw = _BOT_IDENTITIES[i % len(_BOT_IDENTITIES)]
+        if i >= len(_BOT_IDENTITIES):  # cycle the pool with a numeric suffix
+            ln, sn = f"{ln} {i + 1}", f"{sn[:2]}{i + 1}"
+        num = _BOT_BASE_NUM + i
+        bot_rows.append(
+            NodeRow(
+                num=num,
+                node_id=f"!{num:08x}",
+                long_name=ln,
+                short_name=sn,
+                hw_model=hw,
+                role="CLIENT",
+                lat_i=int((vlat + rng.uniform(-0.004, 0.004)) * 1e7) if vlat else None,
+                lon_i=int((vlon + rng.uniform(-0.005, 0.005)) * 1e7) if vlon else None,
+            )
+        )
+    bot_nums = [b.num for b in bot_rows]
+    attendees = [nr.num for nr in rng.sample(node_rows, min(250, len(node_rows)))]
+    routers = [nr.num for nr in node_rows if (nr.role or "").startswith("ROUTER")][:8]
+
+    scene_chans = [c for c in (cfg.get("channels") or []) if c in ch_index] or chans[:2]
+    out: list[tuple[int, bytes, str]] = []
+    # famous messages awaiting tapback storms: (pkt_id, t, ch, fame)
+    famous: list[tuple[int, int, str, float]] = []
+
+    def say(frm: int, t: int, body: str, ch: str, fame: float = 0.0) -> int:
+        pid = next(pid_counter)
+        out.append((t, _mp(pid, frm, BROADCAST, 1, body.encode("utf-8"), 3, 3, ch_index[ch]), ch))
+        if fame > 0:
+            famous.append((pid, t, ch, fame))
+        return pid
+
+    def tapback(frm: int, t: int, target_id: int, ch: str) -> None:
+        out.append(
+            (
+                t,
+                _mp(
+                    next(pid_counter),
+                    frm,
+                    BROADCAST,
+                    1,
+                    rng.choice(_TAPBACK_EMOJI).encode("utf-8"),
+                    3,
+                    3,
+                    ch_index[ch],
+                    reply_id=target_id,
+                    emoji=True,
+                ),
+                ch,
+            )
+        )
+
+    # bots introduce themselves once (apps that build the DB off-stream see them)
+    for b in bot_rows:
+        out.append(
+            (
+                start_epoch + rng.randint(0, 300),
+                _mp(next(pid_counter), b.num, BROADCAST, 4, _pl_nodeinfo(b), 3, 3, 0),
+                chans[0],
+            )
+        )
+
+    # ── con-hours storm timeline: trigger -> bot pile-on -> bot-to-bot chains ──
+    trig_names = list(_BOT_TRIGGERS)
+    for _ in range(int(float(cfg.get("storms_per_day", 200)) * days)):
+        day = rng.randrange(max(1, int(days)))
+        hour = rng.choice([*range(10, 24), 0, 1])  # con hours: 10:00..02:00
+        t = min(start_epoch + day * 86400 + hour * 3600 + rng.randrange(3600), end_epoch - 3600)
+        ch = rng.choice(scene_chans)
+        trig = rng.choice(trig_names)
+        say(rng.choice(attendees), t, trig, ch, fame=0.15 if trig == "ping" else 0.05)
+        lo, hi = _BOT_TRIGGERS[trig][0]
+        tt = t
+        for bot_num in rng.sample(bot_nums, rng.randint(min(lo, n_bots), min(hi, n_bots))):
+            tt += rng.randint(1, 6)
+            tpl = rng.choice(_BOT_TRIGGERS[trig][1])
+            body = tpl.format(snr=round(rng.uniform(-12, 8), 1), hops=rng.randint(0, 3))
+            say(bot_num, tt, body, ch, fame=0.10 if trig in ("ping", "joke") else 0.03)
+        # bot-to-bot chain: pong storms re-trigger other bots
+        if trig == "ping" and rng.random() < 0.55:
+            pongs = ["🏓PONG", "pong?", "PONG 🏓 (again)"]
+            for _ in range(rng.randint(2, 8)):
+                tt += rng.randint(1, 5)
+                say(rng.choice(bot_nums), tt, rng.choice(pongs), ch)
+        if rng.random() < 0.65:  # attendee egging commentary
+            tt += rng.randint(3, 30)
+            say(rng.choice(attendees), tt, rng.choice(_BOT_EGGING), ch, fame=0.25)
+
+    # ── the legendary broadcast the whole con tapbacks ──
+    n_legendary = min(int(cfg.get("tapback_storm", 150)), len(attendees))
+    if n_legendary > 0:
+        t_leg = start_epoch + (span * 2) // 3  # evening, two-thirds through
+        leg_id = say(rng.choice(attendees), t_leg, _BOT_LEGENDARY, scene_chans[0])
+        tt = t_leg
+        for who in rng.sample(attendees, n_legendary):
+            tt += rng.randint(1, 25)
+            tapback(who, tt, leg_id, scene_chans[0])
+
+    # ── tapback long tail on famous messages (power-law-ish) ──
+    for pkt_id, t, ch, fame in famous:
+        if rng.random() < fame * 0.3:
+            n_react = rng.randint(8, 40)  # hot message
+        elif rng.random() < 0.35:
+            n_react = rng.randint(1, 5)  # ordinary reactions
+        else:
+            continue
+        tt = t
+        for who in rng.sample(attendees, min(n_react, len(attendees))):
+            tt += rng.randint(1, 40)
+            tapback(who, tt, pkt_id, ch)
+
+    # ── bot advertisement beacons (MESH_BEACON_APP) ──
+    beacon_iv = int(cfg.get("beacon_interval", 7200))
+    if beacon_iv > 0:
+        for b in bot_rows:
+            pl = beacon_payload(
+                f"{b.long_name} here — text 'cmd' for menu",
+                offer_region="US",
+                offer_preset="LONG_FAST",
+            )
+            t = start_epoch + rng.randrange(beacon_iv)
+            while t < end_epoch:
+                raw = _mp(next(pid_counter), b.num, BROADCAST, MESH_BEACON_APP, pl, 3, 3, 0)
+                out.append((t, raw, chans[0]))
+                t += beacon_iv + rng.randint(-beacon_iv // 10, beacon_iv // 10)
+
+    # ── attendees tracerouting bots (request -> response pairs) ──
+    for _ in range(int(float(cfg.get("traceroutes_per_day", 50)) * days)):
+        t = start_epoch + rng.randrange(span)
+        who, bot = rng.choice(attendees), rng.choice(bot_nums)
+        ch = rng.choice(scene_chans)
+        req_pid = next(pid_counter)
+        out.append((t, _mp(req_pid, who, bot, 70, b"", 3, 3, ch_index[ch], want_response=True), ch))
+        relay_pool = [r for r in routers if r != who]
+        relays = [rng.choice(relay_pool)] if relay_pool and rng.random() < 0.7 else []
+        out.append(
+            (
+                t + rng.randint(1, 8),
+                _mp(
+                    next(pid_counter),
+                    bot,
+                    who,
+                    70,
+                    _pl_traceroute(rng, relays),
+                    3 - len(relays),
+                    3,
+                    ch_index[ch],
+                    request_id=req_pid,
+                ),
+                ch,
+            )
+        )
+
+    return bot_rows, out
 
 
 def _build_nodes(
@@ -1141,6 +1421,24 @@ def generate(
             obs_cfg["dup_weights"] = tuple(tuple(x) for x in obs_cfg["dup_weights"])
         positions = {m["num"]: (m["lat_i"] / 1e7, m["lon_i"] / 1e7) for m in meta}
         packets = observe(packets, positions, ObserverParams(**obs_cfg))
+
+    # -- BBS/bot plane (opt-in, off by default): emitted after the observer
+    # stage — bots cluster within earshot of the gateway, and the scene (pong
+    # storms, tapback threads, traceroute pairs) is app-facing content a stress
+    # test needs intact, not RF-thinned. Child RNG for stream stability. --
+    bot_rows, bot_packets = _emit_bots(
+        random.Random(rng.getrandbits(64)),
+        P,
+        node_rows,
+        ch_index,
+        chans,
+        start_epoch=start_epoch,
+        end_epoch=end_epoch,
+        pid_counter=pid_counter,
+    )
+    if bot_packets:
+        node_rows = node_rows + bot_rows
+        packets = sorted(packets + bot_packets, key=lambda p: p[0])
 
     cap = Capture(
         nodes=node_rows,

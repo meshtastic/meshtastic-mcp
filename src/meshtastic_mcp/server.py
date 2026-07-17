@@ -2072,9 +2072,14 @@ def replay_start(
     overrides deep-merged over the `source` preset. Use it to enable/shape
     features the presets leave off, e.g. an ATAK squad
     `{"tak": {"team_nodes": 6, "wire": "v2"}}`, a scripted spike
-    `{"spikes": [{"start_h": 20, "hours": 2, "text_x": 8}]}`, or the RF gateway
-    model `{"observer": {"enabled": true, "loss_floor": 0.5, "mqtt_fraction": 0.3}}`.
-    A preset base is chosen via `source`; `sim_profile` is never a file path.
+    `{"spikes": [{"start_h": 20, "hours": 2, "text_x": 8}]}`, the RF gateway
+    model `{"observer": {"enabled": true, "loss_floor": 0.5, "mqtt_fraction": 0.3}}`,
+    or a BBS/bot plane `{"bots": {"count": 17, "storms_per_day": 200,
+    "tapback_storm": 150}}` — auto-reply bots (ping→pong pile-ons, menu
+    commands) egged on by attendees, tapback (emoji-reaction) storms incl. one
+    legendary 100+-reaction message, bot beacons, and attendee→bot traceroute
+    pairs. A preset base is chosen via `source`; `sim_profile` is never a file
+    path.
 
     `channels` (SQLite sources) is a caller-supplied list of channels that routes
     packets by their OTA channel hash and advertises the real PSKs so the app

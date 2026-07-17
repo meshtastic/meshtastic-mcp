@@ -219,6 +219,7 @@ telemetry_timeline(port=<port>, start="-1h")  # battery/environment over time
 replay_start(source="meshcon")              # synthetic mesh; app/AVD connects to host:4403
 replay_start(source="capture.db", speed=30) # replay a real SQLite capture, 30x
 replay_start(source="capture.db", duration=150)  # whole capture in 2.5 min (stress test)
+replay_start(source="defcon", sim_profile={"bots": {"count": 17}})  # BBS/bot plane + tapback storms
 replay_start(source="meshcon", fuzz="adversary")  # inject bad actors / malformed packets
 replay_status()                             # connection state, packets_sent, fuzz activity
 replay_stop()

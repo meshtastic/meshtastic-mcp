@@ -308,7 +308,9 @@ def from_kind(
 
     kinds: ``waypoint`` (lat, lon, name, geofence_radius, bbox, notify_on_enter,
     notify_on_exit, notify_favorites_only, icon), ``position`` (lat, lon),
-    ``text`` (body), ``nodeinfo`` (id, long_name, short_name, hw_model, role),
+    ``text`` (body; pass reply_id + emoji=true for a tapback — an emoji
+    reaction on that message id), ``nodeinfo`` (id, long_name, short_name,
+    hw_model, role),
     ``beacon`` (message, offer_channel_name, offer_channel_psk_hex,
     offer_region, offer_preset), ``traceroute`` (route: [node_num, …],
     snr_towards: [int, …], route_back: [node_num, …], snr_back: [int, …],
@@ -335,13 +337,21 @@ def from_kind(
         pl = position_payload(a["lat"], a["lon"], altitude=a.get("altitude", 0))
         return packet(3, pl, from_node=from_node, to_node=to_node, channel_idx=channel_idx)
     if kind == "text":
-        return packet(
+        mp = packet(
             1,
             str(a.get("body", "")).encode("utf-8"),
             from_node=from_node,
             to_node=to_node,
             channel_idx=channel_idx,
         )
+        # tapback (emoji reaction): body is the emoji, reply_id targets the
+        # reacted-to message's packet id, and the emoji flag marks it a reaction
+        # rather than a normal reply.
+        if a.get("reply_id"):
+            mp.decoded.reply_id = int(a["reply_id"]) & 0xFFFFFFFF
+        if a.get("emoji"):
+            mp.decoded.emoji = 1
+        return mp
     if kind == "nodeinfo":
         pl = nodeinfo_payload(
             a.get("id", f"!{from_node:08x}"),

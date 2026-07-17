@@ -1144,6 +1144,83 @@ def test_sim_traceroutes_are_request_response_pairs():
         assert req.decoded.want_response is True
 
 
+# ── BBS/bot plane (PROFILE["bots"], opt-in) ─────────────────────────────────
+def test_sim_bots_off_by_default():
+    """Presets stay calibrated: no bot nodes, no tapbacks unless opted in."""
+    cap = sim.generate(nodes=40, days=1, seed=9, start=1_700_000_000)
+    bot_names = {ln for ln, _sn, _hw in sim._BOT_IDENTITIES}
+    assert not any(n.long_name in bot_names for n in cap.nodes)
+    mp = mesh_pb2.MeshPacket()
+    for _ts, raw, _ch in cap.packets:
+        mp.Clear()
+        mp.ParseFromString(raw)
+        assert not (mp.decoded.portnum == 1 and mp.decoded.emoji)
+
+
+def test_sim_bots_scene():
+    """`profile={"bots": {...}}` emits the full BBS scene: bot nodes in the DB,
+    trigger/pile-on text storms, tapbacks threading real packet ids (one
+    legendary message collecting `tapback_storm` reactions, its body carrying
+    the word "tapback" so it's findable in an app search), per-bot beacons, and
+    attendee→bot traceroute response pairs — deterministic per seed.
+    """
+    prof = {"bots": {"count": 5, "storms_per_day": 40, "tapback_storm": 30}}
+    cap = sim.generate(nodes=60, days=1, seed=9, start=1_700_000_000, profile=prof)
+    base = sim.generate(nodes=60, days=1, seed=9, start=1_700_000_000)
+    assert len(cap.nodes) == len(base.nodes) + 5
+    bot_nums = {
+        n.num for n in cap.nodes if n.long_name in {ln for ln, _sn, _hw in sim._BOT_IDENTITIES}
+    }
+    assert len(bot_nums) == 5
+
+    mp = mesh_pb2.MeshPacket()
+    all_ids: set[int] = set()
+    reactions: Counter = Counter()
+    legendary_id = None
+    bot_texts = bot_beacons = bot_tr_responses = 0
+    for _ts, raw, _ch in cap.packets:
+        mp.Clear()
+        mp.ParseFromString(raw)
+        all_ids.add(mp.id)
+        frm = getattr(mp, "from")
+        if mp.decoded.portnum == 1:
+            if mp.decoded.emoji:
+                assert mp.decoded.reply_id != 0  # a tapback always threads a message
+                reactions[mp.decoded.reply_id] += 1
+            else:
+                if "tapback" in mp.decoded.payload.decode("utf-8", "replace"):
+                    legendary_id = mp.id
+                if frm in bot_nums:
+                    bot_texts += 1
+        elif mp.decoded.portnum == 37 and frm in bot_nums:
+            bot_beacons += 1
+        elif mp.decoded.portnum == 70 and mp.decoded.request_id and frm in bot_nums:
+            bot_tr_responses += 1
+
+    assert bot_texts > 0  # bots piled on triggers
+    assert bot_beacons > 0  # bots advertise themselves
+    assert bot_tr_responses > 0  # attendees traced the bots, bots answered
+    assert sum(reactions.values()) > 0
+    assert all(rid in all_ids for rid in reactions)  # every tapback threads a real packet
+    assert legendary_id is not None, 'no searchable "tapback" message emitted'
+    assert reactions[legendary_id] == 30  # the legendary storm hits tapback_storm exactly
+    ts = [p[0] for p in cap.packets]
+    assert ts == sorted(ts)  # merged scene stays time-ordered
+    cap2 = sim.generate(nodes=60, days=1, seed=9, start=1_700_000_000, profile=prof)
+    assert [p[0] for p in cap2.packets] == ts  # deterministic per seed
+
+
+def test_from_kind_text_tapback():
+    from meshtastic_mcp.replay import build
+
+    mp = build.from_kind("text", {"body": "👍", "reply_id": 0xBEEF, "emoji": True}, from_node=1)
+    assert mp.decoded.portnum == 1
+    assert mp.decoded.reply_id == 0xBEEF
+    assert mp.decoded.emoji == 1
+    plain = build.from_kind("text", {"body": "hi"}, from_node=1)
+    assert plain.decoded.reply_id == 0 and plain.decoded.emoji == 0
+
+
 def test_from_kind_traceroute_request_id_builds_response():
     from meshtastic_mcp.replay import build
 

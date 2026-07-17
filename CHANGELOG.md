@@ -6,6 +6,16 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **BBS/bot plane for the sim** (`sim_profile={"bots": {...}}`, off by default) — a
+  meshing-around-style scene: `count` auto-reply bots (ping→pong pile-ons with bot-to-bot
+  chain reactions, cmd/motd/wx/joke/games menus) egged on by attendee nodes, tapback
+  (emoji-reaction) storms threading real packet ids via `reply_id` — a power-law long tail
+  plus one legendary broadcast collecting `tapback_storm` (default 150) reactions, its body
+  carrying the word "tapback" so it's findable in an app search — per-bot advertisement
+  beacons, and attendee→bot traceroute request/response pairs. Emitted after the RF-observer
+  stage (bots sit at the venue core; the scene arrives intact) on an isolated child RNG.
+  `build.from_kind("text", ...)` accepts `reply_id` + `emoji` so `replay_inject` can fire a
+  tapback on demand.
 - **Replay `duration` pacing** (`replay_start(duration=…)`) — compress the whole (windowed)
   capture into a fixed wall-clock span by deriving a steady rate of `packets / duration`
   (e.g. `duration=150` replays an entire DEF CON capture in 2.5 minutes regardless of packet
