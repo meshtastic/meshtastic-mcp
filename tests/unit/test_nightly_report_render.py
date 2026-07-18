@@ -212,8 +212,26 @@ def test_budget_ladder_compacts_then_truncates():
 
 
 def test_fence_widens_for_embedded_backticks():
+    # The fence must be strictly longer than the longest backtick run inside.
     assert nrep._fence("evil\n```\ninjection").startswith("````")
+    assert nrep._fence("has ```` four").startswith("`````")
     assert nrep._fence("plain").startswith("```\n")
+
+
+def test_gps_scrubbed_from_report_evidence():
+    # Device-authored log lines with GPS must be redacted in the rendered body
+    # (Scrubber("redact") is applied by the analyzer; verify the report path
+    # doesn't leak coordinates from an observation's evidence).
+    from meshtastic_mcp.web.services.scrub import Scrubber
+
+    raw = "INFO | GPS lat=37.7749123 lon=-122.4194155 fix"
+    scrubbed = Scrubber("redact").scrub(raw)
+    assert "37.7749123" not in scrubbed and "-122.4194155" not in scrubbed
+    analysis = _analysis(
+        observations=[Observation("warn", "panic", "gps leak", evidence=[scrubbed])]
+    )
+    body = nrep.render_body(dict(NIGHTLY, status="passed"), analysis, [], max_body_kb=60)
+    assert "37.7749123" not in body and "-122.4194155" not in body
 
 
 def test_reporter_persists_even_when_disabled(tmp_path, monkeypatch):

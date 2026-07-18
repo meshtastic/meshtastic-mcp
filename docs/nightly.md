@@ -62,6 +62,8 @@ Optional: `MESHTASTIC_MCP_SOURCE_ROOT` (mcp checkout override, default: this rep
 
 - **gh** installed and logged in (`meshtastic-mcp doctor` → `gh-auth` check). The default
   report repo is `thebentern/fleet-nightly`; create it private, or enable *auto-create*.
+  **GitHub posting is off by default** — reports are always rendered and stored locally; flip
+  "post issues" on in the Nightly tab once the repo is set.
 - **Ollama** (or a llama-server) for the behavioral analysis — optional; without it the
   deterministic report still posts and carries an `llm_unavailable` observation. The
   *auto-start local LLM* toggle tries `llama-server` bootstrap once per night.
@@ -79,8 +81,10 @@ nights reference. Reports (title + full untruncated body + delivery status) are 
 ## First night expectations
 
 The first run clones `meshtastic/firmware` (~10 min) and cold-builds every fleet env —
-budget an extra half hour. Default schedule is 01:30; suite ≤ 4 h + 2 h soak reports by
-~07:30 worst case.
+budget an extra half hour. Default schedule is 01:30. A clean night (suite + 2 h soak)
+typically finishes by ~07:30; prebuild, recovery, analysis, and reporting add to that, and
+the whole run is bounded only by `pipeline_timeout_h` (default 10 h). Set the schedule so
+this window doesn't collide with daytime bench use.
 
 ## Security note
 

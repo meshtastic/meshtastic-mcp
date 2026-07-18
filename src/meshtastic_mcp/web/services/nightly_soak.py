@@ -89,6 +89,13 @@ class SoakSummary:
         }
 
 
+def _count_lines(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with path.open(encoding="utf-8") as fh:
+        return sum(1 for _ in fh)
+
+
 class _JsonlWriter:
     """Append-only JSONL writer, safe to call from reader threads."""
 
@@ -133,6 +140,9 @@ class NightlySoak:
         self.observe = observe
         self.keepalive = keepalive
         self.summary = SoakSummary(started_at=time.time())
+        # Serials confirmed to be on the private bake channel — the ONLY devices
+        # we may transmit to (a misbaked board would broadcast on public LongFast).
+        self._verified: set[str] = set()
 
     # -- capture sink --------------------------------------------------------
 
@@ -212,6 +222,9 @@ class NightlySoak:
                     f"{serial} has region {region!r} — TX is blocked",
                     {"serial": serial, "region": region},
                 )
+            else:
+                # Positively confirmed on the private channel with a real region.
+                self._verified.add(serial)
 
     # -- periodic actions ----------------------------------------------------
 
@@ -313,7 +326,9 @@ class NightlySoak:
         snap_period = max(MIN_ACTION_PERIOD_S, self.cfg.soak_snapshot_interval_min * 60.0)
         next_send = time.monotonic() + traffic_period
         next_snap = time.monotonic() + snap_period
-        seq = 0
+        # Continue the send sequence across a mid-soak restart so a resumed night
+        # never reuses an id already on the wire (the sends file is append-only).
+        seq = _count_lines(self.data_dir / SENDS_FILE)
         try:
             while time.monotonic() < deadline:
                 if cancel is not None and cancel.is_set():
@@ -321,7 +336,13 @@ class NightlySoak:
                 now = time.monotonic()
                 if now >= next_send:
                     next_send = now + traffic_period
-                    fleet = await rd.online_with_env(self.db)
+                    # Transmit ONLY to boards confirmed on the private channel —
+                    # never to a misbaked board that would broadcast on LongFast.
+                    fleet = [
+                        d
+                        for d in await rd.online_with_env(self.db)
+                        if d["serial_number"] in self._verified
+                    ]
                     if fleet:
                         await self._send_one(fleet[seq % len(fleet)], seq, sends)
                         seq += 1

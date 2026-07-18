@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 
 from ..db import repo_nightly as rn
@@ -79,8 +80,10 @@ def _fold_longrepr(text: str | None) -> str:
 
 
 def _fence(text: str) -> str:
-    # A ``` inside the content would break out of the fence — widen ours.
-    fence = "````" if "```" in text else "```"
+    # The fence must be strictly longer than the longest backtick run in the
+    # content, or embedded ``` (or ````) would break out of it.
+    longest = max((len(m) for m in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
     return f"{fence}\n{text}\n{fence}"
 
 
@@ -218,6 +221,7 @@ def render_body(
     *,
     max_body_kb: int,
     compact_failures: bool = False,
+    unbounded: bool = False,
 ) -> str:
     counts = analysis.counts
     summary_row = {
@@ -294,6 +298,9 @@ def render_body(
     )
 
     body = "\n\n".join(sections) + FOOTER
+    if unbounded:
+        # The stored copy the UI shows — every failure in full, no truncation.
+        return body
     budget = min(max_body_kb * 1024, GITHUB_BODY_HARD_CAP)
     if len(body) > budget and not compact_failures:
         return render_body(
@@ -363,11 +370,18 @@ class NightlyReporter:
             data_dir=nightly_data_dir(nightly_id),
         )
         title = render_title(nightly, analysis, culprit=failed_step(pipeline_obs))
-        body = render_body(nightly, analysis, pipeline_obs, max_body_kb=report_cfg.max_body_kb)
         labels = render_labels(nightly, analysis)
+        # Two bodies: the GitHub copy is fitted to the size budget; the stored
+        # copy is the full, untruncated report the UI shows.
+        posted_body = render_body(
+            nightly, analysis, pipeline_obs, max_body_kb=report_cfg.max_body_kb
+        )
+        full_body = render_body(
+            nightly, analysis, pipeline_obs, max_body_kb=report_cfg.max_body_kb, unbounded=True
+        )
 
         delivery = await asyncio.to_thread(
-            gi.post_issue, report_cfg, title=title, body_md=body, labels=labels
+            gi.post_issue, report_cfg, title=title, body_md=posted_body, labels=labels
         )
         await rn.upsert_report(
             self.db,
@@ -376,7 +390,7 @@ class NightlyReporter:
             issue_url=delivery.issue_url,
             error=delivery.error,
             title=title,
-            body_md=body,
+            body_md=full_body,
             failures=len(analysis.failures),
             observation_count=len(analysis.observations),
         )

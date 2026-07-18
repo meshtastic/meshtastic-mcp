@@ -862,9 +862,12 @@ def _mount_nightly(api: APIRouter) -> None:
         db = request.app.state.db
         orch = request.app.state.nightly
         cfg = await nightly.load_config(db)
-        merged = nightly.NightlyConfig.from_dict({**cfg.to_dict(), **body})
-        if not (0 <= merged.hour <= 23 and 0 <= merged.minute <= 59):
-            raise HTTPException(status_code=400, detail="invalid hour/minute")
+        try:
+            coerced = nightly.coerce_config_patch(cfg, body)
+            merged = nightly.NightlyConfig.from_dict({**cfg.to_dict(), **coerced})
+            nightly.validate_config(merged)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         await nightly.save_config(db, merged)
         await orch.reload()
         status = orch.status()
@@ -880,9 +883,17 @@ def _mount_nightly(api: APIRouter) -> None:
     async def put_report_config(request: Request, body: dict = Body(...)):
         db = request.app.state.db
         cfg = await github_issues.load_config(db)
-        merged = github_issues.NightlyReportConfig.from_dict({**cfg.to_dict(), **body})
-        if not merged.repo or "/" not in merged.repo:
-            raise HTTPException(status_code=400, detail="repo must be owner/name")
+        try:
+            coerced = nightly.coerce_config_patch(cfg, body)
+            merged = github_issues.NightlyReportConfig.from_dict({**cfg.to_dict(), **coerced})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        # Exactly owner/name — not "owner", "owner/repo/extra", or empty.
+        parts = merged.repo.split("/")
+        if len(parts) != 2 or not all(parts):
+            raise HTTPException(status_code=400, detail="repo must be exactly owner/name")
+        if merged.max_body_kb < 1:
+            raise HTTPException(status_code=400, detail="max_body_kb must be ≥ 1")
         await github_issues.save_config(db, merged)
         return merged.to_dict()
 

@@ -81,7 +81,8 @@ def fake_gh(tmp_path: Path, monkeypatch):
 
 
 def _cfg(**kw) -> gi.NightlyReportConfig:
-    return gi.NightlyReportConfig(**{"repo": "me/fleet-nightly", **kw})
+    # Posting defaults OFF now; the delivery tests opt in explicitly.
+    return gi.NightlyReportConfig(**{"repo": "me/fleet-nightly", "enabled": True, **kw})
 
 
 def test_config_round_trip(tmp_path: Path):

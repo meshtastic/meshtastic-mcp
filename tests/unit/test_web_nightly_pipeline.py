@@ -75,11 +75,16 @@ class FakeOrch:
 
 
 class FakeRecovery:
+    """Mirrors the real RecoveryService destructive-confirmation contract: a
+    reflash-capable ladder must be called with confirm=True."""
+
     def __init__(self, revives=True) -> None:
         self.calls: list[tuple[str, bool]] = []
         self.revives = revives
 
     async def recover(self, serial, *, allow_reflash=False, confirm=False, steps=None):
+        if allow_reflash and not confirm:
+            raise AssertionError("reflash recovery must pass confirm=True")
         self.calls.append((serial, allow_reflash))
         return {"recovered": self.revives}
 
@@ -315,24 +320,33 @@ def test_self_update_restart_persists_awaiting_restart(tmp_path, monkeypatch, qu
             ok=True, updated=True, sha_before="m1", sha_after="m2"
         ),
     )
-    kills: list[int] = []
+    events: list[str] = []  # ordered log of status writes and the kill
 
     async def go():
         db = await Database(tmp_path / "db").connect()
         orch, _hub = await _make(db, tmp_path, monkeypatch)
 
-        def fake_kill(pid, sig):
-            kills.append(sig)
+        real_set_status = nightly.rn.set_status
 
+        async def spy_set_status(dbh, nid_, status):
+            events.append(f"set_status:{status}")
+            return await real_set_status(dbh, nid_, status)
+
+        def fake_kill(pid, sig):
+            events.append("kill")
+
+        monkeypatch.setattr(nightly.rn, "set_status", spy_set_status)
         monkeypatch.setattr(nightly.os, "kill", fake_kill)
         nid = await _run_night(orch)
 
-        assert kills  # SIGTERM was sent
+        assert "kill" in events  # SIGTERM was sent
+        # awaiting_restart MUST be durably persisted BEFORE the kill, so a real
+        # respawn finds the resumable state.
+        assert "set_status:awaiting_restart" in events
+        assert events.index("set_status:awaiting_restart") < events.index("kill")
         row = await rn.get(db, nid)
         assert row is not None
-        obs = await rn.observations(db, nid)
-        kinds = _kinds(obs)
-        # Process survived the fake kill → restart_failed, night continued.
+        kinds = _kinds(await rn.observations(db, nid))
         assert "self_update.restarting" in kinds and "self_update.restart_failed" in kinds
         assert row["mcp_sha_before"] == "m1" and row["mcp_sha_after"] == "m2"
         assert row["status"] in ("passed", "failed")
@@ -375,9 +389,10 @@ def test_resume_decision_table(tmp_path, monkeypatch, quick):
         assert await orch._maybe_resume()
         assert launches[-1] == (n3, "suite")
         assert (await rr.get_run(db, run_id))["finished_at"] is not None  # orphan closed
-        # Second death → crash-loop guard sends it straight to handoff.
+        # Second death → crash-loop guard sends it straight to finalize (report
+        # only), NOT a full pipeline rerun.
         assert await orch._maybe_resume()
-        assert launches[-1] == (n3, "handoff")
+        assert launches[-1] == (n3, "finalize")
         obs = await rn.observations(db, n3)
         assert "suite.crash_loop" in _kinds(obs)
         await rn.finish(db, n3, status="error", summary=None)

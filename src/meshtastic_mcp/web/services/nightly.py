@@ -91,6 +91,56 @@ class NightlyConfig:
         return cls(**{k: v for k, v in d.items() if k in allowed})
 
 
+def coerce_config_patch(base, patch: dict) -> dict:
+    """Type-check an incoming config patch against the runtime types of a base
+    config instance's fields. Unknown keys are dropped; a value of the wrong
+    type raises ValueError (→ HTTP 400) instead of silently persisting a string
+    that later crashes the pipeline (e.g. ``soak_hours="2"``)."""
+    from dataclasses import fields as _fields
+
+    allowed = {f.name for f in _fields(base)}
+    out: dict = {}
+    for key, val in patch.items():
+        if key not in allowed:
+            continue
+        cur = getattr(base, key)
+        if isinstance(cur, bool):
+            if not isinstance(val, bool):
+                raise ValueError(f"{key} must be a boolean")
+            out[key] = val
+        elif isinstance(cur, int) and not isinstance(cur, bool):
+            if isinstance(val, bool) or not isinstance(val, (int, float)) or float(val) % 1:
+                raise ValueError(f"{key} must be an integer")
+            out[key] = int(val)
+        elif isinstance(cur, float):
+            if isinstance(val, bool) or not isinstance(val, (int, float)):
+                raise ValueError(f"{key} must be a number")
+            out[key] = float(val)
+        elif isinstance(cur, list):
+            if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
+                raise ValueError(f"{key} must be a list of strings")
+            out[key] = val
+        elif isinstance(cur, str):
+            if not isinstance(val, str):
+                raise ValueError(f"{key} must be a string")
+            out[key] = val
+    return out
+
+
+def validate_config(cfg: NightlyConfig) -> None:
+    """Range checks for a fully-built config. Raises ValueError on violation."""
+    if not (0 <= cfg.hour <= 23 and 0 <= cfg.minute <= 59):
+        raise ValueError("hour must be 0–23 and minute 0–59")
+    if cfg.soak_hours < 0:
+        raise ValueError("soak_hours must be ≥ 0")
+    if cfg.suite_timeout_h <= 0 or cfg.pipeline_timeout_h <= 0:
+        raise ValueError("timeouts must be > 0")
+    if cfg.keep_nights < 1:
+        raise ValueError("keep_nights must be ≥ 1")
+    if cfg.catchup_window_h < 0:
+        raise ValueError("catchup_window_h must be ≥ 0")
+
+
 async def load_config(db: Database) -> NightlyConfig:
     return NightlyConfig.from_dict(await rs.get_json(db, SETTINGS_KEY))
 
@@ -471,10 +521,16 @@ class NightlyOrchestrator:
             self._loop_task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
-        for task in (self._loop_task, self._pipeline_task):
-            if task is not None and not task.done():
+        # Await the cancellations so pipeline cleanup (DB writes, monitor
+        # release) finishes BEFORE shutdown tears down the db/serial monitors.
+        tasks = [t for t in (self._loop_task, self._pipeline_task) if t is not None]
+        for task in tasks:
+            if not task.done():
                 task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._loop_task = None
+        self._pipeline_task = None
 
     def is_pipeline_active(self) -> bool:
         return self._pipeline_task is not None and not self._pipeline_task.done()
@@ -587,7 +643,10 @@ class NightlyOrchestrator:
                     "suite.crash_loop",
                     f"suite died {attempts}× — not flashing the bench again tonight",
                 )
-                self._launch(nid, "handoff")
+                # Straight to finalize (bench_recover + report). "handoff" is not
+                # a recognized resume token — using it would re-run the whole
+                # pipeline and defeat the crash-loop cap.
+                self._launch(nid, "finalize")
                 return True
             self._launch(nid, "suite")
             return True

@@ -38,11 +38,19 @@ class FakeSerialMon:
 class FakePortLocks:
     def __init__(self) -> None:
         self.guarded: list[str] = []
+        self._held: set[str] = set()
 
     @asynccontextmanager
     async def guard(self, serial: str):
+        # Enforce the real contract: a device's port is held exclusively — no
+        # overlapping guard for the same serial.
+        assert serial not in self._held, f"{serial} port guarded re-entrantly"
+        self._held.add(serial)
         self.guarded.append(serial)
-        yield
+        try:
+            yield
+        finally:
+            self._held.discard(serial)
 
 
 class Observations:
@@ -190,6 +198,83 @@ def test_run_sends_traffic_and_snapshots(tmp_path: Path, monkeypatch):
         # sees nothing at 3am) and release it at the end.
         assert soak.serialmon.acquired == ["S1"]
         assert soak.serialmon.released == ["S1"]
+        await db.close()
+
+    asyncio.run(go())
+
+
+def test_no_transmit_to_misbaked_device(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(nightly_soak, "MIN_ACTION_PERIOD_S", 0.02)
+    monkeypatch.setattr(nightly_soak, "_TICK_S", 0.02)
+    sent: list[str] = []
+
+    def fake_send(text, to, channel_index, want_ack, port):
+        sent.append(text)
+        return {"ok": True}
+
+    async def go():
+        db = await Database(tmp_path / "db").connect()
+        await _seed_device(db, "GOOD", "/dev/a")
+        await _seed_device(db, "BAD", "/dev/b")
+
+        # GOOD is on the private channel; BAD is on LongFast (misbaked).
+        def fake_info(port, timeout_s=8.0):
+            return {
+                "/dev/a": {"primary_channel": "McpTest", "region": "US"},
+                "/dev/b": {"primary_channel": "LongFast", "region": "US"},
+            }[port]
+
+        monkeypatch.setattr(nightly_soak.mt_info, "device_info", fake_info)
+        monkeypatch.setattr(nightly_soak.admin, "send_text", fake_send)
+        obs = Observations()
+        cfg = NightlyConfig(soak_traffic_interval_min=0.001)
+        soak = _soak(db, tmp_path, obs, cfg=cfg, nightly_id=3)
+        await soak.run(duration_s=0.3)
+
+        # Only GOOD is transmitted to; BAD (on LongFast) is never sent traffic.
+        assert soak._verified == {"GOOD"}
+        assert "channel.default_profile" in obs.kinds()
+        sends = tmp_path / "night" / nightly_soak.SENDS_FILE
+        rows = [json.loads(ln) for ln in sends.read_text().splitlines()] if sends.exists() else []
+        assert rows and all(r["serial"] == "GOOD" for r in rows)
+        await db.close()
+
+    asyncio.run(go())
+
+
+def test_send_seq_resumes_from_existing_file(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(nightly_soak, "MIN_ACTION_PERIOD_S", 0.02)
+    monkeypatch.setattr(nightly_soak, "_TICK_S", 0.02)
+    sent: list[str] = []
+
+    async def go():
+        db = await Database(tmp_path / "db").connect()
+        await _seed_device(db, "GOOD", "/dev/a")
+        monkeypatch.setattr(
+            nightly_soak.mt_info,
+            "device_info",
+            lambda port, timeout_s=8.0: {"primary_channel": "McpTest", "region": "US"},
+        )
+        monkeypatch.setattr(
+            nightly_soak.admin,
+            "send_text",
+            lambda text, to, ch, ack, port: sent.append(text) or {"ok": True},
+        )
+        # Pre-seed 3 earlier sends (simulating a pre-restart soak).
+        (tmp_path / "night").mkdir(parents=True)
+        (tmp_path / "night" / nightly_soak.SENDS_FILE).write_text(
+            '{"seq":0}\n{"seq":1}\n{"seq":2}\n'
+        )
+        soak = _soak(
+            db,
+            tmp_path,
+            Observations(),
+            cfg=NightlyConfig(soak_traffic_interval_min=0.001),
+            nightly_id=5,
+        )
+        await soak.run(duration_s=0.2)
+        # Sequence continues at 3 — no id already on the wire is reused.
+        assert sent and sent[0] == "nightly-5-3"
         await db.close()
 
     asyncio.run(go())

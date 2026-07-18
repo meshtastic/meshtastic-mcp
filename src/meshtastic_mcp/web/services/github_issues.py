@@ -12,6 +12,7 @@ blocking — callers dispatch via ``asyncio.to_thread``.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import tempfile
 import time
@@ -31,7 +32,10 @@ _NETWORK_RETRY_DELAY_S = 10.0
 
 @dataclass
 class NightlyReportConfig:
-    enabled: bool = True  # gates posting only; the report is always rendered+stored
+    # Posting to GitHub is OFF by default — an external publish must be an
+    # explicit operator opt-in (the report is always rendered + stored locally
+    # regardless, and viewable in the UI). Turn it on in the Nightly tab.
+    enabled: bool = False
     repo: str = "thebentern/fleet-nightly"
     auto_create_repo: bool = False
     max_body_kb: int = 60
@@ -66,7 +70,8 @@ class DeliveryResult:
 STATUS_HINTS = {
     "posted": "Report posted.",
     "disabled": "Posting is disabled — the report is stored locally only.",
-    "gh_missing": "The gh CLI is not installed. brew install gh",
+    "gh_missing": "The gh CLI is not installed — run `meshtastic-mcp doctor` for "
+    "the platform-specific install command.",
     "gh_unauthenticated": "gh is installed but not logged in. Run: gh auth login",
     "repo_missing": "The report repo does not exist. Create it with: "
     "gh repo create <repo> --private (or enable auto_create_repo).",
@@ -145,6 +150,22 @@ def _classify_failure(rc: int, out: str, err: str) -> str:
     return "network_error" if network else "post_failed"
 
 
+def _retry_safe(rc: int, out: str, err: str) -> bool:
+    """True only for failures that prove the request NEVER reached GitHub, so a
+    retry cannot create a duplicate issue. A timeout is ambiguous — the issue
+    may already have been created — so it is NOT retry-safe."""
+    blob = f"{out}\n{err}".lower()
+    if rc == 124 or "timed out" in blob or "timeout" in blob:
+        return False
+    return (
+        ("could not resolve" in blob and "host" in blob)
+        or "connection refused" in blob
+        or "network is unreachable" in blob
+        or "no route to host" in blob
+        or "dial tcp" in blob
+    )
+
+
 def _create_repo(repo: str) -> tuple[bool, str]:
     rc, out, err = _gh(
         "repo",
@@ -183,8 +204,10 @@ def post_issue(
     sleep=time.sleep,
 ) -> DeliveryResult:
     """Create the issue. Body goes via a temp file (argv limits); labels are
-    best-effort — if labeling fails the post is retried without them; a network
-    failure gets exactly one retry."""
+    best-effort — if labeling fails the post is retried without them. A failure
+    is retried once ONLY when it proves the request never reached GitHub (so a
+    retry can't create a duplicate issue); a timeout is left as network_error
+    for the operator to repost."""
     if not cfg.enabled:
         return DeliveryResult(status="disabled")
 
@@ -199,9 +222,13 @@ def post_issue(
 
     labels_ok = _ensure_labels(cfg.repo, labels)
 
-    body_file = Path(tempfile.gettempdir()) / f"nightly-report-{int(time.time())}.md"
+    # Securely created, uniquely named temp file — never a predictable path in
+    # a shared /tmp (symlink/race hardening).
+    fd, tmp_name = tempfile.mkstemp(prefix="nightly-report-", suffix=".md")
+    body_file = Path(tmp_name)
     try:
-        body_file.write_text(body_md, encoding="utf-8")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(body_md)
         base = [
             "issue",
             "create",
@@ -226,7 +253,7 @@ def post_issue(
                 result = DeliveryResult(
                     status=_classify_failure(rc, out, err), error=_tail(err or out)
                 )
-                if result.status == "network_error" and try_no == 1:
+                if try_no == 1 and _retry_safe(rc, out, err):
                     sleep(_NETWORK_RETRY_DELAY_S)
                     continue
                 break

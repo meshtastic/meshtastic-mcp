@@ -521,17 +521,36 @@ def _gh_auth_check() -> Check:
             needed,
             fix=_pkg("brew install gh", "apt install gh  # or: https://cli.github.com"),
         )
+    # Distinguish a genuine "not logged in" (→ gh auth login) from a timeout or
+    # exec failure (→ different remediation), so the operator isn't sent to an
+    # ineffective command.
     try:
         res = subprocess.run([path, "auth", "status"], capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
-        res = None
-    if res is None or res.returncode != 0:
+    except subprocess.TimeoutExpired:
         return Check(
             "gh-auth",
             "nightly-report",
             STATUS_DEGRADED,
             needed,
-            detail="gh is installed but not logged in",
+            detail="`gh auth status` timed out — check network / gh config",
+            fix="gh auth status  # investigate the hang",
+        )
+    except OSError as exc:
+        return Check(
+            "gh-auth",
+            "nightly-report",
+            STATUS_DEGRADED,
+            needed,
+            detail=f"could not run gh: {exc}",
+            fix="gh auth status  # verify the gh install",
+        )
+    if res.returncode != 0:
+        return Check(
+            "gh-auth",
+            "nightly-report",
+            STATUS_DEGRADED,
+            needed,
+            detail=(res.stderr or res.stdout or "gh is installed but not logged in").strip()[:200],
             fix="gh auth login",
         )
     return Check("gh-auth", "nightly-report", STATUS_OK, needed, detail=path)

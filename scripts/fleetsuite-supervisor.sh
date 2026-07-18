@@ -38,16 +38,23 @@ last_good=""
 sha="$(current_sha)"
 
 if [[ $failures -ge $MAX_CRASHES && -n $last_good && -n $sha && $last_good != "$sha" ]]; then
-	note "crash loop detected ($failures fast exits) — rolling back $sha -> $last_good"
-	if git -C "$ROOT" reset --hard "$last_good"; then
-		PY="$ROOT/.venv/bin/python"
-		if [[ -x $PY ]]; then
-			"$PY" -m pip install --quiet -e "${ROOT}[web]" || true
-		fi
-		echo 0 >"$FAIL_FILE"
-		sha="$last_good"
+	# NEVER hard-reset a dirty checkout — that would destroy the operator's
+	# uncommitted work. Preserve it and start the current code as-is (it may
+	# still crash, but that is their local change to fix, not ours to discard).
+	if [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then
+		note "crash loop detected but checkout is dirty — rollback refused, starting as-is"
 	else
-		note "rollback failed — starting the current checkout anyway"
+		note "crash loop detected ($failures fast exits) — rolling back $sha -> $last_good"
+		if git -C "$ROOT" reset --hard "$last_good"; then
+			PY="$ROOT/.venv/bin/python"
+			if [[ -x $PY ]]; then
+				"$PY" -m pip install --quiet -e "${ROOT}[web]" || true
+			fi
+			echo 0 >"$FAIL_FILE"
+			sha="$last_good"
+		else
+			note "rollback failed — starting the current checkout anyway"
+		fi
 	fi
 fi
 

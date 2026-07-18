@@ -65,6 +65,32 @@ def test_due_slot_skips_already_attempted():
 # --- config -----------------------------------------------------------------
 
 
+def test_coerce_config_patch_rejects_bad_types():
+    base = nightly.NightlyConfig()
+    # Wrong types are rejected (would otherwise 500 or crash the pipeline later).
+    for patch in ({"hour": "1"}, {"soak_hours": "2"}, {"enabled": "yes"}, {"suite_args": [1, 2]}):
+        with pytest.raises(ValueError):
+            nightly.coerce_config_patch(base, patch)
+    # Good values coerce; an int is accepted where a float is expected.
+    out = nightly.coerce_config_patch(base, {"hour": 3, "soak_hours": 1, "suite_args": ["-k", "x"]})
+    assert out == {"hour": 3, "soak_hours": 1.0, "suite_args": ["-k", "x"]}
+    # Unknown keys are dropped, not fatal.
+    assert nightly.coerce_config_patch(base, {"bogus": 1}) == {}
+
+
+def test_validate_config_ranges():
+    nightly.validate_config(nightly.NightlyConfig())  # defaults are valid
+    for bad in (
+        {"hour": 24},
+        {"minute": 60},
+        {"soak_hours": -1.0},
+        {"keep_nights": 0},
+        {"pipeline_timeout_h": 0.0},
+    ):
+        with pytest.raises(ValueError):
+            nightly.validate_config(nightly.NightlyConfig(**bad))
+
+
 def test_config_round_trip_and_unknown_keys(tmp_path):
     async def go():
         db = await Database(tmp_path / "registry.db").connect()
