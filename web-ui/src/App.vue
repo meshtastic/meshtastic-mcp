@@ -5,6 +5,7 @@
 import { onMounted, ref } from "vue";
 import AppBar from "./components/AppBar.vue";
 import DeviceGrid from "./components/DeviceGrid.vue";
+import NightlyPanel from "./components/NightlyPanel.vue";
 import TestDashboard from "./components/TestDashboard.vue";
 import { useActionsStore } from "./stores/actions";
 import { useBuildsStore } from "./stores/builds";
@@ -13,6 +14,7 @@ import { useDatadogStore } from "./stores/datadog";
 import { useDevicesStore } from "./stores/devices";
 import { useKeepAliveStore } from "./stores/keepalive";
 import { useFirmwareStore } from "./stores/firmware";
+import { useNightlyStore } from "./stores/nightly";
 import { useTestsStore } from "./stores/tests";
 import { useWsStore } from "./stores/ws";
 
@@ -26,6 +28,7 @@ const tests = useTestsStore();
 const builds = useBuildsStore();
 const datadog = useDatadogStore();
 const keepalive = useKeepAliveStore();
+const nightly = useNightlyStore();
 const actions = useActionsStore();
 
 onMounted(() => {
@@ -37,6 +40,7 @@ onMounted(() => {
   builds.init();
   datadog.init();
   keepalive.init();
+  nightly.init();
   actions.init();
 });
 </script>
@@ -47,6 +51,7 @@ onMounted(() => {
     <main>
       <DeviceGrid v-show="tab === 'fleet'" />
       <TestDashboard v-if="tab === 'tests'" />
+      <NightlyPanel v-if="tab === 'nightly'" />
     </main>
   </div>
 </template>

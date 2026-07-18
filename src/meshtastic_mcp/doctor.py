@@ -508,6 +508,35 @@ def _android_sdk_check() -> Check:
     )
 
 
+def _gh_auth_check() -> Check:
+    """gh presence AND a live login — the FleetSuite nightly posts its bake
+    report as a GitHub issue via the operator's gh keyring auth."""
+    needed = "FleetSuite nightly report delivery (gh issue create)"
+    path = _which("gh")
+    if not path:
+        return Check(
+            "gh-auth",
+            "nightly-report",
+            STATUS_MISSING,
+            needed,
+            fix=_pkg("brew install gh", "apt install gh  # or: https://cli.github.com"),
+        )
+    try:
+        res = subprocess.run([path, "auth", "status"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        res = None
+    if res is None or res.returncode != 0:
+        return Check(
+            "gh-auth",
+            "nightly-report",
+            STATUS_DEGRADED,
+            needed,
+            detail="gh is installed but not logged in",
+            fix="gh auth login",
+        )
+    return Check("gh-auth", "nightly-report", STATUS_OK, needed, detail=path)
+
+
 def _uhubctl_check() -> Check:
     """Check uhubctl presence *and* whether it works without root (udev rules)."""
     path = _which("uhubctl") or os.environ.get("MESHTASTIC_UHUBCTL_BIN")
@@ -652,6 +681,8 @@ def run() -> DoctorReport:
             "meshtastic-org-knowledge skill — repo/issue/PR/release queries via gh CLI",
             _pkg("brew install gh", "apt install gh  # or: https://cli.github.com"),
         ),
+        # nightly-report (FleetSuite nightly bake → GitHub issue delivery)
+        _gh_auth_check(),
         # sdr capability (RF compliance oracle)
         _sdr_check(),
         # tak capability (TAKPacketV2 wire compression for the replay sim)

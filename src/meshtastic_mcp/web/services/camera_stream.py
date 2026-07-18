@@ -128,6 +128,32 @@ def discover(skip: set[str] | None = None, probe_resolution: bool = True) -> dic
     return {"available": True, "cv2": cv2_ok, "cameras": cameras}
 
 
+def snapshot(device_index: str, *, rotation: int = 0, mirror: bool = False) -> bytes | None:
+    """One still JPEG from a capture index, out-of-process (same crash
+    isolation as the stream). Blocking — call via ``asyncio.to_thread``.
+    Returns None on any failure."""
+    try:
+        idx = int(device_index)
+    except (ValueError, TypeError):
+        return None
+    try:
+        proc = subprocess.run(
+            _worker_cmd("still", str(idx), str(rotation), "1" if mirror else "0"),
+            capture_output=True,
+            timeout=_PROBE_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        log.debug("camera still %s failed: %s", device_index, exc)
+        return None
+    out = proc.stdout
+    header = len(MAGIC) + 4
+    if len(out) < header or not out.startswith(MAGIC):
+        return None
+    (size,) = struct.unpack(">I", out[len(MAGIC) : header])
+    payload = out[header : header + size]
+    return payload if len(payload) == size and size > 0 else None
+
+
 def probe(device_index: str) -> dict:
     """Can we open this device? Returns ``{ok, error}``. Runs out-of-process."""
     try:

@@ -55,7 +55,7 @@ const dd = useDatadogStore();
 
     <nav class="flex gap-1 ml-3">
       <button
-        v-for="t in ['fleet', 'tests']"
+        v-for="t in ['fleet', 'tests', 'nightly']"
         :key="t"
         @click="emit('update:tab', t)"
         class="px-3 py-1.5 rounded-md text-xs fs-display transition"
@@ -65,7 +65,7 @@ const dd = useDatadogStore();
             : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
         "
       >
-        {{ t === "tests" ? "Test Suite" : "Fleet" }}
+        {{ t === "tests" ? "Test Suite" : t === "nightly" ? "Nightly" : "Fleet" }}
       </button>
     </nav>
 

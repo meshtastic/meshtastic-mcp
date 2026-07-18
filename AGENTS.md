@@ -30,7 +30,9 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   device-IO backend via the JVM CLI — see `docs/sdk-cli-bridge.md`.
 - **FleetSuite web control plane** (the `[web]` extra, separate `meshtastic-mcp-web` entrypoint,
   not an MCP capability): `web/` FastAPI backend + `web-ui/` Vue SPA — device registry,
-  build/flash queue, recovery ladder, camera streams, bench test runner, Datadog shipping.
+  build/flash queue, recovery ladder, camera streams, bench test runner, Datadog shipping, and
+  the nightly bake (scheduled firmware-develop pull → fleet bake + full suite → 2 h mesh soak →
+  local-LLM-assisted analysis → GitHub-issue report; see `docs/nightly.md`).
 
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
