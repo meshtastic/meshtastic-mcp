@@ -38,6 +38,7 @@ from .db import repo_builds as rb
 from .db import repo_cameras as rc
 from .db import repo_devices as rd
 from .db import repo_flash as rf
+from .db import repo_nightly as rnight
 from .db import repo_runs as rr
 from .db.database import Database, default_db_path
 from .services import (
@@ -47,9 +48,12 @@ from .services import (
     datadog,
     discovery,
     firmware,
+    github_issues,
     identity,
     keepalive,
     native,
+    nightly,
+    nightly_report,
     portlock,
     power,
     recovery,
@@ -117,10 +121,29 @@ def create_app() -> FastAPI:
         )
         await app.state.keepalive.reload()
         await app.state.keepalive.start()
+        # Nightly bake: scheduled firmware-pull → bake+suite → soak → report.
+        # Constructed last so it can hold every service it drives; its first
+        # tick resumes an unfinished night after a (self-update) restart.
+        app.state.nightly = nightly.NightlyOrchestrator(
+            db,
+            hub,
+            runner=app.state.runner,
+            orch=app.state.orch,
+            serialmon=app.state.serialmon,
+            portlocks=app.state.portlocks,
+            recovery=app.state.recovery,
+            keepalive=app.state.keepalive,
+            reporter=nightly_report.NightlyReporter(db, hub),
+        )
+        await app.state.nightly.reload()
+        app.state.nightly.start()
         log.info("FleetSuite started — registry at %s", db.path)
 
     @app.on_event("shutdown")
     async def _shutdown() -> None:
+        nightly_orch = getattr(app.state, "nightly", None)
+        if nightly_orch:
+            await nightly_orch.stop()
         disc = getattr(app.state, "discovery", None)
         if disc:
             await disc.stop()
@@ -143,6 +166,7 @@ def create_app() -> FastAPI:
     _mount_firmware(api)
     _mount_builds(api)
     _mount_datadog(api)
+    _mount_nightly(api)
     _mount_tests(api)
     _mount_native(api)
     _mount_boards(api)
@@ -823,6 +847,115 @@ def _mount_datadog(api: APIRouter) -> None:
         return await asyncio.to_thread(fwd.test_key)
 
 
+# --- nightly ---------------------------------------------------------------
+def _mount_nightly(api: APIRouter) -> None:
+    @api.get("/nightly")
+    async def get_nightly(request: Request):
+        orch = request.app.state.nightly
+        status = orch.status()
+        runs = await rnight.list_runs(request.app.state.db, limit=1)
+        status["state"]["last"] = runs[0] if runs else None
+        return status
+
+    @api.put("/nightly")
+    async def put_nightly(request: Request, body: dict = Body(...)):
+        db = request.app.state.db
+        orch = request.app.state.nightly
+        cfg = await nightly.load_config(db)
+        try:
+            coerced = nightly.coerce_config_patch(cfg, body)
+            merged = nightly.NightlyConfig.from_dict({**cfg.to_dict(), **coerced})
+            nightly.validate_config(merged)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        await nightly.save_config(db, merged)
+        await orch.reload()
+        status = orch.status()
+        await request.app.state.hub.publish("nightly.update", {"type": "state", **status["state"]})
+        return status
+
+    @api.get("/nightly/report-config")
+    async def get_report_config(request: Request):
+        cfg = await github_issues.load_config(request.app.state.db)
+        return cfg.to_dict()
+
+    @api.put("/nightly/report-config")
+    async def put_report_config(request: Request, body: dict = Body(...)):
+        db = request.app.state.db
+        cfg = await github_issues.load_config(db)
+        try:
+            coerced = nightly.coerce_config_patch(cfg, body)
+            merged = github_issues.NightlyReportConfig.from_dict({**cfg.to_dict(), **coerced})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        # Exactly owner/name — not "owner", "owner/repo/extra", or empty.
+        parts = merged.repo.split("/")
+        if len(parts) != 2 or not all(parts):
+            raise HTTPException(status_code=400, detail="repo must be exactly owner/name")
+        if merged.max_body_kb < 1:
+            raise HTTPException(status_code=400, detail="max_body_kb must be ≥ 1")
+        await github_issues.save_config(db, merged)
+        return merged.to_dict()
+
+    @api.post("/nightly/test")
+    async def test_nightly_report(request: Request, body: dict = Body(default={})):
+        cfg = await github_issues.load_config(request.app.state.db)
+        probe = await asyncio.to_thread(github_issues.check_gh, cfg.repo)
+        if probe.get("ok") and body.get("post"):
+            delivery = await asyncio.to_thread(
+                github_issues.post_issue,
+                cfg,
+                title="FleetSuite nightly — test report",
+                body_md="This is a connectivity test from the FleetSuite nightly reporter.",
+                labels=["nightly"],
+            )
+            probe["post"] = {"status": delivery.status, "issue_url": delivery.issue_url}
+        probe["hint"] = github_issues.STATUS_HINTS.get(probe.get("status", ""), "")
+        return probe
+
+    @api.get("/nightly/runs")
+    async def nightly_runs(request: Request, limit: int = 30):
+        db = request.app.state.db
+        rows = await rnight.list_runs(db, limit=limit)
+        for row in rows:
+            report = await rnight.get_report(db, row["id"])
+            if report is not None:
+                report.pop("body_md", None)  # list view stays light
+            row["report"] = report
+        return rows
+
+    @api.get("/nightly/runs/{nightly_id}")
+    async def nightly_run_detail(request: Request, nightly_id: int):
+        db = request.app.state.db
+        row = await rnight.get(db, nightly_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such nightly run")
+        row["observations"] = await rnight.observations(db, nightly_id)
+        row["report"] = await rnight.get_report(db, nightly_id)
+        if row.get("run_id"):
+            row["run"] = await rr.get_run(db, row["run_id"])
+        return row
+
+    @api.post("/nightly/run-now")
+    async def nightly_run_now(request: Request):
+        try:
+            return await request.app.state.nightly.run_now()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @api.post("/nightly/cancel", status_code=204)
+    async def nightly_cancel(request: Request):
+        await request.app.state.nightly.cancel()
+
+    @api.post("/nightly/runs/{nightly_id}/repost")
+    async def nightly_repost(request: Request, nightly_id: int):
+        reporter = nightly_report.NightlyReporter(request.app.state.db, request.app.state.hub)
+        report = await reporter.repost(nightly_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="no stored report to repost")
+        return report
+
+
 # --- tests -----------------------------------------------------------------
 def _mount_tests(api: APIRouter) -> None:
     @api.get("/tests/status")
@@ -836,6 +969,12 @@ def _mount_tests(api: APIRouter) -> None:
     @api.post("/tests/start")
     async def tests_start(request: Request, body: dict = Body(default={})):
         runner = request.app.state.runner
+        nightly_orch = getattr(request.app.state, "nightly", None)
+        if nightly_orch is not None and nightly_orch.is_pipeline_active():
+            raise HTTPException(
+                status_code=409,
+                detail="the nightly pipeline holds the bench — cancel it first",
+            )
         try:
             return await runner.start(list(body.get("args", [])))
         except RuntimeError as exc:

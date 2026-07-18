@@ -83,6 +83,16 @@ async def add_result(
         await db.execute(f"UPDATE runs SET {col}={col}+1 WHERE id=?", (run_id,))
 
 
+async def results_for_run(db: Database, run_id: int) -> list[dict]:
+    """Every result row for one run, in execution order."""
+    rows = await db.fetchall(
+        "SELECT id, run_id, nodeid, tier, outcome, duration_s, device_serial, longrepr, ts "
+        "FROM results WHERE run_id=? ORDER BY id",
+        (run_id,),
+    )
+    return [dict(r) for r in rows]
+
+
 async def results_for_device(db: Database, serial: str) -> list[dict]:
     """Every recorded result for a device, newest first, joined to its run so
     each row carries the firmware sha it ran against."""

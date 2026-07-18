@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: Meshtastic contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!--
+  User LaunchAgent template for FleetSuite — installed by install-launchd.sh,
+  which substitutes @ROOT@ (this repo) and @HOME@ (the user's home).
+
+  KeepAlive respawns FleetSuite after ANY exit — including the clean SIGTERM
+  the nightly self-update sends itself; the supervisor script adds crash-loop
+  rollback on top. Nightly deployments must run in - -browser mode (baked in
+  below): the pywebview desktop window owns the macOS main thread and cannot
+  be SIGTERM-restarted cleanly.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.meshtastic.fleetsuite</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>@ROOT@/scripts/fleetsuite-supervisor.sh</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- The nightly-owned firmware checkout doubles as the active firmware
+		     root, so builds/bakes compile exactly what the nightly pulled. -->
+		<key>MESHTASTIC_FIRMWARE_ROOT</key>
+		<string>@HOME@/.meshtastic_mcp/nightly-firmware</string>
+		<key>MESHTASTIC_MCP_NIGHTLY_FW_DIR</key>
+		<string>@HOME@/.meshtastic_mcp/nightly-firmware</string>
+		<!-- launchd jobs get a bare PATH; git/npm/node/pio live in these. -->
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:@HOME@/.platformio/penv/bin</string>
+	</dict>
+
+	<key>WorkingDirectory</key>
+	<string>@ROOT@</string>
+	<key>StandardOutPath</key>
+	<string>@HOME@/Library/Logs/fleetsuite.log</string>
+	<key>StandardErrorPath</key>
+	<string>@HOME@/Library/Logs/fleetsuite.log</string>
+</dict>
+</plist>
