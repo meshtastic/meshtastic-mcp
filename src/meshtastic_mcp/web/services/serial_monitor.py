@@ -163,6 +163,13 @@ class SerialMonitor:
         if thread is not None:
             await asyncio.to_thread(thread.join, 2.0)
             if thread.is_alive():
+                # Second chance: a reader blocked in a kernel read on a flapping
+                # CDC device often needs a few more seconds to error out. One
+                # longer join here avoids abandoning a thread that was about to
+                # die — the abandoned-alive state poisons every guard() on this
+                # port until the device re-enumerates.
+                await asyncio.to_thread(thread.join, 4.0)
+            if thread.is_alive():
                 # Abandon it but keep mon.thread set: the fd is still held, so a
                 # second reader must not open the port. _open()/is_wedged() treat
                 # a dead abandoned thread as closed, so recovery (power-cycle →
