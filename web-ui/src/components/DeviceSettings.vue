@@ -190,7 +190,7 @@ const setConfig = () => {
       <div class="flex gap-1.5 mt-1">
         <input
           v-model="name"
-          class="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 outline-none focus:border-emerald-700"
+          class="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1 outline-none focus:border-emerald-700"
         />
         <button
           @click="saveName"
@@ -221,7 +221,7 @@ const setConfig = () => {
           v-model="envInput"
           list="envlist"
           placeholder="e.g. heltec-v4"
-          class="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 outline-none focus:border-emerald-700"
+          class="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1 outline-none focus:border-emerald-700"
         />
         <datalist id="envlist">
           <option v-for="e in envList" :key="e" :value="e" />
@@ -255,7 +255,7 @@ const setConfig = () => {
         <input
           v-model="cfgPath"
           placeholder="path e.g. lora.region"
-          class="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 outline-none focus:border-emerald-700"
+          class="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1 outline-none focus:border-emerald-700"
         />
         <input
           v-model="cfgValue"
@@ -292,7 +292,7 @@ const setConfig = () => {
       <div v-else class="flex gap-1.5 mt-1">
         <select
           v-model="selectedSlot"
-          class="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 outline-none focus:border-emerald-700"
+          class="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded px-2 py-1 outline-none focus:border-emerald-700"
         >
           <option value="">— select hub:port —</option>
           <option v-for="s in slots" :key="s.value" :value="s.value">
