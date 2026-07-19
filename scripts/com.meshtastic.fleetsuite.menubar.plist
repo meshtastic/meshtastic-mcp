@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: Meshtastic contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!--
+  Companion menu-bar controller for FleetSuite — installed by install-menubar.sh,
+  which substitutes @ROOT@ (this repo) and @HOME@ (the user's home).
+
+  Runs in the Aqua (GUI login) session only — a status-bar item has no meaning
+  in a background session. KeepAlive + RunAtLoad so the icon returns after a
+  crash, logout, or reboot-then-login. This controls the *service* agent
+  (com.meshtastic.fleetsuite); it is independent of it.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.meshtastic.fleetsuite.menubar</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>@ROOT@/.venv/bin/meshtastic-mcp-menubar</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<!-- A menu-bar app only makes sense in the GUI login session. -->
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- launchd jobs get a bare PATH; launchctl lives in /bin, homebrew python deps beyond. -->
+		<key>PATH</key>
+		<string>/bin:/usr/bin:/opt/homebrew/bin:/usr/local/bin</string>
+	</dict>
+
+	<key>WorkingDirectory</key>
+	<string>@ROOT@</string>
+	<key>StandardOutPath</key>
+	<string>@HOME@/Library/Logs/fleetsuite-menubar.log</string>
+	<key>StandardErrorPath</key>
+	<string>@HOME@/Library/Logs/fleetsuite-menubar.log</string>
+</dict>
+</plist>
