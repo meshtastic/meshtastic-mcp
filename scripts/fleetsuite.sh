@@ -42,6 +42,12 @@ STATIC="$ROOT/src/meshtastic_mcp/web/static/index.html"
 # launchd plist so a clean redeploy gets the camera + OCR deps (soak snapshots)
 # automatically. Kept opt-in because [ui] pulls opencv (and torch on non-Intel).
 EXTRAS="${FLEETSUITE_EXTRAS:-web}"
+# Bind address for --browser mode. Default 127.0.0.1 (localhost only) — the safe
+# default: FleetSuite has NO auth and can flash/reboot/factory-reset devices. A
+# deployment that wants LAN access sets FLEETSUITE_HOST=0.0.0.0 in its plist;
+# only do that on a trusted network (anyone who can reach the port controls the
+# fleet). The desktop-window mode always stays on 127.0.0.1.
+HOST="${FLEETSUITE_HOST:-127.0.0.1}"
 
 note() { printf '\033[36m[fleetsuite]\033[0m %s\n' "$*"; }
 
@@ -78,8 +84,8 @@ fi
 
 # 4. Launch ------------------------------------------------------------------
 if [[ $BROWSER == 1 ]]; then
-	note "serving at http://127.0.0.1:8765 (Ctrl-C to stop)"
-	exec "$ROOT/.venv/bin/meshtastic-mcp-web" --browser
+	note "serving at http://$HOST:8765 (Ctrl-C to stop)"
+	exec "$ROOT/.venv/bin/meshtastic-mcp-web" --browser --host "$HOST"
 fi
 note "opening FleetSuite window…"
 exec "$ROOT/.venv/bin/meshtastic-mcp-web"

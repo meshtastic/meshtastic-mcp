@@ -59,6 +59,7 @@ Environment (set in the plist):
 | `MESHTASTIC_MCP_NIGHTLY_FW_DIR` | `~/.meshtastic_mcp/nightly-firmware` | the checkout the nightly may hard-reset |
 | `MESHTASTIC_FIRMWARE_ROOT` | same path | builds/bakes compile exactly what the nightly pulled |
 | `FLEETSUITE_EXTRAS` | `web,ui` | a clean redeploy installs the camera + OCR deps (soak snapshots), not just `web` |
+| `FLEETSUITE_HOST` | `127.0.0.1` | web-server bind address. `0.0.0.0` exposes the UI on the LAN — **no auth, trusted networks only** (`FLEETSUITE_HOST=0.0.0.0 ./scripts/install-launchd.sh`) |
 | `PATH` | homebrew + platformio | launchd jobs get a bare PATH |
 
 Optional: `MESHTASTIC_MCP_SOURCE_ROOT` (mcp checkout override, default: this repo),
