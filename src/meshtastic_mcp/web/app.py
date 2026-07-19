@@ -343,6 +343,23 @@ def _mount_devices(api: APIRouter) -> None:
         await hub.publish("device.update", dev)
         return dev
 
+    @api.delete("/devices/{serial}", status_code=204)
+    async def forget_device(serial: str, request: Request):
+        """Forget a device: drop its registry row + attached history. Guarded to
+        OFFLINE devices — an online one would just be re-added by the next
+        discovery sweep, so we 409 rather than silently no-op. The deletion
+        broadcasts ``device.update {deleted: true}`` so open Fleet pages drop the
+        card live (same shape as the native/camera removals)."""
+        db, hub = request.app.state.db, request.app.state.hub
+        row = await _device_or_404(db, serial)
+        if row.get("online"):
+            raise HTTPException(
+                status_code=409,
+                detail="device is online — unplug it first (it would be re-discovered otherwise)",
+            )
+        await rd.delete(db, serial)
+        await hub.publish("device.update", {"serial_number": serial, "deleted": True})
+
     @api.put("/devices/{serial}/env")
     async def set_env(serial: str, request: Request, body: dict = Body(...)):
         db, hub = request.app.state.db, request.app.state.hub
