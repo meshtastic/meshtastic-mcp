@@ -38,10 +38,12 @@
 		<string>@HOME@/.meshtastic_mcp/nightly-firmware</string>
 		<key>MESHTASTIC_MCP_NIGHTLY_FW_DIR</key>
 		<string>@HOME@/.meshtastic_mcp/nightly-firmware</string>
-		<!-- Install the camera + OCR deps (opencv/pytesseract) on a clean deploy
-		     so soak snapshots work out of the box. fleetsuite.sh reads this. -->
+		<!-- Extras a clean deploy installs (fleetsuite.sh reads this): [ui] for
+		     camera + OCR (soak snapshots), [test] for the bench test runner —
+		     without pytest every nightly suite dies at spawn with
+		     "suite exit 1: 0 passed, 0 failed". -->
 		<key>FLEETSUITE_EXTRAS</key>
-		<string>web,ui</string>
+		<string>web,ui,test</string>
 		<!-- Web server bind address. install-launchd.sh substitutes
 		     @FLEETSUITE_HOST@ from $FLEETSUITE_HOST (default 127.0.0.1). Set it to
 		     0.0.0.0 to expose the UI on the LAN — no auth, trusted networks only. -->
