@@ -6,6 +6,7 @@ import { ref } from "vue";
 import { api } from "../api/client";
 import { useWsStore } from "./ws";
 import type {
+  NightlyObservation,
   NightlyReportConfig,
   NightlyRun,
   NightlyRunDetail,
@@ -16,6 +17,13 @@ export const useNightlyStore = defineStore("nightly", () => {
   const status = ref<NightlyStatus | null>(null);
   const reportConfig = ref<NightlyReportConfig | null>(null);
   const runs = ref<NightlyRun[]>([]);
+
+  // Live view of the in-flight run: observations stream in over the WS, and the
+  // start/soak timestamps drive the elapsed + soak-progress meters. All empty
+  // when nothing is running.
+  const activity = ref<NightlyObservation[]>([]);
+  const activeStart = ref<number | null>(null);
+  const soakStart = ref<number | null>(null);
 
   async function load() {
     status.value = await api.get<NightlyStatus>("/api/nightly");
@@ -29,18 +37,50 @@ export const useNightlyStore = defineStore("nightly", () => {
     runs.value = await api.get<NightlyRun[]>("/api/nightly/runs");
   }
 
+  // Seed the live view from the active run's detail (observation backlog + the
+  // start/soak timestamps). Clears everything when nothing is running.
+  async function seedActive() {
+    const id = status.value?.state.nightly_id;
+    if (!status.value?.state.active || !id) {
+      activity.value = [];
+      activeStart.value = null;
+      soakStart.value = null;
+      return;
+    }
+    const d = await detail(id);
+    activeStart.value = d.started_at ?? null;
+    soakStart.value = d.soak_started_at ?? null;
+    // Merge (dedupe by id) so a live frame that arrived mid-fetch isn't dropped.
+    const seen = new Set(activity.value.map((o) => o.id));
+    const merged = activity.value.concat((d.observations || []).filter((o) => !seen.has(o.id)));
+    activity.value = merged.sort((a, b) => a.ts - b.ts);
+  }
+
   function init() {
     const ws = useWsStore();
-    ws.subscribe("nightly.update", (frame: { type?: string }) => {
-      // Frames are lightweight signals; the REST payloads are the truth.
-      if (frame.type === "finished" || frame.type === "report") {
-        load();
+    ws.subscribe("nightly.update", (frame: Record<string, any>) => {
+      // Observations stream in live; append (dedupe by id) for the activity feed.
+      if (frame.type === "observation") {
+        if (!activity.value.some((o) => o.id === frame.id)) {
+          activity.value.push({
+            id: frame.id,
+            step: frame.step,
+            severity: frame.severity,
+            kind: frame.kind,
+            message: frame.message,
+            data: frame.data ?? null,
+            ts: frame.ts,
+          });
+        }
+      } else if (frame.type === "finished" || frame.type === "report") {
+        // The REST payloads are the truth; refresh + let seedActive clear the view.
+        load().then(seedActive);
         loadRuns();
       } else if (frame.type === "state" || frame.type === "step") {
-        load();
+        load().then(seedActive);
       }
     });
-    load();
+    load().then(seedActive);
     loadReportConfig();
     loadRuns();
   }
@@ -83,6 +123,9 @@ export const useNightlyStore = defineStore("nightly", () => {
     status,
     reportConfig,
     runs,
+    activity,
+    activeStart,
+    soakStart,
     init,
     load,
     loadRuns,

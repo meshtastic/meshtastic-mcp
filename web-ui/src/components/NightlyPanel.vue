@@ -2,11 +2,73 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useNightlyStore } from "../stores/nightly";
 import NightlyReportCard from "./NightlyReportCard.vue";
 
 const nightly = useNightlyStore();
+
+// The ordered pipeline (mirrors STEPS in web/services/nightly.py). Anything not
+// in this list (bench_recover/handoff/done) is post-soak → the "report" chip.
+const STEPS = [
+  { key: "self_update", label: "self-update" },
+  { key: "firmware_update", label: "firmware" },
+  { key: "prebuild", label: "prebuild" },
+  { key: "bench_check", label: "bench check" },
+  { key: "suite", label: "suite" },
+  { key: "soak", label: "soak" },
+];
+
+// A 1 Hz clock so the elapsed + soak-progress meters advance smoothly even while
+// the soak runs quiet for hours (no WS traffic to drive re-renders otherwise).
+const now = ref(Date.now());
+let timer: number | undefined;
+onMounted(() => {
+  timer = window.setInterval(() => (now.value = Date.now()), 1000);
+});
+onUnmounted(() => {
+  if (timer) window.clearInterval(timer);
+});
+
+const active = computed(() => !!nightly.status?.state.active);
+const curStep = computed(() => nightly.status?.state.step ?? null);
+const stepIdx = computed(() => {
+  const i = STEPS.findIndex((s) => s.key === curStep.value);
+  return i === -1 ? STEPS.length : i; // unknown/post-soak → all main steps done
+});
+const runElapsed = computed(() =>
+  nightly.activeStart != null ? Math.max(0, now.value / 1000 - nightly.activeStart) : null,
+);
+const soakTotal = computed(() => (nightly.status?.config.soak_hours ?? 0) * 3600);
+const soakElapsed = computed(() =>
+  nightly.soakStart != null ? Math.max(0, now.value / 1000 - nightly.soakStart) : null,
+);
+const soakPct = computed(() =>
+  soakElapsed.value != null && soakTotal.value > 0
+    ? Math.min(100, (soakElapsed.value / soakTotal.value) * 100)
+    : null,
+);
+const feed = computed(() => [...nightly.activity].reverse()); // newest first
+
+function fmtDur(s: number | null): string {
+  if (s == null) return "—";
+  const t = Math.floor(s);
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = t % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+function fmtTime(ts: number): string {
+  return new Date(ts * 1000).toLocaleTimeString();
+}
+const SEV: Record<string, string> = {
+  error: "text-rose-400",
+  warn: "text-amber-400",
+  info: "text-slate-400",
+};
+const sevColor = (sev: string): string => SEV[sev] ?? "text-slate-400";
 
 const draft = reactive({
   enabled: false,
@@ -226,6 +288,89 @@ async function testDelivery() {
         <code>McpTest</code> channel, run the full suite, soak the mesh while collecting logs +
         camera snapshots, analyze (local LLM when reachable), then post the report.
       </p>
+    </div>
+
+    <!-- live run -->
+    <div
+      v-if="active"
+      class="card-rail rounded-xl border border-indigo-700/50 bg-indigo-950/20 p-4"
+    >
+      <div class="flex items-center gap-3 mb-3">
+        <span class="w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+        <h3 class="section-label text-indigo-200">Run in progress</h3>
+        <span class="text-xs text-slate-400">elapsed {{ fmtDur(runElapsed) }}</span>
+        <span class="flex-1" />
+        <span class="text-xs text-slate-600 mono">#{{ nightly.status?.state.nightly_id }}</span>
+      </div>
+
+      <!-- phase timeline -->
+      <div class="flex flex-wrap items-center gap-1.5 mb-3">
+        <template v-for="(s, i) in STEPS" :key="s.key">
+          <span
+            class="text-[10px] px-2 py-0.5 rounded-full border flex items-center gap-1"
+            :class="
+              i < stepIdx
+                ? 'border-emerald-700/50 bg-emerald-950/40 text-emerald-300/90'
+                : i === stepIdx
+                  ? 'border-indigo-500 bg-indigo-700/30 text-indigo-200'
+                  : 'border-slate-800 text-slate-600'
+            "
+          >
+            <span v-if="i < stepIdx">✓</span>
+            <span
+              v-else-if="i === stepIdx"
+              class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"
+            />
+            {{ s.label }}
+          </span>
+          <span v-if="i < STEPS.length - 1" class="text-slate-700 text-[10px]">›</span>
+        </template>
+        <span class="text-slate-700 text-[10px]">›</span>
+        <span
+          class="text-[10px] px-2 py-0.5 rounded-full border"
+          :class="
+            stepIdx >= STEPS.length
+              ? 'border-indigo-500 bg-indigo-700/30 text-indigo-200'
+              : 'border-slate-800 text-slate-600'
+          "
+          >report</span
+        >
+      </div>
+
+      <!-- soak progress -->
+      <div v-if="soakPct != null" class="mb-3">
+        <div class="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+          <span>soak · {{ fmtDur(soakElapsed) }} / {{ fmtDur(soakTotal) }}</span>
+          <span>{{ Math.round(soakPct) }}% · ~{{ fmtDur(soakTotal - (soakElapsed ?? 0)) }} left</span>
+        </div>
+        <div class="h-2 rounded-full bg-slate-800 overflow-hidden">
+          <div class="h-full bg-indigo-500 transition-all duration-1000" :style="{ width: soakPct + '%' }" />
+        </div>
+      </div>
+
+      <!-- activity feed -->
+      <div class="text-[11px] text-slate-500 mb-1">activity</div>
+      <div
+        class="rounded-lg border border-slate-800 bg-slate-950/50 max-h-52 overflow-y-auto divide-y divide-slate-800/60"
+      >
+        <div
+          v-for="o in feed"
+          :key="o.id"
+          class="flex items-start gap-2 px-2 py-1 text-[11px]"
+        >
+          <span class="text-slate-600 mono shrink-0">{{ fmtTime(o.ts) }}</span>
+          <span class="text-slate-600 shrink-0 uppercase text-[9px] mt-0.5">{{ o.step }}</span>
+          <span
+            class="mono truncate min-w-0"
+            :class="sevColor(o.severity)"
+            :title="o.message"
+            >{{ o.message }}</span
+          >
+        </div>
+        <div v-if="feed.length === 0" class="px-2 py-2 text-[11px] text-slate-600">
+          waiting for the first observation…
+        </div>
+      </div>
     </div>
 
     <!-- reporting card -->
