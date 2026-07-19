@@ -55,6 +55,9 @@ ui = [
   "rich-pixels>=3.0",
 ]
 ui-min = ["opencv-python-headless>=4.9", "numpy>=1.26"]
+# macOS menu-bar controller for the FleetSuite service (start/stop/status).
+# macOS-only; the service and nightly run fine without it. See scripts/install-menubar.sh.
+menubar = ["rumps>=0.4; sys_platform == 'darwin'"]
 # FleetSuite: the FastAPI web backend + Vue SPA (the bench control plane). The
 # desktop window uses pywebview; `--browser` mode serves headless without it.
 web = [
@@ -91,6 +94,7 @@ dev = ["ruff>=0.6", "mypy>=1.10", "pytest>=8"]
 meshtastic-mcp = "meshtastic_mcp.__main__:main"
 meshtastic-mcp-test-tui = "meshtastic_mcp.cli.test_tui:main"
 meshtastic-mcp-web = "meshtastic_mcp.web.__main__:main"
+meshtastic-mcp-menubar = "meshtastic_mcp.menubar:main"
 
 [project.urls]
 Homepage = "https://github.com/meshtastic/meshtastic-mcp"

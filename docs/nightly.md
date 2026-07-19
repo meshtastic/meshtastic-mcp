@@ -38,8 +38,13 @@ even when the pipeline itself breaks (`PIPELINE FAILED at <step>` issues).
 # one-time
 gh auth login                       # the report posts via your gh keyring auth
 ./scripts/install-launchd.sh        # LaunchAgent: KeepAlive + RunAtLoad + supervisor
+./scripts/install-menubar.sh        # optional: 🟢/🟡/🔴 menu-bar start/stop/status ([menubar] extra)
 open http://127.0.0.1:8765          # Nightly tab → enable, set time, set report repo
 ```
+
+The menu-bar controller (`meshtastic-mcp-menubar`, macOS-only) is a convenience,
+not part of the service — it just drives the same `com.meshtastic.fleetsuite`
+agent. "Stop" *unloads* the agent (a plain kill would be respawned by `KeepAlive`).
 
 The LaunchAgent runs `scripts/fleetsuite-supervisor.sh`, which wraps
 `fleetsuite.sh --browser` with **crash-loop rollback**: three consecutive starts dying
