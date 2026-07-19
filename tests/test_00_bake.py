@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import admin, boards, flash, hw_tools, info, port_recovery
+from meshtastic_mcp import admin, boards, flash, hw_tools, info, port_recovery, uhubctl
 
 from . import _bench
 
@@ -90,6 +90,15 @@ def _wait_port_free(
         ) from exc
 
 
+# DFU-entry rounds: each round is a touch_1200bps call (which itself retries
+# the touch twice); between rounds the board's own hub slot is power-cycled.
+# A fresh boot makes the Adafruit bootloader reliably receptive to the touch —
+# observed on the bench: the T114 (HT-n5262) refused DFU entry two nights
+# running until it was power-cycled right before the touch.
+_DFU_TOUCH_ROUNDS = 3
+_DFU_REENUM_TIMEOUT_S = 30.0
+
+
 def _prepare_nrf52_for_upload(port: str) -> str:
     """Kick the RAK4631 (or similar nRF52 USB-DFU board) into bootloader mode
     via 1200bps touch, then return the port where pio should upload.
@@ -99,22 +108,48 @@ def _prepare_nrf52_for_upload(port: str) -> str:
     (0x239A/0x0029) at a different `/dev/cu.usbmodem*` path.
 
     `touch_1200bps` does the heavy lifting: bounded open/close, polls for the
-    Adafruit-bootloader PID specifically, retries the touch up to twice.
-    Fails loudly if the device doesn't enter DFU — no point trying pio
-    upload against an app-mode device, it'll just hang.
+    Adafruit-bootloader PID specifically, retries the touch up to twice. A
+    board whose app-mode USB stack has gone stale can ignore those touches
+    entirely, so on failure the board's own hub slot is power-cycled (fresh
+    boot → receptive bootloader) and the touch round repeats, up to
+    ``_DFU_TOUCH_ROUNDS``. Fails loudly if the device never enters DFU — no
+    point trying pio upload against an app-mode device, it'll just hang.
     """
     # Remember this board's physical hub slot before the touch. With several
     # nRF52 boards present (one may already be sitting in DFU), the global
     # bootloader scan in `touch_1200bps` can return a DIFFERENT board's
     # bootloader — so after the touch we re-pin to whatever is on THIS slot.
     hub, slot = port_recovery.hub_slot_for_port(port)
-    result = flash.touch_1200bps(port=port, settle_ms=500, retries=2)
+    result: dict[str, Any] = {}
+    for round_no in range(1, _DFU_TOUCH_ROUNDS + 1):
+        result = flash.touch_1200bps(port=port, settle_ms=500, retries=2)
+        if result.get("ok") or round_no == _DFU_TOUCH_ROUNDS:
+            break
+        # Off/on the board's own slot between rounds, then re-resolve the
+        # app-mode port (re-enumeration may move the /dev path) and let the
+        # app boot before touching again. Best-effort: without a resolvable
+        # slot or uhubctl, the next round is a plain re-touch.
+        if hub is None or slot is None:
+            continue
+        try:
+            uhubctl.cycle(hub, slot, delay_s=2)
+        except Exception as exc:
+            print(f"[bake] {port}: inter-round power-cycle unavailable ({exc}); re-touching")
+            continue
+        deadline = time.monotonic() + _DFU_REENUM_TIMEOUT_S
+        while time.monotonic() < deadline:
+            candidate = port_recovery.port_on_slot(hub, slot)
+            if candidate:
+                port = candidate
+                break
+            time.sleep(0.5)
+        time.sleep(2.0)  # app boot settle — a touch mid-boot is ignored
     if not result.get("ok"):
         raise AssertionError(
             f"nRF52 at {port} did not enter DFU bootloader after "
-            f"{result.get('attempts')} 1200bps touches. Manual recovery: "
-            f"double-tap the reset button on the board, then re-run. "
-            f"Detected port set before/after touch was unchanged."
+            f"{_DFU_TOUCH_ROUNDS} touch rounds (2 touches each) with "
+            f"power-cycles between rounds. Manual recovery: double-tap the "
+            f"reset button on the board, then re-run."
         )
     new_port = result["new_port"]
     if hub is not None and slot is not None:
