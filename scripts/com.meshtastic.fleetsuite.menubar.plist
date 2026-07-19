@@ -23,8 +23,13 @@
 
 	<key>RunAtLoad</key>
 	<true/>
+	<!-- Respawn on a crash, but NOT on a clean "Quit Menu Bar App" (exit 0) —
+	     otherwise the Quit menu item could never actually dismiss the icon. -->
 	<key>KeepAlive</key>
-	<true/>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
 
