@@ -56,7 +56,13 @@ if [[ ! -x $PY ]]; then
 	note "creating venv (.venv)…"
 	python3 -m venv "$ROOT/.venv"
 fi
-if ! "$PY" -c 'import fastapi, aiosqlite, uvicorn, webview' >/dev/null 2>&1; then
+# Probe a sentinel import per requested extra, so a venv created before an
+# extra was added to FLEETSUITE_EXTRAS gets retrofitted instead of silently
+# limping (a [web]-only venv has no pytest → every nightly suite dies at spawn).
+PROBE="import fastapi, aiosqlite, uvicorn, webview"
+[[ ",$EXTRAS," == *",ui,"* ]] && PROBE="$PROBE, cv2"
+[[ ",$EXTRAS," == *",test,"* ]] && PROBE="$PROBE, pytest"
+if ! "$PY" -c "$PROBE" >/dev/null 2>&1; then
 	note "installing the [$EXTRAS] extra(s)…"
 	"$PY" -m pip install --quiet --upgrade pip
 	"$PY" -m pip install --quiet -e "$ROOT[$EXTRAS]"
