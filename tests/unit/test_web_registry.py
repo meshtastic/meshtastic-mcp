@@ -88,6 +88,79 @@ def test_offline_marking_keeps_row(tmp_path):
     asyncio.run(go())
 
 
+def test_forget_device_removes_row_and_attached_data(tmp_path):
+    """Operator forget drops the row + its flash/test history and *unassigns*
+    (does not delete) any camera; a second device is untouched. Idempotent."""
+
+    async def go():
+        db = _fresh_db(tmp_path)
+        await db.connect()
+        try:
+            # The board to forget, plus a keeper that must survive.
+            await rd.upsert_from_discovery(
+                db,
+                serial_number="GONE",
+                current_port="/dev/a",
+                vid="0x239a",
+                pid="0x1",
+                role="nrf52",
+            )
+            await rd.upsert_from_discovery(
+                db,
+                serial_number="KEEP",
+                current_port="/dev/b",
+                vid="0x239a",
+                pid="0x1",
+                role="nrf52",
+            )
+            # Attach flash history, a test result, and a camera to the doomed board.
+            await rf.record(
+                db,
+                device_serial="GONE",
+                env="rak4631",
+                fw_sha="abc",
+                from_artifact=False,
+                duration_s=100.0,
+                ok=True,
+            )
+            run_id = await rr.create_run(
+                db, args=[], seed="s", fw_branch="develop", fw_sha="abc", fw_dirty=False
+            )
+            await rr.add_result(
+                db,
+                run_id,
+                nodeid="tests/mesh/test_x.py::test_y[nrf52]",
+                tier="mesh",
+                outcome="passed",
+                duration_s=1.0,
+                device_serial="GONE",
+                longrepr=None,
+            )
+            cid = await rc.add(db, name="cam", device_index="0")
+            await rc.assign(db, cid, "GONE")
+
+            assert await rd.delete(db, "GONE") is True
+
+            # Row gone, keeper intact.
+            assert await rd.get(db, "GONE") is None
+            assert [d["serial_number"] for d in await rd.list_all(db)] == ["KEEP"]
+            # Attached history swept.
+            fe = await db.fetchone(
+                "SELECT COUNT(*) AS c FROM flash_events WHERE device_serial=?", ("GONE",)
+            )
+            assert fe["c"] == 0
+            assert await rr.results_for_device(db, "GONE") == []
+            # Camera survives but is unassigned (bench hardware outlives the node).
+            assert await rc.for_device(db, "GONE") is None
+            assert (await rc.get(db, cid))["device_serial"] is None
+            # Idempotent — forgetting an unknown serial is a no-op returning False.
+            assert await rd.delete(db, "GONE") is False
+        finally:
+            await db.close()
+
+    asyncio.run(go())
+
+
 def test_camera_assignment_survives_port_change(tmp_path):
     async def go():
         db = _fresh_db(tmp_path)
