@@ -37,18 +37,23 @@ done
 
 PY="$ROOT/.venv/bin/python"
 STATIC="$ROOT/src/meshtastic_mcp/web/static/index.html"
+# Extra set installed into a freshly-created venv. Default is the minimal web
+# backend; a bench/nightly deployment sets FLEETSUITE_EXTRAS=web,ui in its
+# launchd plist so a clean redeploy gets the camera + OCR deps (soak snapshots)
+# automatically. Kept opt-in because [ui] pulls opencv (and torch on non-Intel).
+EXTRAS="${FLEETSUITE_EXTRAS:-web}"
 
 note() { printf '\033[36m[fleetsuite]\033[0m %s\n' "$*"; }
 
-# 1. Python venv + web extra ------------------------------------------------
+# 1. Python venv + extras ---------------------------------------------------
 if [[ ! -x $PY ]]; then
 	note "creating venv (.venv)…"
 	python3 -m venv "$ROOT/.venv"
 fi
 if ! "$PY" -c 'import fastapi, aiosqlite, uvicorn, webview' >/dev/null 2>&1; then
-	note "installing the [web] extra…"
+	note "installing the [$EXTRAS] extra(s)…"
 	"$PY" -m pip install --quiet --upgrade pip
-	"$PY" -m pip install --quiet -e "$ROOT[web]"
+	"$PY" -m pip install --quiet -e "$ROOT[$EXTRAS]"
 fi
 
 # 2. Dev mode: backend + Vite with HMR --------------------------------------

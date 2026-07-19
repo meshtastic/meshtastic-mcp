@@ -58,6 +58,7 @@ Environment (set in the plist):
 |---|---|---|
 | `MESHTASTIC_MCP_NIGHTLY_FW_DIR` | `~/.meshtastic_mcp/nightly-firmware` | the checkout the nightly may hard-reset |
 | `MESHTASTIC_FIRMWARE_ROOT` | same path | builds/bakes compile exactly what the nightly pulled |
+| `FLEETSUITE_EXTRAS` | `web,ui` | a clean redeploy installs the camera + OCR deps (soak snapshots), not just `web` |
 | `PATH` | homebrew + platformio | launchd jobs get a bare PATH |
 
 Optional: `MESHTASTIC_MCP_SOURCE_ROOT` (mcp checkout override, default: this repo),
@@ -73,7 +74,9 @@ Optional: `MESHTASTIC_MCP_SOURCE_ROOT` (mcp checkout override, default: this rep
   deterministic report still posts and carries an `llm_unavailable` observation. The
   *auto-start local LLM* toggle tries `llama-server` bootstrap once per night.
 - **Cameras** (optional): add + assign them in the Fleet tab for soak snapshots; enable
-  screen keep-alive so OLEDs stay lit.
+  screen keep-alive so OLEDs stay lit. Camera capture needs the `[ui]` extra (opencv) — the
+  deployment plist's `FLEETSUITE_EXTRAS=web,ui` installs it on a clean deploy; macOS also
+  gates camera capture behind a Camera privacy grant for the launchd process.
 
 ## Data & retention
 

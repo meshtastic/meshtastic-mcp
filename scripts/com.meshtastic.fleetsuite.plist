@@ -38,6 +38,10 @@
 		<string>@HOME@/.meshtastic_mcp/nightly-firmware</string>
 		<key>MESHTASTIC_MCP_NIGHTLY_FW_DIR</key>
 		<string>@HOME@/.meshtastic_mcp/nightly-firmware</string>
+		<!-- Install the camera + OCR deps (opencv/pytesseract) on a clean deploy
+		     so soak snapshots work out of the box. fleetsuite.sh reads this. -->
+		<key>FLEETSUITE_EXTRAS</key>
+		<string>web,ui</string>
 		<!-- launchd jobs get a bare PATH; git/npm/node/pio live in these. -->
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:@HOME@/.platformio/penv/bin</string>
