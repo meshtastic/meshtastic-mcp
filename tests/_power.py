@@ -67,6 +67,34 @@ def power_off(role: str, *, resolved: tuple[str, int] | None = None) -> dict[str
     return uhubctl_mod.power_off(loc, port)
 
 
+def hub_cuts_power(
+    role: str,
+    *,
+    expected_port: str | None = None,
+    absence_timeout_s: float = 8.0,
+) -> bool:
+    """Probe whether the hub ACTUALLY cuts VBUS on `role`'s port.
+
+    Some hubs (e.g. Terminus FE 2.1 clones, 1a40:0201) accept uhubctl's off
+    command and flip their status bits while VBUS stays hot — the device never
+    de-enumerates, so any test that expects a power cut to kill the board can
+    never pass. Cut the port, watch for de-enumeration, restore power (always,
+    even when the probe says no). Returns True iff the device truly vanished.
+
+    The target resolves once up-front, while the device is still visible —
+    `resolve_target` can't find a powered-off device.
+    """
+    resolved = uhubctl_mod.resolve_target(role)
+    power_off(role, resolved=resolved)
+    try:
+        wait_for_absence(role, timeout_s=absence_timeout_s, expected_port=expected_port)
+        return True
+    except TimeoutError:
+        return False
+    finally:
+        power_on(role, resolved=resolved)
+
+
 def power_cycle(
     role: str,
     *,
