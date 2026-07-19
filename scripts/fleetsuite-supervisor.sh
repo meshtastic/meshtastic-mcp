@@ -58,12 +58,29 @@ if [[ $failures -ge $MAX_CRASHES && -n $last_good && -n $sha && $last_good != "$
 	fi
 fi
 
+# Sweep orphans from a previous incarnation BEFORE spawning ours. The console
+# script is a wrapper (Python.app shim on macOS): a SIGTERM delivered to the
+# wrapper does not always reach the real server process, which then survives a
+# launchctl kickstart/bootout as a PPID-1 orphan STILL HOLDING the serial
+# ports. Two readers on one tty split the byte stream and corrupt every
+# meshtastic handshake ("multiple access on port", protobuf 'Wire format was
+# corrupt', soak-preflight connect timeouts). Kill by full path so only THIS
+# deployment's server matches — never a dev copy running elsewhere.
+if pkill -f "$ROOT/.venv/bin/meshtastic-mcp-web" 2>/dev/null; then
+	note "swept lingering server process(es) from a previous incarnation"
+	sleep 2
+	pkill -9 -f "$ROOT/.venv/bin/meshtastic-mcp-web" 2>/dev/null || true
+fi
+
 start=$(date +%s)
-# Child (not exec): we must outlive it to measure its lifetime. Signals sent to
-# our process group (launchd) reach the child; forward SIGTERM explicitly too.
+# Child (not exec): we must outlive it to measure its lifetime. Job control
+# (set -m) gives the child its OWN process group, so the TERM forward below
+# reaches the whole tree (wrapper AND real server), not just the wrapper.
+set -m
 "$ROOT/scripts/fleetsuite.sh" --browser &
 child=$!
-trap 'kill -TERM "$child" 2>/dev/null' TERM INT
+set +m
+trap 'kill -TERM -- "-$child" 2>/dev/null' TERM INT
 wait "$child"
 code=$?
 duration=$(($(date +%s) - start))
