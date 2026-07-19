@@ -37,18 +37,29 @@ done
 
 PY="$ROOT/.venv/bin/python"
 STATIC="$ROOT/src/meshtastic_mcp/web/static/index.html"
+# Extra set installed into a freshly-created venv. Default is the minimal web
+# backend; a bench/nightly deployment sets FLEETSUITE_EXTRAS=web,ui in its
+# launchd plist so a clean redeploy gets the camera + OCR deps (soak snapshots)
+# automatically. Kept opt-in because [ui] pulls opencv (and torch on non-Intel).
+EXTRAS="${FLEETSUITE_EXTRAS:-web}"
+# Bind address for --browser mode. Default 127.0.0.1 (localhost only) — the safe
+# default: FleetSuite has NO auth and can flash/reboot/factory-reset devices. A
+# deployment that wants LAN access sets FLEETSUITE_HOST=0.0.0.0 in its plist;
+# only do that on a trusted network (anyone who can reach the port controls the
+# fleet). The desktop-window mode always stays on 127.0.0.1.
+HOST="${FLEETSUITE_HOST:-127.0.0.1}"
 
 note() { printf '\033[36m[fleetsuite]\033[0m %s\n' "$*"; }
 
-# 1. Python venv + web extra ------------------------------------------------
+# 1. Python venv + extras ---------------------------------------------------
 if [[ ! -x $PY ]]; then
 	note "creating venv (.venv)…"
 	python3 -m venv "$ROOT/.venv"
 fi
 if ! "$PY" -c 'import fastapi, aiosqlite, uvicorn, webview' >/dev/null 2>&1; then
-	note "installing the [web] extra…"
+	note "installing the [$EXTRAS] extra(s)…"
 	"$PY" -m pip install --quiet --upgrade pip
-	"$PY" -m pip install --quiet -e "$ROOT[web]"
+	"$PY" -m pip install --quiet -e "$ROOT[$EXTRAS]"
 fi
 
 # 2. Dev mode: backend + Vite with HMR --------------------------------------
@@ -73,8 +84,8 @@ fi
 
 # 4. Launch ------------------------------------------------------------------
 if [[ $BROWSER == 1 ]]; then
-	note "serving at http://127.0.0.1:8765 (Ctrl-C to stop)"
-	exec "$ROOT/.venv/bin/meshtastic-mcp-web" --browser
+	note "serving at http://$HOST:8765 (Ctrl-C to stop)"
+	exec "$ROOT/.venv/bin/meshtastic-mcp-web" --browser --host "$HOST"
 fi
 note "opening FleetSuite window…"
 exec "$ROOT/.venv/bin/meshtastic-mcp-web"

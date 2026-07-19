@@ -38,6 +38,15 @@
 		<string>@HOME@/.meshtastic_mcp/nightly-firmware</string>
 		<key>MESHTASTIC_MCP_NIGHTLY_FW_DIR</key>
 		<string>@HOME@/.meshtastic_mcp/nightly-firmware</string>
+		<!-- Install the camera + OCR deps (opencv/pytesseract) on a clean deploy
+		     so soak snapshots work out of the box. fleetsuite.sh reads this. -->
+		<key>FLEETSUITE_EXTRAS</key>
+		<string>web,ui</string>
+		<!-- Web server bind address. install-launchd.sh substitutes
+		     @FLEETSUITE_HOST@ from $FLEETSUITE_HOST (default 127.0.0.1). Set it to
+		     0.0.0.0 to expose the UI on the LAN — no auth, trusted networks only. -->
+		<key>FLEETSUITE_HOST</key>
+		<string>@FLEETSUITE_HOST@</string>
 		<!-- launchd jobs get a bare PATH; git/npm/node/pio live in these. -->
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:@HOME@/.platformio/penv/bin</string>
