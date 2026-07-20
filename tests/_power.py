@@ -70,16 +70,18 @@ def power_off(role: str, *, resolved: tuple[str, int] | None = None) -> dict[str
 def hub_cuts_power(
     role: str,
     *,
-    expected_port: str | None = None,
     absence_timeout_s: float = 8.0,
 ) -> bool:
     """Probe whether the hub ACTUALLY cuts VBUS on `role`'s port.
 
-    Some hubs (e.g. Terminus FE 2.1 clones, 1a40:0201) accept uhubctl's off
-    command and flip their status bits while VBUS stays hot — the device never
-    de-enumerates, so any test that expects a power cut to kill the board can
-    never pass. Cut the port, watch for de-enumeration, restore power (always,
-    even when the probe says no). Returns True iff the device truly vanished.
+    A genuinely non-switching hub reports the device as STILL attached to its
+    port after an off (VBUS never dropped) — such a hub can't run the
+    peer-offline tier, so we skip it. Absence is read from the hub's own connect
+    flag (`uhubctl.device_on_port`), NOT OS enumeration: on macOS a powered-off
+    device lingers in `ioreg`/`system_profiler`/`/dev` as a zombie, so the OS
+    view would falsely report every hub as non-switching. Cut the port, watch
+    the hub flag, restore power (always). Returns True iff the hub dropped the
+    device.
 
     The target resolves once up-front, while the device is still visible —
     `resolve_target` can't find a powered-off device.
@@ -87,7 +89,7 @@ def hub_cuts_power(
     resolved = uhubctl_mod.resolve_target(role)
     power_off(role, resolved=resolved)
     try:
-        wait_for_absence(role, timeout_s=absence_timeout_s, expected_port=expected_port)
+        wait_for_absence(role, timeout_s=absence_timeout_s, resolved=resolved)
         return True
     except TimeoutError:
         return False
@@ -119,21 +121,38 @@ def power_cycle(
 
 
 def wait_for_absence(
-    role: str, *, timeout_s: float = 20.0, expected_port: str | None = None
+    role: str,
+    *,
+    timeout_s: float = 20.0,
+    expected_port: str | None = None,
+    resolved: tuple[str, int] | None = None,
 ) -> None:
-    """Block until the device under test is NOT in `list_devices`.
+    """Block until the device under test is confirmed GONE after a ``power_off``.
 
-    Used by the recovery tier to assert `power_off` actually took effect.
+    Prefer the HUB signal: pass ``resolved=(hub_location, port)`` (resolved
+    while the device is still up — a powered-off device can't be VID-resolved)
+    and absence is read from the hub's own connect flag via
+    ``uhubctl.device_on_port``. This is reliable and immediate. The legacy
+    ``list_devices`` path (used only when ``resolved`` is None) checks OS USB
+    enumeration, which on macOS keeps a ZOMBIE of a powered-off device for an
+    unbounded time — so it can time out even though power was really cut. That
+    was the real cause of ``peer_offline_recovery`` failing on a hub that DOES
+    switch power.
 
-    Pass `expected_port` (the exact `/dev` path) to key absence on THAT node
-    disappearing — strictly tighter than the VID-set test, and immune to a second
-    same-VID adapter (e.g. another CP210x) spoofing presence. Without it, falls
-    back to "no listed device carries this role's VID" for callers that don't have
-    a specific path. The default window is generous because, after a VBUS cut,
-    macOS only reaps the USB-serial node once the last client fd closes.
-
-    Raises TimeoutError on failure.
+    ``expected_port`` only applies to the legacy path. Raises TimeoutError.
     """
+    deadline = time.monotonic() + timeout_s
+
+    if resolved is not None:
+        loc, port = resolved
+        while time.monotonic() < deadline:
+            if not uhubctl_mod.device_on_port(loc, port):
+                return
+            time.sleep(0.2)
+        raise TimeoutError(
+            f"role {role!r} still attached to hub {loc}:{port} {timeout_s}s after power_off"
+        )
+
     from meshtastic_mcp import devices as devices_mod
 
     from ._port_discovery import _ROLE_VIDS, _coerce_vid  # type: ignore[attr-defined]
@@ -141,7 +160,6 @@ def wait_for_absence(
     if role not in _ROLE_VIDS:
         raise ValueError(f"unknown role {role!r}")
     wanted = _ROLE_VIDS[role]
-    deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         found = devices_mod.list_devices(include_unknown=True)
         if expected_port is not None:

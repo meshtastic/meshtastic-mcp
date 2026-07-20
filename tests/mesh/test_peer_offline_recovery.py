@@ -32,6 +32,7 @@ from typing import Any
 
 import pytest
 
+from meshtastic_mcp import uhubctl
 from meshtastic_mcp.connection import connect
 from tests import _power
 from tests._port_discovery import resolve_port_by_role
@@ -41,20 +42,20 @@ from ._receive import ReceiveCollector, nudge_nodeinfo
 
 @pytest.fixture(scope="module")
 def hub_actually_cuts_power(hub_devices: dict[str, str]) -> None:
-    """Skip the whole tier when the hub only PRETENDS to switch power.
+    """Skip the whole tier only when the hub genuinely can't switch power.
 
-    Some hubs (e.g. Terminus FE 2.1 clones, 1a40:0201) accept uhubctl's off
-    command and report the port as off while VBUS stays hot — the device never
-    de-enumerates, so every test here would fail with "didn't disappear after
-    power_off" regardless of firmware behaviour (observed on the reference
-    bench: ports 1/2/7 all reported `0000 off` with the /dev node still
-    present). Probe once per module with the first hub device: cut, watch for
-    de-enumeration, restore. No real cut ⇒ skip with an actionable reason
-    instead of reporting impossible failures every night.
+    Probe once per module with the first hub device: cut its port, confirm via
+    the hub's own connect flag that the device dropped, restore. A hub that
+    still reports the device attached after an off can't run this tier, so we
+    skip with an actionable reason rather than emit impossible failures.
+
+    Absence is read from the hub flag, NOT OS enumeration — macOS keeps a zombie
+    of a powered-off device in ioreg/system_profiler/`/dev` for an unbounded
+    time, which would make a working hub look broken.
     """
-    role, port = next(iter(hub_devices.items()))
+    role = next(iter(hub_devices))
     try:
-        cuts = _power.hub_cuts_power(role, expected_port=port)
+        cuts = _power.hub_cuts_power(role)
     except Exception as exc:
         pytest.skip(f"can't probe hub power control via {role!r}: {exc}")
     # Power is restored by the probe; re-pin the port in case it moved.
@@ -115,17 +116,21 @@ def test_peer_offline_then_recovers(
                 "skipping offline test to avoid false positive"
             )
 
-    # Step 3: power off RX. uhubctl skips the test with a clear message if
-    # the RX role isn't on a controllable hub.
+    # Step 3: power off RX. Resolve its hub slot NOW, while it's still up — a
+    # powered-off device can't be VID-resolved, and keying power on/off + the
+    # absence check off the fixed (location, port) means absence reads the hub's
+    # own connect flag (reliable) instead of macOS enumeration (which retains a
+    # zombie of a powered-off device and would falsely time out).
     try:
-        _power.power_off(rx_role)
+        rx_slot = uhubctl.resolve_target(rx_role)
     except Exception as exc:
         pytest.skip(f"can't power-control {rx_role!r}: {exc}")
+    _power.power_off(rx_role, resolved=rx_slot)
 
     try:
-        _power.wait_for_absence(rx_role, timeout_s=10.0)
+        _power.wait_for_absence(rx_role, timeout_s=10.0, resolved=rx_slot)
     except TimeoutError:
-        _power.power_on(rx_role)  # restore hub state before failing
+        _power.power_on(rx_role, resolved=rx_slot)  # restore hub state before failing
         resolve_port_by_role(rx_role, timeout_s=30.0)
         pytest.fail(f"{rx_role!r} didn't disappear after power_off")
 
@@ -144,12 +149,12 @@ def test_peer_offline_then_recovers(
             time.sleep(5.0)
     except Exception as exc:
         # Restore RX before reraising so the bench state is sane.
-        _power.power_on(rx_role)
+        _power.power_on(rx_role, resolved=rx_slot)
         resolve_port_by_role(rx_role, timeout_s=30.0)
         raise AssertionError(f"TX crashed when sending to offline peer: {exc}") from exc
 
     # Step 5: power RX back on + rediscover.
-    _power.power_on(rx_role)
+    _power.power_on(rx_role, resolved=rx_slot)
     time.sleep(0.5)
     new_rx_port = resolve_port_by_role(rx_role, timeout_s=30.0)
     hub_devices[rx_role] = new_rx_port
