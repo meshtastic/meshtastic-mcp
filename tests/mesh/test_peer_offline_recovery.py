@@ -39,11 +39,40 @@ from tests._port_discovery import resolve_port_by_role
 from ._receive import ReceiveCollector, nudge_nodeinfo
 
 
+@pytest.fixture(scope="module")
+def hub_actually_cuts_power(hub_devices: dict[str, str]) -> None:
+    """Skip the whole tier when the hub only PRETENDS to switch power.
+
+    Some hubs (e.g. Terminus FE 2.1 clones, 1a40:0201) accept uhubctl's off
+    command and report the port as off while VBUS stays hot — the device never
+    de-enumerates, so every test here would fail with "didn't disappear after
+    power_off" regardless of firmware behaviour (observed on the reference
+    bench: ports 1/2/7 all reported `0000 off` with the /dev node still
+    present). Probe once per module with the first hub device: cut, watch for
+    de-enumeration, restore. No real cut ⇒ skip with an actionable reason
+    instead of reporting impossible failures every night.
+    """
+    role, port = next(iter(hub_devices.items()))
+    try:
+        cuts = _power.hub_cuts_power(role, expected_port=port)
+    except Exception as exc:
+        pytest.skip(f"can't probe hub power control via {role!r}: {exc}")
+    # Power is restored by the probe; re-pin the port in case it moved.
+    hub_devices[role] = resolve_port_by_role(role, timeout_s=30.0)
+    if not cuts:
+        pytest.skip(
+            "hub does not actually cut VBUS (uhubctl reported off but the "
+            "device never de-enumerated) — the peer-offline tier needs a hub "
+            "with true per-port power switching (see uhubctl's supported list)"
+        )
+
+
 @pytest.mark.timeout(360)
 def test_peer_offline_then_recovers(
     mesh_pair: dict[str, Any],
     power_cycle,
     hub_devices: dict[str, str],
+    hub_actually_cuts_power: None,
 ) -> None:
     tx_port = mesh_pair["tx"]["port"]
     rx_node_num = mesh_pair["rx"]["my_node_num"]
