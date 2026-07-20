@@ -44,7 +44,7 @@ from ._receive import ReceiveCollector, nudge_nodeinfo
 def hub_actually_cuts_power(hub_devices: dict[str, str]) -> None:
     """Skip the whole tier only when the hub genuinely can't switch power.
 
-    Probe once per module with the first hub device: cut its port, confirm via
+    Probe once per module: cut a power-controllable device's port, confirm via
     the hub's own connect flag that the device dropped, restore. A hub that
     still reports the device attached after an off can't run this tier, so we
     skip with an actionable reason rather than emit impossible failures.
@@ -52,20 +52,28 @@ def hub_actually_cuts_power(hub_devices: dict[str, str]) -> None:
     Absence is read from the hub flag, NOT OS enumeration — macOS keeps a zombie
     of a powered-off device in ioreg/system_profiler/`/dev` for an unbounded
     time, which would make a working hub look broken.
+
+    Not every role is power-controllable (roles that share a USB VID can't be
+    uhubctl-resolved without env pins), so try devices until one resolves; only
+    if NONE do is the hub un-probeable.
     """
-    role = next(iter(hub_devices))
-    try:
-        cuts = _power.hub_cuts_power(role)
-    except Exception as exc:
-        pytest.skip(f"can't probe hub power control via {role!r}: {exc}")
-    # Power is restored by the probe; re-pin the port in case it moved.
-    hub_devices[role] = resolve_port_by_role(role, timeout_s=30.0)
-    if not cuts:
-        pytest.skip(
-            "hub does not actually cut VBUS (uhubctl reported off but the "
-            "device never de-enumerated) — the peer-offline tier needs a hub "
-            "with true per-port power switching (see uhubctl's supported list)"
-        )
+    last_exc: Exception | None = None
+    for role in hub_devices:
+        try:
+            cuts = _power.hub_cuts_power(role)
+        except Exception as exc:  # this role isn't power-controllable — try another
+            last_exc = exc
+            continue
+        # Power is restored by the probe; re-pin the port in case it moved.
+        hub_devices[role] = resolve_port_by_role(role, timeout_s=30.0)
+        if not cuts:
+            pytest.skip(
+                "hub does not actually cut VBUS (it still reports the device "
+                "attached after power_off) — the peer-offline tier needs a hub "
+                "with true per-port power switching (see uhubctl's supported list)"
+            )
+        return  # hub genuinely cuts power → run the tier
+    pytest.skip(f"no power-controllable device to probe the hub with: {last_exc}")
 
 
 @pytest.mark.timeout(360)
