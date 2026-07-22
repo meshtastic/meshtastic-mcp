@@ -93,6 +93,20 @@ def has_llama_server() -> bool:
     return llama_server.available()
 
 
+def has_power_meter() -> bool:
+    """True when an ImmersionRC RF Power Meter v2 is attached (VID 0x04D8/PID 0x000A).
+
+    Gates the PA-calibration bench tools (`pa_meter_status`, `pa_measure`,
+    `pa_sweep`): absolute TX-power measurement off a node's PA. Needs no extra
+    (the driver is pure `pyserial`, already a core dep) — only the meter plugged
+    in and powered on. It auto-powers-off on a battery timeout and vanishes from
+    USB, so a meter that was off at server startup won't light up the capability.
+    """
+    from . import power_meter
+
+    return len(power_meter.list_meters()) > 0
+
+
 def has_tak() -> bool:
     """True when the meshtastic-tak SDK is importable (the ``[tak]`` extra).
 
@@ -126,6 +140,7 @@ class Capabilities:
     local_model: bool
     llama_server: bool
     sdr: bool
+    power_meter: bool
     tak: bool
     sdk_cli: bool
 
@@ -140,6 +155,7 @@ class Capabilities:
                 ("local_model", self.local_model),
                 ("llama_server", self.llama_server),
                 ("sdr", self.sdr),
+                ("power_meter", self.power_meter),
                 ("tak", self.tak),
                 ("sdk_cli", self.sdk_cli),
             )
@@ -157,6 +173,7 @@ def detect() -> Capabilities:
         local_model=has_local_model(),
         llama_server=has_llama_server(),
         sdr=has_sdr(),
+        power_meter=has_power_meter(),
         tak=has_tak(),
         sdk_cli=has_sdk_cli(),
     )

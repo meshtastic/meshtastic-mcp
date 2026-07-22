@@ -241,6 +241,38 @@ def _sdr_check() -> Check:
     )
 
 
+def _power_meter_check() -> Check:
+    """PA-calibration bench (`pa_meter_status`/`pa_measure`/`pa_sweep`): needs an
+    ImmersionRC RF Power Meter v2 (USB CDC, VID 0x04D8/PID 0x000A) attached and
+    powered on. No pip extra — the driver is pure `pyserial` (a core dep).
+    """
+    from . import power_meter
+
+    needed = "PA-calibration bench (pa_meter_status / pa_measure / pa_sweep)"
+    meters = power_meter.list_meters()
+    if meters:
+        return Check(
+            "rf-power-meter",
+            "power_meter",
+            STATUS_OK,
+            needed,
+            detail=f"{len(meters)} meter(s): {', '.join(meters)}",
+        )
+    return Check(
+        "rf-power-meter",
+        "power_meter",
+        STATUS_MISSING,
+        needed,
+        detail="no ImmersionRC meter (VID 0x04D8/PID 0x000A) found",
+        fix=_pkg(
+            "plug in an ImmersionRC RF Power Meter v2 and power it on "
+            "(it auto-powers-off on a battery timeout and drops off USB)",
+            "plug in an ImmersionRC RF Power Meter v2 and power it on; on Linux you may "
+            "need dialout-group / udev access to the CDC port",
+        ),
+    )
+
+
 def _tak_check() -> Check:
     """TAKPacketV2 wire compression (replay sim `profile tak.wire="v2"`): needs the
     meshtastic-tak SDK (the `tak` extra). Optional — the sim emits legacy
@@ -704,6 +736,8 @@ def run() -> DoctorReport:
         _gh_auth_check(),
         # sdr capability (RF compliance oracle)
         _sdr_check(),
+        # power_meter capability (ImmersionRC PA-calibration bench)
+        _power_meter_check(),
         # tak capability (TAKPacketV2 wire compression for the replay sim)
         _tak_check(),
         # sdk capability (experimental Kotlin-SDK device-IO bridge)

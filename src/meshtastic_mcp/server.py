@@ -42,6 +42,9 @@ from . import (
 from . import (
     inject as inject_mod,
 )
+from . import (
+    pa_sweep as pa_sweep_mod,
+)
 from . import sdk_cli as sdk_cli_mod
 from . import userprefs as userprefs_mod
 from .recorder import get_recorder
@@ -158,6 +161,22 @@ def sdr_tool(*args: Any, **kwargs: Any):
     return deco
 
 
+def power_meter_tool(*args: Any, **kwargs: Any):
+    """Like `@app.tool()` but only registers when the power_meter capability is active.
+
+    Without an attached ImmersionRC RF Power Meter v2 the PA-calibration bench
+    tools (`pa_meter_status`, `pa_measure`, `pa_sweep`) are not advertised. See
+    `doctor` for what's missing.
+    """
+
+    def deco(fn):
+        if CAPS.power_meter:
+            return app.tool(*args, **kwargs)(fn)
+        return fn
+
+    return deco
+
+
 def sdk_tool(*args: Any, **kwargs: Any):
     """Like `@app.tool()` but only registers when the Kotlin SDK CLI is present.
 
@@ -204,6 +223,13 @@ _SDR_TOOLS = (
     "rf_confirm_tx",
 )
 
+# Power-meter-coupled tools, gated by `power_meter_tool` on the power_meter capability.
+_POWER_METER_TOOLS = (
+    "pa_meter_status",
+    "pa_measure",
+    "pa_sweep",
+)
+
 # Firmware-coupled tools, gated by `firmware_tool` on the firmware capability.
 _FIRMWARE_TOOLS = (
     "list_boards",
@@ -248,6 +274,13 @@ def _log_capabilities() -> None:
                 "(install the 'sdr' extra + librtlsdr + an RTL-SDR to enable): %s",
                 len(_SDR_TOOLS),
                 ", ".join(_SDR_TOOLS),
+            )
+        if not CAPS.power_meter:
+            log.info(
+                "power_meter capability inactive: %d PA-calibration tools not registered "
+                "(plug in a powered-on ImmersionRC RF Power Meter v2 to enable): %s",
+                len(_POWER_METER_TOOLS),
+                ", ".join(_POWER_METER_TOOLS),
             )
     except Exception as exc:  # never fail startup over a capability probe
         log.warning("capability detection failed: %s", exc)
@@ -1536,6 +1569,120 @@ def rf_confirm_tx(
     )
 
 
+# ---------- PA calibration bench (ImmersionRC RF Power Meter v2) ------------
+
+
+@power_meter_tool()
+def pa_meter_status(meter_port: str | None = None) -> dict[str, Any]:
+    """Detect the ImmersionRC RF Power Meter and report a live reading — the
+    bench-instrument equivalent of `recorder_status`. Read-only; no Meshtastic
+    device involved.
+
+    Use it to confirm the meter is connected and awake before a `pa_sweep`
+    (it auto-powers-off on a battery timeout and vanishes from USB), and to see
+    the current noise floor / any signal it's presently reading.
+
+    Returns:
+        {present: bool, port, version, stored_freq_mhz, current_avg_dbm,
+         current_peak_dbm}  — or {present: false, detail} when none is attached.
+    """
+    return pa_sweep_mod.status(meter_port=meter_port)
+
+
+@power_meter_tool()
+def pa_measure(
+    band: str,
+    samples: int = 20,
+    interval_s: float = 0.05,
+    attenuator_db: float = 0.0,
+    meter_port: str | None = None,
+    peak: bool = False,
+) -> dict[str, Any]:
+    """Passively read the power the meter currently sees at `band` — no Meshtastic
+    device driven. Activates the band's calibration curve, takes `samples`
+    readings, returns min/mean/max in dBm (corrected for `attenuator_db`, the pad
+    between the source and the meter).
+
+    `band` accepts a Meshtastic region (`"EU868"`, `"US915"`, ...) or a bare MHz
+    value (`"868"`); it snaps to the meter's nearest stored calibration point.
+    Use it to read the noise floor, verify a signal generator, or spot-check a TX
+    something else is keying. For a closed-loop node PA sweep use `pa_sweep`.
+
+    Returns:
+        {band, freq_mhz, kind, attenuator_db, samples, min_dbm, mean_dbm, max_dbm}
+    """
+    return pa_sweep_mod.measure(
+        band,
+        samples=samples,
+        interval_s=interval_s,
+        attenuator_db=attenuator_db,
+        meter_port=meter_port,
+        peak=peak,
+    )
+
+
+@power_meter_tool()
+def pa_sweep(
+    powers: list[int],
+    band: str | None = None,
+    port: str | None = None,
+    meter_port: str | None = None,
+    channel_index: int = 0,
+    attenuator_db: float = 0.0,
+    burst_repeat: int = 3,
+    settle_s: float = 1.5,
+    reboot_between_steps: bool = False,
+    override_duty_cycle: bool = True,
+    restore_config: bool = True,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Closed-loop PA calibration: step `lora.tx_power` through `powers` and
+    measure the actual power off the node's PA with the ImmersionRC meter,
+    producing a configured-vs-measured table and a compression/saturation
+    analysis. Requires confirm=True.
+
+    Destructive: for each step it writes `lora.tx_power` on the node, keys real
+    ~200 B broadcast bursts onto the mesh (an idle node rarely transmits), and
+    optionally reboots between steps (`reboot_between_steps=True` for pre-2.8.0
+    firmware that doesn't apply LoRa config live). It captures the meter's noise
+    floor first, then keeps only TX-active samples (floor + margin) per step.
+
+    Instrument safety: pick `attenuator_db` so the highest configured power minus
+    the pad stays under the meter's +31 dBm absolute max — the sweep refuses to
+    run otherwise. `band` defaults to the node's configured region. On EU868 the
+    duty-cycle limit is overridden for the run and restored after (with
+    `override_duty_cycle=True`, the default). The original `tx_power` and
+    duty-cycle override are restored on exit unless `restore_config=False`.
+
+    A step with no TX-active sample (see `silent_steps_dbm`) can be a dead PA —
+    but under airtime pressure a queued packet can also transmit after the
+    sampling window closes, so re-run spaced out before concluding a step is
+    truly silent. Uncalibrated bench check (~±0.5 dB + hand-entered pad), not a
+    certified measurement.
+
+    Returns:
+        {band, region, freq_mhz, attenuator_db, floor_dbm, floor_margin_db,
+         table: [{configured_dbm, measured_avg_dbm, measured_peak_dbm, delta_db,
+         active_samples, total_samples, rf_observed}], curve: {points,
+         saturation_dbm, max_measured_dbm, max_measured_at_configured_dbm,
+         offset_at_min_db, monotonic}, silent_steps_dbm, config_restored, caveat}
+    """
+    return pa_sweep_mod.sweep(
+        powers,
+        band=band,
+        port=port,
+        meter_port=meter_port,
+        channel_index=channel_index,
+        attenuator_db=attenuator_db,
+        burst_repeat=burst_repeat,
+        settle_s=settle_s,
+        reboot_between_steps=reboot_between_steps,
+        override_duty_cycle=override_duty_cycle,
+        restore_config=restore_config,
+        confirm=confirm,
+    )
+
+
 @app.tool()
 def shutdown(port: str | None = None, confirm: bool = False, seconds: int = 10) -> dict[str, Any]:
     """Shut down the connected node in `seconds` seconds. Requires confirm=True.
@@ -2532,6 +2679,8 @@ _READ_ONLY = {
     "triage_window",  # reads device window (+optional screenshot); no mutation
     "local_model_status",  # reports backend/reachability; no mutation
     "rf_scan",  # passive SDR capture; no device/host mutation
+    "pa_meter_status",  # reads the power meter; no device/host mutation
+    "pa_measure",  # passive meter read; no Meshtastic-device mutation
     "sdk_status",  # reports SDK-CLI bridge availability; no mutation
     "sdk_device_info",  # reads device snapshot via the Kotlin SDK CLI; no mutation
     "sdk_list_nodes",  # reads the device node DB via the Kotlin SDK CLI; no mutation
@@ -2553,6 +2702,7 @@ _DESTRUCTIVE = {
     "send_text",  # injects a mesh packet; cannot be recalled
     "inject_frame",  # injects a forged frame into the RX pipeline; cannot be recalled
     "rf_confirm_tx",  # calls send_text internally; injects a mesh packet
+    "pa_sweep",  # writes lora.tx_power, keys TX, may reboot the node
     "send_input_event",  # drives device button/GPIO; side-effect on hardware
     "reboot",
     "shutdown",
@@ -2644,6 +2794,11 @@ _OPEN_WORLD = {
     "picotool_load",
     "picotool_raw",
     "push_fake_nodedb",
+    # Talk to the external ImmersionRC power meter over USB; pa_sweep also drives
+    # the node's TX onto the mesh.
+    "pa_meter_status",
+    "pa_measure",
+    "pa_sweep",
     # Return user-authored content from remote mesh nodes — untrusted input
     # that can carry prompt-injection payloads (lethal-trifecta leg 2).
     "logs_window",
@@ -2673,6 +2828,9 @@ _TITLE_OVERRIDES: dict[str, str] = {
     "uhubctl_cycle": "USB Hub Port Cycle",
     "get_environment_doctor_report": "Environment Doctor Report",
     "get_active_capabilities": "Active Capabilities",
+    "pa_meter_status": "PA Meter Status",
+    "pa_measure": "PA Meter Measure",
+    "pa_sweep": "PA Power Sweep (Closed-Loop)",
 }
 
 
