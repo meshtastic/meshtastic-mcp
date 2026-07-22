@@ -120,6 +120,29 @@ def power_cycle(
     return resolve_port_by_role(role, timeout_s=rediscover_timeout_s)
 
 
+def recover_absent_role(role: str, *, settle_timeout_s: float = 25.0) -> str | None:
+    """Power-cycle ``role``'s pinned hub slot to wake a wedged/off board,
+    returning its new ``/dev`` path once it enumerates, or None if the slot
+    stays empty.
+
+    nRF52 native-USB boards can drop off the bus after a prior tier's
+    ``power_off`` and stay absent — a wedged CDC needs a VBUS cycle to
+    re-enumerate. The pinned-slot ``resolve_target`` path (env pins seeded by
+    ``conftest.pytest_configure``) addresses the slot even while the device is
+    invisible, so this works on an absent board.
+
+    Best-effort — never raises. An empty slot (no board), a missing hub, or a
+    hub that needs sudo yields None; a genuinely wedged device that a VBUS cycle
+    revives yields its path. Used by the session ``bench_wake`` step so a board
+    that dropped off the bus doesn't silently disable a whole tier by being
+    absent when ``hub_devices`` snapshots.
+    """
+    try:
+        return power_cycle(role, rediscover_timeout_s=settle_timeout_s)
+    except Exception:
+        return None
+
+
 def wait_for_absence(
     role: str,
     *,
@@ -221,5 +244,6 @@ __all__ = [
     "power_cycle",
     "power_off",
     "power_on",
+    "recover_absent_role",
     "wait_for_absence",
 ]

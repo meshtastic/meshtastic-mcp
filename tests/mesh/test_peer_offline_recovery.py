@@ -40,6 +40,30 @@ from tests._port_discovery import resolve_port_by_role
 from ._receive import ReceiveCollector, nudge_nodeinfo
 
 
+def _reconnect_after_power_on(rx_role: str, rx_slot: tuple[str, int]) -> str:
+    """Power the RX back on and return an OPENABLE ``/dev`` path, kicking a
+    wedged nRF52 CDC with a power-cycle if the first re-enumeration doesn't
+    settle.
+
+    nRF52 native USB is fragile across a VBUS cut: the board may re-enumerate on
+    a path that ``list_devices`` reports but that vanishes on open (the run-32
+    ``esp32s3->t_echo`` ``could not open port`` failure), or not come back at
+    all. ``require_openable`` makes ``resolve_port_by_role`` wait for a path that
+    actually opens; if none settles in time, one VBUS cycle kicks a wedged CDC
+    and we retry with a longer window. Raises AssertionError if the board never
+    returns openable — a genuine recovery failure, not a flake.
+    """
+    _power.power_on(rx_role, resolved=rx_slot)
+    time.sleep(0.5)
+    try:
+        return resolve_port_by_role(rx_role, timeout_s=30.0, require_openable=True)
+    except AssertionError:
+        loc, port = rx_slot
+        uhubctl.cycle(loc, port, delay_s=2)
+        time.sleep(0.5)
+        return resolve_port_by_role(rx_role, timeout_s=45.0, require_openable=True)
+
+
 @pytest.fixture(scope="module")
 def hub_actually_cuts_power(hub_devices: dict[str, str]) -> None:
     """Skip the whole tier only when the hub genuinely can't switch power.
@@ -161,10 +185,12 @@ def test_peer_offline_then_recovers(
         resolve_port_by_role(rx_role, timeout_s=30.0)
         raise AssertionError(f"TX crashed when sending to offline peer: {exc}") from exc
 
-    # Step 5: power RX back on + rediscover.
-    _power.power_on(rx_role, resolved=rx_slot)
-    time.sleep(0.5)
-    new_rx_port = resolve_port_by_role(rx_role, timeout_s=30.0)
+    # Step 5: power RX back on + rediscover an OPENABLE path. nRF52 native USB
+    # can re-enumerate on a path that lists but vanishes on open, so gate on the
+    # CDC having settled (and power-cycle-kick a wedged one) before handing the
+    # port to ReceiveCollector — otherwise the reconnect fails with
+    # `could not open port` (the run-32 esp32s3->t_echo failure).
+    new_rx_port = _reconnect_after_power_on(rx_role, rx_slot)
     hub_devices[rx_role] = new_rx_port
 
     # Step 6 + 7: bilateral re-warmup + directed send that should now work.
