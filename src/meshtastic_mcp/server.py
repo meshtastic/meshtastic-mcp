@@ -12,6 +12,7 @@ every tool post-registration (see ``_apply_tool_annotations``).
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import UTC
 from typing import Any
@@ -1291,6 +1292,72 @@ def config_diff(name_a: str, name_b: str | None = None, port: str | None = None)
     return config_snapshot_mod.diff(name_a, name_b, port=port)
 
 
+def _confirm_tx(
+    packet_id: int | None,
+    port: str | None,
+    tx_timeout_s: float,
+) -> tuple[bool | None, float | None, str | None]:
+    """Poll for evidence that `packet_id` actually reached the air.
+
+    Returns `(confirmed, latency_s, reason)` where `confirmed` is:
+      * `True`  — positive evidence of transmission,
+      * `False` — an evidence channel was working and showed no transmission,
+      * `None`  — no evidence channel available, so we genuinely cannot tell.
+
+    The `None` case matters. A node cannot observe its own transmission through
+    the receive path: the recorder's packet stream is fed by the
+    `meshtastic.receive` pubsub topic, which only carries packets the node
+    *received*. Reporting that absence as `False` claimed failure for messages
+    that were verifiably delivered.
+
+    Two things do constitute evidence:
+
+    1. The firmware's own log line ``Started Tx (id=0x…)``, captured when
+       `set_debug_log_api(True)` is on (or a `serial_session` is tapping the
+       port). Deliberately NOT ``enqueue for send`` — a packet can be enqueued
+       and then killed before airtime, which is exactly the bug PR #18 fixed,
+       so matching the enqueue line would restore a false positive.
+    2. A neighbour rebroadcasting our packet, which arrives back on the receive
+       path carrying the same id. Real proof it reached the air, and it works
+       even with no log capture.
+    """
+    if packet_id is None:
+        return None, None, "no packet id was returned for this send, so nothing to match against"
+
+    # Firmware prints the id as lowercase, zero-padded 32-bit hex.
+    started_tx = re.compile(rf"Started Tx \(id=0x{packet_id:08x}\b")
+    t0 = time.monotonic()
+    deadline = t0 + tx_timeout_s
+    saw_any_log = False
+
+    while True:
+        logs = log_query.logs_window(start="-2m", port=port, max_lines=200)
+        if logs.get("lines"):
+            saw_any_log = True
+            for entry in logs["lines"]:
+                if started_tx.search(entry.get("line", "")):
+                    return True, round(time.monotonic() - t0, 2), None
+
+        packets = log_query.packets_window(start="-2m", max=200)
+        for pkt in packets.get("packets", []):
+            if pkt.get("id") == packet_id:
+                return True, round(time.monotonic() - t0, 2), None
+
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
+
+    if not saw_any_log:
+        return (
+            None,
+            None,
+            "no firmware log lines were captured for this port, so transmission "
+            "could not be observed — enable set_debug_log_api(True) (or hold a "
+            "serial_session) to make tx_confirmed meaningful",
+        )
+    return False, None, "firmware logs were captured but showed no 'Started Tx' for this packet"
+
+
 @app.tool()
 def send_text(
     text: str,
@@ -1313,15 +1380,23 @@ def send_text(
     before the serial port resets. Prevents loss of queued broadcasts.
 
     Delivery is async and best-effort. By default this returns as soon as the
-    packet is queued. Set `wait_for_tx=True` to additionally poll the recorder
-    (up to `tx_timeout_s`) for the matching TEXT_MESSAGE_APP packet on the wire
-    — collapsing the usual send + `packets_window` confirmation dance into one
-    call.
+    packet is queued. Set `wait_for_tx=True` to additionally poll (up to
+    `tx_timeout_s`) for evidence the radio actually transmitted: the firmware's
+    `Started Tx (id=…)` log line, or a neighbour rebroadcasting the packet.
+
+    `tx_confirmed` is three-valued. `true` means transmission was observed;
+    `false` means logs were flowing and showed no transmission; **`null` means
+    it could not be observed at all** — most often because firmware logs are not
+    being captured. Call `set_debug_log_api(True)` on the port (or hold a
+    `serial_session`) to make confirmation meaningful; without it, `null` is the
+    expected answer and does NOT mean the message failed. `tx_unconfirmed_reason`
+    explains which case you got.
 
     Returns:
         {ok: true, packet_id: int | null, destination: str}
         plus when wait_for_tx=True:
-        {tx_confirmed: bool, tx_latency_s: float | null}
+        {tx_confirmed: bool | null, tx_latency_s: float | null,
+         tx_unconfirmed_reason?: str}
     """
     result = admin.send_text(
         text=text,
@@ -1334,26 +1409,11 @@ def send_text(
     if not wait_for_tx:
         return result
 
-    packet_id = result.get("packet_id")
-    t0 = time.monotonic()
-    deadline = t0 + tx_timeout_s
-    confirmed = False
-    while time.monotonic() < deadline:
-        window = log_query.packets_window(start="-1m", portnum="TEXT_MESSAGE_APP", max=50)
-        for pkt in window.get("packets", []):
-            # Match by packet id when we have one; else fall back to any recent TX.
-            if packet_id is not None and pkt.get("id") == packet_id:
-                confirmed = True
-                break
-            if packet_id is None and pkt.get("portnum") == "TEXT_MESSAGE_APP":
-                confirmed = True
-                break
-        if confirmed:
-            break
-        time.sleep(1.0)
-
+    confirmed, latency_s, reason = _confirm_tx(result.get("packet_id"), port, tx_timeout_s)
     result["tx_confirmed"] = confirmed
-    result["tx_latency_s"] = round(time.monotonic() - t0, 2) if confirmed else None
+    result["tx_latency_s"] = latency_s
+    if reason is not None:
+        result["tx_unconfirmed_reason"] = reason
     return result
 
 

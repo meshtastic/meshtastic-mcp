@@ -192,14 +192,30 @@ config_diff("before", "after")     # or diff two snapshots
 
 **Send a message and confirm delivery**
 ```
-list_devices()                      # pick port
-send_text(port=<port>, text="…")    # inject into mesh
-packets_window(port=<port>, start="-30s")  # confirm TEXT_MESSAGE_APP packet emitted
+list_devices()                          # pick port
+set_debug_log_api(port=<port>, enabled=True)        # required for confirmation (see below)
+send_text(port=<port>, text="…", wait_for_tx=True)  # tx_confirmed + tx_latency_s
 ```
-Or collapse send + confirm into one call:
-```
-send_text(port=<port>, text="…", wait_for_tx=True)  # returns tx_confirmed + tx_latency_s
-```
+**A node cannot see its own transmission on the receive path.** `packets_window`
+(and the recorder's packet stream generally) is fed by the `meshtastic.receive`
+pubsub topic, which only carries packets the node *received* — a message you
+just sent will never appear there. Do not "confirm" a local send with
+`packets_window`; it returns empty even when the message was delivered.
+
+`wait_for_tx=True` instead looks for the firmware's `Started Tx (id=…)` log line
+(and for a neighbour rebroadcasting the packet). That log only reaches the
+recorder when `set_debug_log_api(True)` is on for the port, or a `serial_session`
+is tapping it. `tx_confirmed` is three-valued:
+
+| value | meaning |
+| --- | --- |
+| `true` | transmission observed |
+| `false` | logs were flowing and showed no TX — a real failure signal |
+| `null` | not observable (usually debug-log capture is off) — **not** a failure |
+
+Check `tx_unconfirmed_reason` when you get `false` or `null`. Note it confirms the
+packet *reached the air*, not that any peer received it — for end-to-end delivery
+use `want_ack=True` on a direct message, or observe on a second node.
 
 **Read or write config**
 ```
@@ -301,7 +317,8 @@ UI-drive on physical phones requires USB debugging enabled and the device truste
 These will produce flaky, slow, or incorrect results:
 
 - **Polling `device_info()` or `list_nodes()` in a tight loop.** Both open/hold/close the serial port. The exclusive lock is non-blocking — a concurrent caller does not queue; it fails fast with a `... is busy — ... Retry shortly.` error you must catch and retry. Use `recorder_status()` + `events_window()` for ongoing observation instead.
-- **Asserting immediately after `send_text`.** Mesh delivery is best-effort and async. Always query the recorder window with a bounded deadline (e.g. `start="-30s"`, retry every 1 s up to 30 s), not a bare sleep.
+- **Asserting immediately after `send_text`.** Mesh delivery is best-effort and async. Use `wait_for_tx=True` (bounded by `tx_timeout_s`), not a bare sleep.
+- **Confirming a local send with `packets_window`.** That stream only carries packets the node *received*; your own transmission never appears there, so it reads as failure on a working mesh. Use `wait_for_tx=True` with `set_debug_log_api(True)`, and treat `tx_confirmed: null` as "not observable", not "failed". See *Send a message and confirm delivery*.
 - **Calling a firmware tool without checking `doctor()` first.** If `MESHTASTIC_FIRMWARE_ROOT` is unset, firmware tools are not registered at all. Call `doctor()` on first failure; parse `fix_commands` and surface them to the user.
 - **Omitting `confirm=True` on destructive tools then retrying.** The confirm gate is intentional — don't loop-retry without it. Surface the confirmation requirement to the user.
 - **Assuming the recorder has data immediately.** It starts capturing when a serial session opens. If you just opened the port, query with `start="-5s"` and check `line_count > 0` before asserting content.
