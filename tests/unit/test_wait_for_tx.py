@@ -36,8 +36,8 @@ import pytest
 PID = 2268636889  # 0x8738a6d9 — a real id observed on hardware
 
 
-def _log_line(text: str) -> dict[str, Any]:
-    return {"ts": 1784837044.0, "port": "/dev/ttyACM1", "line": text}
+def _log_line(text: str, port: str = "/dev/ttyACM1") -> dict[str, Any]:
+    return {"ts": 1784837044.0, "port": port, "line": text}
 
 
 @pytest.fixture
@@ -52,16 +52,33 @@ def stub_query(monkeypatch):
     """
     from meshtastic_mcp import server
 
-    state: dict[str, Any] = {"log_lines": [], "packets": [], "server": server}
+    state: dict[str, Any] = {
+        "log_lines": [],
+        "packets": [],
+        "server": server,
+        "ports_queried": [],
+    }
 
     def fake_logs_window(*_a, **kwargs):
-        """Mirrors log_query.logs_window: grep is applied BEFORE the max_lines
-        cap, and the cap keeps the most recent N. Emulating the cap is what
-        makes `test_tx_line_survives_a_chatty_log` meaningful — without it the
-        test would pass no matter how the lookup was implemented."""
+        """Mirrors log_query.logs_window closely enough to hold the contract:
+
+        * `port` actually filters, and every requested port is recorded. Without
+          this the tests would still pass if `_confirm_tx` stopped scoping its
+          queries, and a `Started Tx` from a *different* attached node could
+          falsely confirm our send — a live risk on a bench where several nodes
+          share a channel.
+        * `grep` is applied BEFORE the max_lines cap, and the cap keeps the most
+          recent N. Emulating that ordering is what makes
+          `test_tx_line_survives_a_chatty_log` meaningful.
+        """
         grep = kwargs.get("grep")
         max_lines = kwargs.get("max_lines", 200)
+        port = kwargs.get("port")
+        state["ports_queried"].append(port)
+
         lines = state["log_lines"]
+        if port is not None:
+            lines = [line for line in lines if line.get("port") == port]
         if grep is not None:
             import re
 
@@ -154,6 +171,21 @@ def test_tx_line_survives_a_chatty_log(stub_query):
     stub_query["log_lines"] += [_log_line(f"Router: sniffing {i}") for i in range(500)]
     confirmed, _latency, reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 5.0)
     assert confirmed is True, f"grep-filtered lookup should survive log volume: {reason}"
+
+
+def test_tx_on_another_port_does_not_confirm(stub_query):
+    """A `Started Tx` for our id but logged against a *different* node must not
+    confirm. Packet ids are only 32 bits and several nodes commonly share a
+    bench and a channel, so an unscoped query could confirm off another radio's
+    logs. Guards that `_confirm_tx` keeps passing `port` down."""
+    stub_query["log_lines"] = [
+        _log_line("Started Tx (id=0x8738a6d9 fr=0x1 to=0xffffffff)", port="/dev/ttyUSB0"),
+    ]
+    confirmed, _latency, _reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
+    assert confirmed is not True, "must not confirm from another port's logs"
+    assert "/dev/ttyACM1" in stub_query["ports_queried"], (
+        f"queries must be scoped to the target port, saw {stub_query['ports_queried']}"
+    )
 
 
 def test_truncated_packet_window_is_flagged_when_unobservable(stub_query):
