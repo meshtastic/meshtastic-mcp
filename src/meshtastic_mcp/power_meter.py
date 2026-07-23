@@ -208,9 +208,16 @@ class PowerMeter:
                 raise PowerMeterError(f"meter rejected command {command!r} (ERROR)")
             if first == "OK":
                 return "OK"
-            # Value replies are followed by a trailing OK line; consume it so it
-            # doesn't desync the next command's read.
-            self._ser.readline()
+            # Value replies are followed by a trailing OK line; consume AND validate
+            # it. If it isn't OK (a dropped byte, an out-of-band ERROR, a truncated
+            # frame) the stream is desynced — fail loud rather than hand back a value
+            # paired with an unconfirmed reply and let the next command read garbage.
+            trailer = self._ser.readline().decode("ascii", "replace").strip()
+            if trailer != "OK":
+                raise PowerMeterError(
+                    f"desynced reply to {command!r}: expected trailing 'OK' after value "
+                    f"{first!r}, got {trailer!r}"
+                )
             return first
         except serial.SerialException as exc:
             raise PowerMeterError(
@@ -287,6 +294,8 @@ class PowerMeter:
         Uses ``D`` (average) by default, ``E`` (peak) when ``peak=True``. ~10-12 Hz
         (interval 0.05 s) is the sustained rate the meter handles comfortably.
         """
+        if count <= 0:
+            raise PowerMeterError(f"sample count must be >= 1, got {count}")
         read = self.read_peak_dbm if peak else self.read_avg_dbm
         out: list[float] = []
         for i in range(count):

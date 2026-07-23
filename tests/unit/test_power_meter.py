@@ -95,6 +95,14 @@ def test_unknown_command_raises() -> None:
         m.read_avg_dbm()
 
 
+def test_value_reply_without_trailing_ok_is_desync() -> None:
+    # A value line followed by something other than OK means the stream is
+    # desynced — must fail loud, not hand back the value with an unconfirmed frame.
+    m = _meter_with({"D": ["-26.45", "ERROR"]})
+    with pytest.raises(power_meter.PowerMeterError, match="desynced"):
+        m.read_avg_dbm()
+
+
 def test_empty_reply_flags_powered_off() -> None:
     # An auto-off meter answers nothing (readline times out -> "").
     m = _meter_with({"D": []})
@@ -200,6 +208,81 @@ def test_analyze_curve_needs_two_points() -> None:
     assert "need >=2" in curve["note"]
 
 
+def test_sample_rejects_nonpositive_count() -> None:
+    # measure()/floor capture do min/mean/max on the result — an empty list from
+    # count<=0 would crash opaquely downstream, so reject it at the source.
+    m = _meter_with({"D": ["-25.0", "OK"]})
+    with pytest.raises(power_meter.PowerMeterError, match="count must be >= 1"):
+        m.sample(0)
+
+
 def test_sweep_requires_confirm() -> None:
     with pytest.raises(pa_sweep.PaSweepError, match="confirm=True"):
         pa_sweep.sweep([20], band="EU868", confirm=False)
+
+
+# ---------------------------------------------------------------------------
+# sweep() duty-cycle-override restore (mocked collaborators, no hardware)
+# ---------------------------------------------------------------------------
+class _FakeMeter:
+    """Stand-in for `PowerMeter` in sweep tests: floor at -25, TX-active at -10."""
+
+    def __init__(self, *_a, **_k) -> None:
+        pass
+
+    def __enter__(self) -> _FakeMeter:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+    def version(self) -> str:
+        return "RFPowerMeterv2 1.0.11"
+
+    def set_freq_mhz(self, mhz: float, *, persist: bool = False) -> int:
+        return int(mhz)
+
+    def sample(self, count: int, *, interval_s: float = 0.05, peak: bool = False) -> list[float]:
+        return [-25.0] * count  # noise floor
+
+    def read_avg_dbm(self) -> float:
+        return -10.0  # clears floor+margin => a TX-active sample
+
+
+def _patch_sweep(monkeypatch, *, original_duty: bool) -> list[tuple[str, object]]:
+    """Wire sweep()'s collaborators to fakes; return the recorded set_config calls."""
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        pa_sweep.admin, "set_config", lambda path, value, port=None: calls.append((path, value))
+    )
+    monkeypatch.setattr(pa_sweep.admin, "send_text", lambda **_k: {"ok": True, "packet_id": 1})
+    monkeypatch.setattr(
+        pa_sweep,
+        "read_lora_context",
+        lambda port=None: {"region": "EU868", "tx_power": 20, "override_duty_cycle": original_duty},
+    )
+    monkeypatch.setattr(pa_sweep.power_meter, "PowerMeter", _FakeMeter)
+    monkeypatch.setattr(pa_sweep.time, "sleep", lambda *_a: None)
+    return calls
+
+
+def test_sweep_leaves_duty_override_untouched_when_already_on(monkeypatch) -> None:
+    calls = _patch_sweep(monkeypatch, original_duty=True)
+    pa_sweep.sweep(
+        [17, 20], band="EU868", confirm=True, settle_s=0, floor_samples=3, burst_repeat=1
+    )
+    duty_writes = [c for c in calls if c[0] == "lora.override_duty_cycle"]
+    assert duty_writes == [], "must not write override_duty_cycle when it was already True"
+    # tx_power still restored to the original.
+    tx_writes = [v for p, v in calls if p == "lora.tx_power"]
+    assert tx_writes[-1] == 20
+
+
+def test_sweep_enables_then_restores_duty_override_when_originally_off(monkeypatch) -> None:
+    calls = _patch_sweep(monkeypatch, original_duty=False)
+    pa_sweep.sweep(
+        [17, 20], band="EU868", confirm=True, settle_s=0, floor_samples=3, burst_repeat=1
+    )
+    duty_writes = [v for p, v in calls if p == "lora.override_duty_cycle"]
+    assert duty_writes[0] is True, "should enable the override for the bench run"
+    assert duty_writes[-1] is False, "should restore to the original (off) value, not force True"

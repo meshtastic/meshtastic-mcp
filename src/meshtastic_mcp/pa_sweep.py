@@ -339,6 +339,7 @@ def sweep(
         )
 
     original_tx_power = ctx.get("tx_power", 0)
+    original_duty_override = bool(ctx.get("override_duty_cycle", False))
     duty_override_touched = False
     steps: list[StepResult] = []
 
@@ -350,7 +351,10 @@ def sweep(
         floor_readings = m.sample(floor_samples, interval_s=sample_interval_s)
         floor_dbm = statistics.median(floor_readings)
 
-        if override_duty_cycle:
+        # Only flip the duty-cycle override if it isn't already where we need it —
+        # then we know the original value to put back, and we never write a device
+        # that was already configured the way we want.
+        if override_duty_cycle and not original_duty_override:
             admin.set_config("lora.override_duty_cycle", True, port=port)
             duty_override_touched = True
 
@@ -383,7 +387,7 @@ def sweep(
             if restore_config:
                 admin.set_config("lora.tx_power", int(original_tx_power), port=port)
                 if duty_override_touched:
-                    admin.set_config("lora.override_duty_cycle", False, port=port)
+                    admin.set_config("lora.override_duty_cycle", original_duty_override, port=port)
 
     table = [_step_row(s) for s in steps]
     silent_steps = [s.configured_dbm for s in steps if not s.rf_observed]
