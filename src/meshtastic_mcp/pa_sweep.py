@@ -302,18 +302,29 @@ def status(meter_port: str | None = None) -> dict[str, Any]:
     }
 
 
-def _key_burst(text: str, channel_index: int, port: str | None, repeat: int, gap_s: float) -> int:
+def _key_burst(
+    text: str,
+    channel_index: int,
+    port: str | None,
+    repeat: int,
+    gap_s: float,
+    tx_linger_s: float,
+) -> int:
     """Queue `repeat` broadcast bursts to sustain TX airtime; return packets queued.
 
-    Note: once `send_text` gains a `tx_linger_s` (holds the port open past a
-    broadcast so firmware's channel-politeness delay doesn't drop the queued TX),
-    pass an explicit value here tuned to the burst timing rather than inheriting
-    the send-a-message default, which would add several seconds of linger per
-    burst and stretch a multi-step sweep considerably.
+    Each `send_text` holds the node's port open for `tx_linger_s` after the send
+    so the firmware's channel-politeness delay (~4 s for broadcasts) and the
+    packet's airtime finish before the close-triggered DTR reset drops the queued
+    TX. We pass this explicitly rather than inheriting `send_text`'s
+    send-a-message default (8 s): here it's paid `repeat` times per step and the
+    meter sampler is watching throughout, so the sweep tunes it to just cover the
+    politeness delay plus one packet's airtime instead of the conservative
+    interactive default. Slow presets (long airtime) need a higher value — see
+    `sweep`'s `tx_linger_s`.
     """
     queued = 0
     for i in range(repeat):
-        admin.send_text(text=text, channel_index=channel_index, port=port)
+        admin.send_text(text=text, channel_index=channel_index, port=port, tx_linger_s=tx_linger_s)
         queued += 1
         if i + 1 < repeat:
             time.sleep(gap_s)
@@ -361,6 +372,7 @@ def sweep(
     attenuator_db: float = 0.0,
     burst_repeat: int = 3,
     burst_gap_s: float = 0.3,
+    tx_linger_s: float = 6.0,
     settle_s: float = 1.5,
     floor_samples: int = 20,
     floor_margin_db: float = 5.0,
@@ -382,6 +394,15 @@ def sweep(
     `resolve_band_mhz`. `attenuator_db` is the pad between the PA and the meter
     (added back in software). The result is a table of configured vs measured dBm
     plus `analyze_curve`'s saturation/gain summary.
+
+    Each step keys `burst_repeat` broadcasts, holding the node's port open
+    `tx_linger_s` per send so the firmware's ~4 s broadcast politeness delay plus
+    the packet's airtime finish before close (without it, queued TX is lost). The
+    default (6 s) covers a fast-preset ~200 B packet; raise it for slow presets
+    (LONG_SLOW and friends have multi-second airtime that a 6 s linger would clip)
+    and lower it only if you know the airtime is short. This is paid once per
+    burst per step, so it dominates sweep wall-clock — the meter sampler runs
+    throughout, so it does not need the conservative interactive send default.
 
     Safety: refuses any step whose *expected* meter input (configured power minus
     attenuator) would exceed the meter's absolute max — protect the instrument
@@ -448,7 +469,7 @@ def sweep(
 
                 sampler = _BackgroundSampler(m, interval_s=sample_interval_s)
                 sampler.start()
-                _key_burst(_BURST_TEXT, channel_index, port, burst_repeat, burst_gap_s)
+                _key_burst(_BURST_TEXT, channel_index, port, burst_repeat, burst_gap_s, tx_linger_s)
                 # Let the queued bursts drain onto the air before we stop watching.
                 time.sleep(settle_s)
                 raw = sampler.stop()

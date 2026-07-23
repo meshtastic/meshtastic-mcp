@@ -1604,6 +1604,7 @@ def pa_sweep(
     channel_index: int = 0,
     attenuator_db: float = 0.0,
     burst_repeat: int = 3,
+    tx_linger_s: float = 6.0,
     settle_s: float = 1.5,
     reboot_between_steps: bool = False,
     override_duty_cycle: bool = True,
@@ -1620,6 +1621,13 @@ def pa_sweep(
     optionally reboots between steps (`reboot_between_steps=True` for pre-2.8.0
     firmware that doesn't apply LoRa config live). It captures the meter's noise
     floor first, then keeps only TX-active samples (floor + margin) per step.
+
+    `tx_linger_s` (default 6 s) is how long each broadcast holds the port open so
+    the firmware's ~4 s politeness delay + airtime finish before close drops the
+    TX; it is paid per burst per step and dominates wall-clock, so it is tuned
+    below `send_text`'s conservative 8 s default. Raise it for slow presets
+    (multi-second airtime would be clipped at 6 s); lower it only for short
+    airtime.
 
     Instrument safety: pick `attenuator_db` so the highest configured power minus
     the pad stays under the meter's +31 dBm absolute max — the sweep refuses to
@@ -1653,6 +1661,7 @@ def pa_sweep(
         channel_index=channel_index,
         attenuator_db=attenuator_db,
         burst_repeat=burst_repeat,
+        tx_linger_s=tx_linger_s,
         settle_s=settle_s,
         reboot_between_steps=reboot_between_steps,
         override_duty_cycle=override_duty_cycle,

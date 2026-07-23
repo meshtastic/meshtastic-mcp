@@ -329,6 +329,35 @@ def test_sweep_enables_then_restores_duty_override_when_originally_off(monkeypat
     assert duty_writes[-1] is False, "should restore to the original (off) value, not force True"
 
 
+def test_sweep_passes_tuned_tx_linger_to_send_text(monkeypatch) -> None:
+    # Bursts must key with the sweep's tuned tx_linger_s, not send_text's 8 s
+    # interactive default (which would be paid per burst per step).
+    sent: list[dict] = []
+    monkeypatch.setattr(pa_sweep.admin, "set_config", lambda path, value, port=None: None)
+    monkeypatch.setattr(
+        pa_sweep.admin, "send_text", lambda **k: (sent.append(k), {"ok": True, "packet_id": 1})[1]
+    )
+    monkeypatch.setattr(
+        pa_sweep,
+        "read_lora_context",
+        lambda port=None: {"region": "EU_868", "tx_power": 13, "override_duty_cycle": True},
+    )
+    monkeypatch.setattr(pa_sweep.power_meter, "PowerMeter", _FakeMeter)
+    monkeypatch.setattr(pa_sweep.time, "sleep", lambda *_a: None)
+
+    pa_sweep.sweep(
+        [20],
+        band="EU_868",
+        confirm=True,
+        settle_s=0,
+        floor_samples=3,
+        burst_repeat=2,
+        tx_linger_s=3.5,
+    )
+    assert len(sent) == 2, "one send per burst_repeat"
+    assert all(k.get("tx_linger_s") == 3.5 for k in sent), "each burst uses the tuned linger"
+
+
 def test_sweep_restores_independently_and_reports_errors(monkeypatch) -> None:
     # If the tx_power restore fails (port busy), the duty-cycle restore must STILL
     # run — leaving override_duty_cycle stuck on is the regulatory hazard — and the

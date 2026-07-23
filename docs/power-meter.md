@@ -108,6 +108,14 @@ about regions; it speaks MHz only.
   afterwards. A `lora.tx_power` change applies live on firmware 2.8.0+; use
   `reboot_between_steps=True` for older firmware that only applies LoRa config on
   reboot.
+- **TX linger tuning:** each broadcast holds the node's port open `tx_linger_s`
+  after the send so the firmware's ~4 s broadcast politeness delay and the
+  packet's airtime complete before the close-triggered DTR reset drops the queued
+  TX. `pa_sweep` sets this explicitly (default 6 s) rather than inheriting
+  `send_text`'s conservative 8 s interactive default — it is paid per burst per
+  step, so it dominates sweep wall-clock. Raise it for slow presets (LONG_SLOW
+  and friends have multi-second airtime a 6 s linger would clip); lower it only
+  when you know the airtime is short.
 
 Every reading is an uncalibrated bench regression check (±0.5 dB instrument plus a
 hand-entered attenuator value), not a substitute for certified EMC-lab compliance
