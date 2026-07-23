@@ -12,7 +12,6 @@ every tool post-registration (see ``_apply_tool_annotations``).
 from __future__ import annotations
 
 import logging
-import re
 import time
 from datetime import UTC
 from typing import Any
@@ -1324,37 +1323,55 @@ def _confirm_tx(
     if packet_id is None:
         return None, None, "no packet id was returned for this send, so nothing to match against"
 
-    # Firmware prints the id as lowercase, zero-padded 32-bit hex.
-    started_tx = re.compile(rf"Started Tx \(id=0x{packet_id:08x}\b")
+    # Firmware prints the id as lowercase, zero-padded 32-bit hex. Push this at
+    # `logs_window` as its `grep` rather than filtering the results ourselves:
+    # grep is applied *before* the max_lines cap, so the one line we need can
+    # never be truncated away by an unrelated burst of firmware chatter. That is
+    # not hypothetical — an unfiltered 2 min window on real hardware measured
+    # total_matched=455 / dropped=395.
+    tx_pattern = rf"Started Tx \(id=0x{packet_id:08x}\b"
     t0 = time.monotonic()
     deadline = t0 + tx_timeout_s
     saw_any_log = False
+    packets_truncated = False
 
     while True:
-        logs = log_query.logs_window(start="-2m", port=port, max_lines=200)
-        if logs.get("lines"):
-            saw_any_log = True
-            for entry in logs["lines"]:
-                if started_tx.search(entry.get("line", "")):
-                    return True, round(time.monotonic() - t0, 2), None
+        hits = log_query.logs_window(start="-2m", port=port, grep=tx_pattern, max_lines=20)
+        if hits.get("lines"):
+            return True, round(time.monotonic() - t0, 2), None
 
+        # Separate existence probe: "is any log flowing for this port at all?"
+        # Only ever asks for one line, so the cap is irrelevant here too.
+        if not saw_any_log:
+            probe = log_query.logs_window(start="-2m", port=port, max_lines=1)
+            if probe.get("lines") or probe.get("total_matched"):
+                saw_any_log = True
+
+        # A neighbour's rebroadcast comes back with our id. `packets_window` has
+        # no grep, so honour `dropped` instead of silently trusting a capped list.
         packets = log_query.packets_window(start="-2m", max=200)
         for pkt in packets.get("packets", []):
             if pkt.get("id") == packet_id:
                 return True, round(time.monotonic() - t0, 2), None
+        if packets.get("dropped", 0) > 0:
+            packets_truncated = True
 
         if time.monotonic() >= deadline:
             break
         time.sleep(1.0)
 
     if not saw_any_log:
-        return (
-            None,
-            None,
+        reason = (
             "no firmware log lines were captured for this port, so transmission "
             "could not be observed — enable set_debug_log_api(True) (or hold a "
-            "serial_session) to make tx_confirmed meaningful",
+            "serial_session) to make tx_confirmed meaningful"
         )
+        if packets_truncated:
+            reason += (
+                "; the packet window was also truncated (dropped>0), so a "
+                "rebroadcast may have been missed — narrow the window and retry"
+            )
+        return None, None, reason
     return False, None, "firmware logs were captured but showed no 'Started Tx' for this packet"
 
 
