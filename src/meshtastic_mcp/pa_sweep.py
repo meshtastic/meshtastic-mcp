@@ -37,7 +37,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import admin, power_meter
+from . import admin, lora_compliance, power_meter
 from .rf_oracle import read_lora_context
 
 
@@ -48,6 +48,30 @@ class PaSweepError(RuntimeError):
 # A ~200 B text broadcast is near the Meshtastic payload ceiling and gives the
 # longest single-packet airtime; repeating it sustains the meter's view of the PA.
 _BURST_TEXT = "PA-SWEEP " + "x" * 190
+
+
+def resolve_band_mhz(band: str) -> float:
+    """Resolve a band to a frequency in MHz for the meter.
+
+    Accepts either a Meshtastic **region enum name** (``"US"``, ``"EU_868"``,
+    ``"EU_433"``, ``"JP"`` ...) — resolved to the centre of that region's
+    allocation via `lora_compliance.REGIONS`, the same table firmware derives its
+    channels from — or a bare MHz value (``"868"``, ``"915"``). Region names are
+    what `rf_oracle.read_lora_context` reports, so `sweep(band=None)` feeds one
+    straight through here. The meter has no continuous tuning, so whatever this
+    returns is snapped to the nearest stored calibration point by the driver.
+    """
+    key = band.strip().upper()
+    info = lora_compliance.REGIONS.get(key)
+    if info is not None:
+        return (info.freq_start_mhz + info.freq_end_mhz) / 2.0
+    try:
+        return float(band)
+    except ValueError as exc:
+        raise PaSweepError(
+            f"Unknown band {band!r}: pass a MHz value or a Meshtastic region name "
+            f"(e.g. US, EU_868, EU_433, JP, ANZ)."
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +140,13 @@ def _step_row(s: StepResult) -> dict[str, Any]:
     }
 
 
+def _avg(s: StepResult) -> float:
+    """The measured average, asserted non-None (callers filter to measured steps)."""
+    v = s.measured_avg_dbm
+    assert v is not None
+    return v
+
+
 def analyze_curve(steps: list[StepResult], *, compression_ratio: float = 0.5) -> dict[str, Any]:
     """Characterize the PA gain curve from the per-step measurements.
 
@@ -144,22 +175,20 @@ def analyze_curve(steps: list[StepResult], *, compression_ratio: float = 0.5) ->
     monotonic = True
     for prev, cur in itertools.pairwise(usable):
         d_cfg = cur.configured_dbm - prev.configured_dbm
-        assert cur.measured_avg_dbm is not None and prev.measured_avg_dbm is not None
-        d_meas = cur.measured_avg_dbm - prev.measured_avg_dbm
+        d_meas = _avg(cur) - _avg(prev)
         if d_meas < -0.5:
             monotonic = False
         if saturation_dbm is None and d_cfg > 0 and (d_meas / d_cfg) < compression_ratio:
             saturation_dbm = prev.configured_dbm
 
     lowest = usable[0]
-    highest = max(usable, key=lambda s: s.measured_avg_dbm)  # type: ignore[arg-type,return-value]
-    assert lowest.measured_avg_dbm is not None and highest.measured_avg_dbm is not None
+    highest = max(usable, key=_avg)
     return {
         "points": len(usable),
         "saturation_dbm": saturation_dbm,
-        "max_measured_dbm": round(highest.measured_avg_dbm, 2),
+        "max_measured_dbm": round(_avg(highest), 2),
         "max_measured_at_configured_dbm": highest.configured_dbm,
-        "offset_at_min_db": round(lowest.measured_avg_dbm - lowest.configured_dbm, 2),
+        "offset_at_min_db": round(_avg(lowest) - lowest.configured_dbm, 2),
         "monotonic": monotonic,
     }
 
@@ -218,19 +247,26 @@ def measure(
     """One-shot passive read of whatever the meter currently sees at `band`.
 
     No Meshtastic device involved — activates the band's calibration curve, takes
-    `samples` readings, and returns min/mean/max (attenuator-corrected). Use it to
-    read the noise floor, sanity-check a signal generator, or spot-check a TX that
-    something else is keying.
+    `samples` readings, and returns min/mean/max in dBm. `band` is a Meshtastic
+    region name (``"US"``, ``"EU_868"`` ...) or a bare MHz value (see
+    `resolve_band_mhz`). Use it to read the noise floor, sanity-check a signal
+    generator, or spot-check a TX that something else is keying.
+
+    `attenuator_db` is added to every reading (the pad sits between the source and
+    the meter). That's what you want for a signal, but note it also inflates a
+    noise-floor read by the pad value — pass ``attenuator_db=0`` if you want the
+    meter's raw floor rather than the floor referred to the pad's input.
     """
-    freq_mhz = power_meter.band_to_freq_mhz(band)
+    center_mhz = resolve_band_mhz(band)
     with power_meter.PowerMeter(meter_port) as m:
         m.version()  # fail fast if it's not actually an ImmersionRC meter
-        m.set_freq_mhz(freq_mhz, persist=persist_freq)
+        cal_mhz = m.set_freq_mhz(center_mhz, persist=persist_freq)
         readings = m.sample(samples, interval_s=interval_s, peak=peak)
     corrected = [r + attenuator_db for r in readings]
     return {
         "band": band,
-        "freq_mhz": freq_mhz,
+        "requested_center_mhz": round(center_mhz, 3),
+        "meter_cal_mhz": cal_mhz,
         "kind": "peak" if peak else "average",
         "attenuator_db": attenuator_db,
         "samples": len(corrected),
@@ -267,7 +303,14 @@ def status(meter_port: str | None = None) -> dict[str, Any]:
 
 
 def _key_burst(text: str, channel_index: int, port: str | None, repeat: int, gap_s: float) -> int:
-    """Queue `repeat` broadcast bursts to sustain TX airtime; return packets queued."""
+    """Queue `repeat` broadcast bursts to sustain TX airtime; return packets queued.
+
+    Note: once `send_text` gains a `tx_linger_s` (holds the port open past a
+    broadcast so firmware's channel-politeness delay doesn't drop the queued TX),
+    pass an explicit value here tuned to the burst timing rather than inheriting
+    the send-a-message default, which would add several seconds of linger per
+    burst and stretch a multi-step sweep considerably.
+    """
     queued = 0
     for i in range(repeat):
         admin.send_text(text=text, channel_index=channel_index, port=port)
@@ -275,6 +318,37 @@ def _key_burst(text: str, channel_index: int, port: str | None, repeat: int, gap
         if i + 1 < repeat:
             time.sleep(gap_s)
     return queued
+
+
+def _restore_config(
+    path: str,
+    value: object,
+    port: str | None,
+    errors: list[str],
+    *,
+    attempts: int = 3,
+    backoff_s: float = 0.5,
+) -> None:
+    """Best-effort restore of one config field, retrying the busy case.
+
+    Each restore opens the node's serial port, and per the "one MCP call per
+    serial port" rule that acquisition is non-blocking and fails fast with a
+    *busy* error. Restoring `override_duty_cycle` in particular has regulatory
+    consequences if it's left on, so we retry the busy case a few times and, on
+    final failure, record it in `errors` instead of raising — so one field's
+    failure never skips the next field's restore, and the caller can surface what
+    didn't come back rather than leaving it silently wrong.
+    """
+    for i in range(attempts):
+        try:
+            admin.set_config(path, value, port=port)
+            return
+        except Exception as exc:
+            if "busy" in str(exc).lower() and i + 1 < attempts:
+                time.sleep(backoff_s)
+                continue
+            errors.append(f"{path}: {exc}")
+            return
 
 
 def sweep(
@@ -303,15 +377,17 @@ def sweep(
     the mesh, and (optionally) reboots the node between steps. Requires
     ``confirm=True``.
 
-    `band` defaults to the node's configured region (read live). `attenuator_db`
-    is the pad between the PA and the meter (added back in software). The result
-    is a table of configured vs measured dBm plus `analyze_curve`'s
-    saturation/gain summary.
+    `band` defaults to the node's configured region (read live) — a Meshtastic
+    region name like ``"US"`` or ``"EU_868"``, resolved to a frequency via
+    `resolve_band_mhz`. `attenuator_db` is the pad between the PA and the meter
+    (added back in software). The result is a table of configured vs measured dBm
+    plus `analyze_curve`'s saturation/gain summary.
 
     Safety: refuses any step whose *expected* meter input (configured power minus
     attenuator) would exceed the meter's absolute max — protect the instrument
     with an adequate pad. Restores the original `tx_power` and duty-cycle override
-    on exit unless ``restore_config=False``.
+    on exit unless ``restore_config=False``; each restore is independent and its
+    failure is surfaced in ``restore_errors`` rather than silently swallowed.
     """
     if not confirm:
         raise PaSweepError(
@@ -325,7 +401,7 @@ def sweep(
     region = ctx.get("region", "UNSET")
     if band is None:
         band = region
-    freq_mhz = power_meter.band_to_freq_mhz(band)
+    center_mhz = resolve_band_mhz(band)
 
     # Protect the meter: the pad must knock the highest configured step below the
     # meter's absolute max. (Approximate — ignores PA gain error, which is what
@@ -338,14 +414,17 @@ def sweep(
             "absolute max. Add more attenuation before sweeping."
         )
 
+    # 0 is firmware's "use the region's default power" sentinel, not literally
+    # 0 dBm — restoring it hands the node back to its default, which is correct.
     original_tx_power = ctx.get("tx_power", 0)
     original_duty_override = bool(ctx.get("override_duty_cycle", False))
     duty_override_touched = False
+    restore_errors: list[str] = []
     steps: list[StepResult] = []
 
     with power_meter.PowerMeter(meter_port) as m:
         m.version()
-        m.set_freq_mhz(freq_mhz)
+        cal_mhz = m.set_freq_mhz(center_mhz)
 
         # Floor: no TX in flight, so read the meter directly (no sampler thread).
         floor_readings = m.sample(floor_samples, interval_s=sample_interval_s)
@@ -384,10 +463,15 @@ def sweep(
                     )
                 )
         finally:
+            # Restore each field independently: a busy/transient failure on one
+            # must not skip the next (leaving override_duty_cycle stuck on is the
+            # regulatory hazard). Failures land in restore_errors, reported below.
             if restore_config:
-                admin.set_config("lora.tx_power", int(original_tx_power), port=port)
+                _restore_config("lora.tx_power", int(original_tx_power), port, restore_errors)
                 if duty_override_touched:
-                    admin.set_config("lora.override_duty_cycle", original_duty_override, port=port)
+                    _restore_config(
+                        "lora.override_duty_cycle", original_duty_override, port, restore_errors
+                    )
 
     table = [_step_row(s) for s in steps]
     silent_steps = [s.configured_dbm for s in steps if not s.rf_observed]
@@ -395,7 +479,8 @@ def sweep(
     return {
         "band": band,
         "region": region,
-        "freq_mhz": freq_mhz,
+        "requested_center_mhz": round(center_mhz, 3),
+        "meter_cal_mhz": cal_mhz,
         "attenuator_db": attenuator_db,
         "floor_dbm": round(floor_dbm, 2),
         "floor_margin_db": floor_margin_db,
@@ -403,6 +488,7 @@ def sweep(
         "curve": analyze_curve(steps),
         "silent_steps_dbm": silent_steps,
         "config_restored": restore_config,
+        "restore_errors": restore_errors,
         "caveat": (
             "Bench regression check: ImmersionRC meter (~±0.5 dB) with a hand-entered "
             "attenuator value; not a calibrated/certified measurement. Steps with no TX-active "

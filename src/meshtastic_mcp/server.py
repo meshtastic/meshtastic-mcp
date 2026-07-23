@@ -161,22 +161,6 @@ def sdr_tool(*args: Any, **kwargs: Any):
     return deco
 
 
-def power_meter_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when the power_meter capability is active.
-
-    Without an attached ImmersionRC RF Power Meter v2 the PA-calibration bench
-    tools (`pa_meter_status`, `pa_measure`, `pa_sweep`) are not advertised. See
-    `doctor` for what's missing.
-    """
-
-    def deco(fn):
-        if CAPS.power_meter:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
 def sdk_tool(*args: Any, **kwargs: Any):
     """Like `@app.tool()` but only registers when the Kotlin SDK CLI is present.
 
@@ -223,13 +207,6 @@ _SDR_TOOLS = (
     "rf_confirm_tx",
 )
 
-# Power-meter-coupled tools, gated by `power_meter_tool` on the power_meter capability.
-_POWER_METER_TOOLS = (
-    "pa_meter_status",
-    "pa_measure",
-    "pa_sweep",
-)
-
 # Firmware-coupled tools, gated by `firmware_tool` on the firmware capability.
 _FIRMWARE_TOOLS = (
     "list_boards",
@@ -274,13 +251,6 @@ def _log_capabilities() -> None:
                 "(install the 'sdr' extra + librtlsdr + an RTL-SDR to enable): %s",
                 len(_SDR_TOOLS),
                 ", ".join(_SDR_TOOLS),
-            )
-        if not CAPS.power_meter:
-            log.info(
-                "power_meter capability inactive: %d PA-calibration tools not registered "
-                "(plug in a powered-on ImmersionRC RF Power Meter v2 to enable): %s",
-                len(_POWER_METER_TOOLS),
-                ", ".join(_POWER_METER_TOOLS),
             )
     except Exception as exc:  # never fail startup over a capability probe
         log.warning("capability detection failed: %s", exc)
@@ -1572,7 +1542,7 @@ def rf_confirm_tx(
 # ---------- PA calibration bench (ImmersionRC RF Power Meter v2) ------------
 
 
-@power_meter_tool()
+@app.tool()
 def pa_meter_status(meter_port: str | None = None) -> dict[str, Any]:
     """Detect the ImmersionRC RF Power Meter and report a live reading — the
     bench-instrument equivalent of `recorder_status`. Read-only; no Meshtastic
@@ -1589,7 +1559,7 @@ def pa_meter_status(meter_port: str | None = None) -> dict[str, Any]:
     return pa_sweep_mod.status(meter_port=meter_port)
 
 
-@power_meter_tool()
+@app.tool()
 def pa_measure(
     band: str,
     samples: int = 20,
@@ -1603,13 +1573,17 @@ def pa_measure(
     readings, returns min/mean/max in dBm (corrected for `attenuator_db`, the pad
     between the source and the meter).
 
-    `band` accepts a Meshtastic region (`"EU868"`, `"US915"`, ...) or a bare MHz
-    value (`"868"`); it snaps to the meter's nearest stored calibration point.
-    Use it to read the noise floor, verify a signal generator, or spot-check a TX
-    something else is keying. For a closed-loop node PA sweep use `pa_sweep`.
+    `band` accepts a Meshtastic region name (`"US"`, `"EU_868"`, `"EU_433"`,
+    `"JP"`, ...) or a bare MHz value (`"868"`); it snaps to the meter's nearest
+    stored calibration point. Use it to read the noise floor, verify a signal
+    generator, or spot-check a TX something else is keying. Note `attenuator_db`
+    is added to every reading, so it inflates a noise-floor read by the pad value
+    — pass `attenuator_db=0` for the meter's raw floor. For a closed-loop node PA
+    sweep use `pa_sweep`.
 
     Returns:
-        {band, freq_mhz, kind, attenuator_db, samples, min_dbm, mean_dbm, max_dbm}
+        {band, requested_center_mhz, meter_cal_mhz, kind, attenuator_db, samples,
+         min_dbm, mean_dbm, max_dbm}
     """
     return pa_sweep_mod.measure(
         band,
@@ -1621,7 +1595,7 @@ def pa_measure(
     )
 
 
-@power_meter_tool()
+@app.tool()
 def pa_sweep(
     powers: list[int],
     band: str | None = None,
@@ -1649,10 +1623,13 @@ def pa_sweep(
 
     Instrument safety: pick `attenuator_db` so the highest configured power minus
     the pad stays under the meter's +31 dBm absolute max — the sweep refuses to
-    run otherwise. `band` defaults to the node's configured region. On EU868 the
+    run otherwise. `band` defaults to the node's configured region (a Meshtastic
+    region name like `"US"` / `"EU_868"`, or a bare MHz value). On EU_868 the
     duty-cycle limit is overridden for the run and restored after (with
     `override_duty_cycle=True`, the default). The original `tx_power` and
-    duty-cycle override are restored on exit unless `restore_config=False`.
+    duty-cycle override are restored on exit unless `restore_config=False`; each
+    restore is independent, and any that fails (e.g. the port was busy) is
+    reported in `restore_errors` instead of silently leaving state changed.
 
     A step with no TX-active sample (see `silent_steps_dbm`) can be a dead PA —
     but under airtime pressure a queued packet can also transmit after the
@@ -1661,11 +1638,12 @@ def pa_sweep(
     certified measurement.
 
     Returns:
-        {band, region, freq_mhz, attenuator_db, floor_dbm, floor_margin_db,
-         table: [{configured_dbm, measured_avg_dbm, measured_peak_dbm, delta_db,
-         active_samples, total_samples, rf_observed}], curve: {points,
-         saturation_dbm, max_measured_dbm, max_measured_at_configured_dbm,
-         offset_at_min_db, monotonic}, silent_steps_dbm, config_restored, caveat}
+        {band, region, requested_center_mhz, meter_cal_mhz, attenuator_db,
+         floor_dbm, floor_margin_db, table: [{configured_dbm, measured_avg_dbm,
+         measured_peak_dbm, delta_db, active_samples, total_samples, rf_observed}],
+         curve: {points, saturation_dbm, max_measured_dbm,
+         max_measured_at_configured_dbm, offset_at_min_db, monotonic},
+         silent_steps_dbm, config_restored, restore_errors, caveat}
     """
     return pa_sweep_mod.sweep(
         powers,

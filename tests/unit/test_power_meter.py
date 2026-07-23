@@ -5,7 +5,7 @@
 
 The wire protocol (`PowerMeter._cmd`) is exercised against a fake serial port
 that mimics the meter's ``<value>\\r\\n`` + ``OK\\r\\n`` reply grammar (verified
-live against fw 1.0.11 — see `IMMERSIONRC_METER_HANDOFF.md`). The measurement
+live against fw 1.0.11 — see `docs/power-meter.md`). The measurement
 logic (`classify_active`, `summarize_step`, `analyze_curve`) is pure and tested
 on synthetic sample sets, the same way `test_sdr.py` tests the SDR analysis on
 synthetic IQ — this is the regression net for the bench-calibration path.
@@ -31,7 +31,10 @@ class FakeSerial:
         self.closed = False
 
     def reset_input_buffer(self) -> None:
-        pass
+        # Real hardware flushes any unread bytes here; model that so a test's
+        # "_outbox is empty" assertion checks the driver drained cleanly rather
+        # than being masked by a stale queue the flush would have cleared.
+        self._outbox.clear()
 
     def write(self, data: bytes) -> int:
         cmd = data.decode("ascii").strip()
@@ -134,12 +137,24 @@ def test_nearest_freq_index_snaps() -> None:
     assert power_meter.FREQ_INDEX_MHZ[power_meter.nearest_freq_index(5805)] == 5800
 
 
-def test_band_to_freq_mhz() -> None:
-    assert power_meter.band_to_freq_mhz("EU868") == 868
-    assert power_meter.band_to_freq_mhz("US915") == 900
-    assert power_meter.band_to_freq_mhz("868") == 868
-    with pytest.raises(power_meter.PowerMeterError):
-        power_meter.band_to_freq_mhz("NOTABAND")
+def test_resolve_band_mhz_real_region_names() -> None:
+    # The blocking bug the old suite missed: sweep(band=None) feeds through the
+    # protobuf region enum name ("US", "EU_868", ...), not "US915"/"EU868".
+    assert pa_sweep.resolve_band_mhz("US") == pytest.approx(915.0)  # 902-928 centre
+    assert power_meter.nearest_freq_index(pa_sweep.resolve_band_mhz("US")) == 4  # -> 900 MHz curve
+    assert pa_sweep.resolve_band_mhz("EU_868") == pytest.approx((869.4 + 869.65) / 2)
+    assert power_meter.nearest_freq_index(pa_sweep.resolve_band_mhz("EU_868")) == 3  # -> 868
+    assert pa_sweep.resolve_band_mhz("EU_433") == pytest.approx(433.5)
+    assert power_meter.nearest_freq_index(pa_sweep.resolve_band_mhz("EU_433")) == 2  # -> 433
+
+
+def test_resolve_band_mhz_accepts_bare_mhz() -> None:
+    assert pa_sweep.resolve_band_mhz("868") == pytest.approx(868.0)
+
+
+def test_resolve_band_mhz_rejects_garbage() -> None:
+    with pytest.raises(pa_sweep.PaSweepError, match="Unknown band"):
+        pa_sweep.resolve_band_mhz("NOTABAND")
 
 
 def test_list_meters_never_raises(monkeypatch) -> None:
@@ -218,7 +233,7 @@ def test_sample_rejects_nonpositive_count() -> None:
 
 def test_sweep_requires_confirm() -> None:
     with pytest.raises(pa_sweep.PaSweepError, match="confirm=True"):
-        pa_sweep.sweep([20], band="EU868", confirm=False)
+        pa_sweep.sweep([20], band="EU_868", confirm=False)
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +274,11 @@ def _patch_sweep(monkeypatch, *, original_duty: bool) -> list[tuple[str, object]
     monkeypatch.setattr(
         pa_sweep,
         "read_lora_context",
-        lambda port=None: {"region": "EU868", "tx_power": 20, "override_duty_cycle": original_duty},
+        lambda port=None: {
+            "region": "EU_868",
+            "tx_power": 20,
+            "override_duty_cycle": original_duty,
+        },
     )
     monkeypatch.setattr(pa_sweep.power_meter, "PowerMeter", _FakeMeter)
     monkeypatch.setattr(pa_sweep.time, "sleep", lambda *_a: None)
@@ -269,7 +288,7 @@ def _patch_sweep(monkeypatch, *, original_duty: bool) -> list[tuple[str, object]
 def test_sweep_leaves_duty_override_untouched_when_already_on(monkeypatch) -> None:
     calls = _patch_sweep(monkeypatch, original_duty=True)
     pa_sweep.sweep(
-        [17, 20], band="EU868", confirm=True, settle_s=0, floor_samples=3, burst_repeat=1
+        [17, 20], band="EU_868", confirm=True, settle_s=0, floor_samples=3, burst_repeat=1
     )
     duty_writes = [c for c in calls if c[0] == "lora.override_duty_cycle"]
     assert duty_writes == [], "must not write override_duty_cycle when it was already True"
@@ -281,8 +300,39 @@ def test_sweep_leaves_duty_override_untouched_when_already_on(monkeypatch) -> No
 def test_sweep_enables_then_restores_duty_override_when_originally_off(monkeypatch) -> None:
     calls = _patch_sweep(monkeypatch, original_duty=False)
     pa_sweep.sweep(
-        [17, 20], band="EU868", confirm=True, settle_s=0, floor_samples=3, burst_repeat=1
+        [17, 20], band="EU_868", confirm=True, settle_s=0, floor_samples=3, burst_repeat=1
     )
     duty_writes = [v for p, v in calls if p == "lora.override_duty_cycle"]
     assert duty_writes[0] is True, "should enable the override for the bench run"
     assert duty_writes[-1] is False, "should restore to the original (off) value, not force True"
+
+
+def test_sweep_restores_independently_and_reports_errors(monkeypatch) -> None:
+    # If the tx_power restore fails (port busy), the duty-cycle restore must STILL
+    # run — leaving override_duty_cycle stuck on is the regulatory hazard — and the
+    # failure must surface in restore_errors rather than being swallowed.
+    calls: list[tuple[str, object]] = []
+
+    def flaky_set_config(path, value, port=None):
+        calls.append((path, value))
+        if path == "lora.tx_power" and value == 99:  # the restore of the original
+            raise RuntimeError("port COM7 is busy - retry shortly")
+
+    monkeypatch.setattr(pa_sweep.admin, "set_config", flaky_set_config)
+    monkeypatch.setattr(pa_sweep.admin, "send_text", lambda **_k: {"ok": True, "packet_id": 1})
+    monkeypatch.setattr(
+        pa_sweep,
+        "read_lora_context",
+        lambda port=None: {"region": "EU_868", "tx_power": 99, "override_duty_cycle": False},
+    )
+    monkeypatch.setattr(pa_sweep.power_meter, "PowerMeter", _FakeMeter)
+    monkeypatch.setattr(pa_sweep.time, "sleep", lambda *_a: None)
+
+    res = pa_sweep.sweep(
+        [20], band="EU_868", confirm=True, settle_s=0, floor_samples=3, burst_repeat=1
+    )
+
+    assert res["restore_errors"], "a failed restore must be surfaced"
+    assert any("lora.tx_power" in e for e in res["restore_errors"])
+    # The duty-cycle restore ran despite the tx_power restore failing.
+    assert ("lora.override_duty_cycle", False) in calls

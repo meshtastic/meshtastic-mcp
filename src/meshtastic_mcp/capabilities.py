@@ -96,11 +96,14 @@ def has_llama_server() -> bool:
 def has_power_meter() -> bool:
     """True when an ImmersionRC RF Power Meter v2 is attached (VID 0x04D8/PID 0x000A).
 
-    Gates the PA-calibration bench tools (`pa_meter_status`, `pa_measure`,
-    `pa_sweep`): absolute TX-power measurement off a node's PA. Needs no extra
-    (the driver is pure `pyserial`, already a core dep) — only the meter plugged
-    in and powered on. It auto-powers-off on a battery timeout and vanishes from
-    USB, so a meter that was off at server startup won't light up the capability.
+    Informational only — reported by `doctor` and the startup summary. Unlike the
+    other capabilities this does NOT gate tool registration: the PA-calibration
+    bench tools (`pa_meter_status`, `pa_measure`, `pa_sweep`) are always
+    registered, because the meter auto-powers-off on a battery timeout and drops
+    off USB, so a startup-time probe would hide exactly the tool
+    (`pa_meter_status`) you reach for to check whether it's asleep. The tools
+    return a clear "no meter" result/error instead. Needs no extra — the driver
+    is pure `pyserial`, already a core dep.
     """
     from . import power_meter
 

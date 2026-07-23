@@ -9,8 +9,13 @@ This is a lab power meter, not an SDR: it reports a single scalar power reading
 frequency band. That makes it the right tool for the one thing the RTL-SDR
 oracle (`sdr.py`) deliberately can't do — read *absolute* transmit power off a
 Meshtastic node's PA and watch how it tracks the configured `lora.tx_power`
-across a sweep. See `IMMERSIONRC_METER_HANDOFF.md` for the hardware notes this
-driver is built from (verified live against firmware 1.0.11).
+across a sweep. See `docs/power-meter.md` for the full hardware reference
+(device identity, wire protocol, calibration table, quirks) this driver
+implements; it was verified live against firmware 1.0.11.
+
+This module deliberately knows nothing about Meshtastic regions — it speaks
+frequencies in MHz only. Region-to-frequency resolution lives in `pa_sweep.py`,
+where `lora_compliance.REGIONS` is the single source of truth for band edges.
 
 The wire protocol is line-based ASCII over USB CDC; every reply is either
 ``<value>\\r\\n`` followed by ``OK\\r\\n``, or a bare ``OK\\r\\n`` (for the persist
@@ -49,15 +54,6 @@ FREQ_INDEX_MHZ: tuple[int, ...] = (
     35, 72, 433, 868, 900, 1200, 2400,
     5600, 5650, 5700, 5750, 5800, 5850, 5900, 5950, 6000,
 )  # fmt: skip
-
-# Meshtastic band -> the nearest usable calibration point on this meter.
-# EU868 lands exactly on F3; US915 uses F4 (900 MHz), the closest stored curve.
-_MESHTASTIC_BAND_MHZ: dict[str, int] = {
-    "EU868": 868,
-    "US915": 900,
-    "ANZ": 900,
-    "LORA_24": 2400,
-}
 
 # Reference tools send ``F<idx>`` twice with ~200 ms spacing "for reliability";
 # the second write reliably takes even when the first is dropped mid-enumeration.
@@ -102,23 +98,6 @@ def nearest_freq_index(mhz: float) -> int:
     active — so any target frequency snaps to the nearest available point.
     """
     return min(range(len(FREQ_INDEX_MHZ)), key=lambda i: abs(FREQ_INDEX_MHZ[i] - mhz))
-
-
-def band_to_freq_mhz(band: str) -> int:
-    """Resolve a band name (``"EU868"``/``"US915"``/...) or a numeric string to MHz.
-
-    Accepts a Meshtastic region label or a bare MHz value (``"868"``) so callers
-    can pass either a region or an explicit frequency.
-    """
-    key = band.strip().upper()
-    if key in _MESHTASTIC_BAND_MHZ:
-        return _MESHTASTIC_BAND_MHZ[key]
-    try:
-        return int(float(band))
-    except ValueError as exc:
-        raise PowerMeterError(
-            f"Unknown band {band!r}. Use a MHz value or one of: {', '.join(_MESHTASTIC_BAND_MHZ)}."
-        ) from exc
 
 
 @dataclass(frozen=True)
