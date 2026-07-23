@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -35,6 +36,13 @@ log = logging.getLogger("meshtastic_mcp.connection")
 DEFAULT_TCP_PORT = 4403
 TCP_SCHEME = "tcp://"
 TCP_HOST_ENV = "MESHTASTIC_MCP_TCP_HOST"
+
+# Upper bound on `connect(linger_s=...)`. The linger holds the exclusive port
+# lock, so an unbounded caller value would pin the device and fail-fast every
+# other operation for as long as it lasts. Even the most generous real need
+# (broadcast politeness delay + airtime, or a flash-write commit) is a handful
+# of seconds; 60s is comfortably above that and caps the damage from a bad arg.
+_MAX_LINGER_S = 60.0
 
 # Upper bound on a graceful close. `iface.close()` sends a disconnect, and if the
 # device just rebooted (factory_reset / reboot / shutdown) the meshtastic library
@@ -163,7 +171,7 @@ def resolve_port(port: str | None) -> str:
 
 
 @contextmanager
-def connect(port: str | None = None, timeout_s: float = 8.0) -> Iterator:
+def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0.0) -> Iterator:
     """Open a meshtastic interface (serial or TCP) and always close it.
 
     For serial: raises `ConnectionError` immediately if another serial
@@ -177,9 +185,21 @@ def connect(port: str | None = None, timeout_s: float = 8.0) -> Iterator:
     as the reply-wait deadline for `localNode.waitForConfig()` during
     construction and for any subsequent admin RPC. `int()`-converted at
     the boundary because the upstream API expects whole seconds.
+
+    `linger_s` delays close after a successful yield. Meshtastic firmware queues
+    TX behind a channel-politeness delay (~4s for broadcasts); on immediate close
+    the DTR reset kills the queued RF transmission before it reaches airtime, and
+    can interrupt an admin flash write mid-commit. Set `linger_s` to let those
+    finish. On exception, linger is skipped and close is immediate.
+
+    Note the port lock is held for the whole linger, so a non-zero `linger_s`
+    widens the window in which a concurrent caller gets the fail-fast busy error.
+    Keep it at 0 for read-only ops. Clamped to `_MAX_LINGER_S` so a stray large
+    value can't pin the port indefinitely.
     """
     resolved = resolve_port(port)
     timeout = int(timeout_s)
+    linger_s = max(0.0, min(linger_s, _MAX_LINGER_S))
 
     if is_tcp_port(resolved):
         from meshtastic.tcp_interface import (
@@ -195,6 +215,7 @@ def connect(port: str | None = None, timeout_s: float = 8.0) -> Iterator:
             )
 
         iface = None
+        ok = False
         try:
             iface = TCPInterface(
                 hostname=host,
@@ -204,7 +225,12 @@ def connect(port: str | None = None, timeout_s: float = 8.0) -> Iterator:
                 timeout=timeout,
             )
             yield iface
+            ok = True
         finally:
+            # Linger only on success — a failed body has nothing queued worth
+            # waiting for, and delaying the close would just widen the busy window.
+            if ok and linger_s > 0:
+                time.sleep(linger_s)
             if iface is not None:
                 _close_bounded(iface)
             try:
@@ -230,6 +256,7 @@ def connect(port: str | None = None, timeout_s: float = 8.0) -> Iterator:
         )
 
     iface = None
+    ok = False
     try:
         iface = SerialInterface(
             devPath=resolved,
@@ -238,7 +265,12 @@ def connect(port: str | None = None, timeout_s: float = 8.0) -> Iterator:
             timeout=timeout,
         )
         yield iface
+        ok = True
     finally:
+        # Linger only on success — a failed body has nothing queued worth
+        # waiting for, and delaying the close would just widen the busy window.
+        if ok and linger_s > 0:
+            time.sleep(linger_s)
         if iface is not None:
             _close_bounded(iface)
         try:
