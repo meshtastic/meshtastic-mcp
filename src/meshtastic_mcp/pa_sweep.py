@@ -31,6 +31,7 @@ measurement (see `power_meter.py`).
 from __future__ import annotations
 
 import itertools
+import math
 import statistics
 import threading
 import time
@@ -48,6 +49,84 @@ class PaSweepError(RuntimeError):
 # A ~200 B text broadcast is near the Meshtastic payload ceiling and gives the
 # longest single-packet airtime; repeating it sustains the meter's view of the PA.
 _BURST_TEXT = "PA-SWEEP " + "x" * 190
+
+# Bytes the firmware adds around the text before it goes on air: the MeshPacket
+# header (~16 B) plus the Data submessage / encryption framing. Slightly generous
+# on purpose — over-estimating airtime lengthens the linger, which is the safe
+# direction (a short linger clips the TX; a long one only costs time).
+_MESH_PACKET_OVERHEAD_BYTES = 32
+
+# Firmware's channel-politeness delay before it keys a broadcast (send_text.py
+# documents ~4 s), plus a margin. The linger must cover this delay *plus* the
+# packet's airtime, since send_text returns as soon as the packet is queued.
+_TX_POLITENESS_S = 4.0
+_TX_LINGER_MARGIN_S = 1.0
+# Used only if the live preset can't be predicted (unknown region / malformed
+# ctx) — sizing the linger must never crash a sweep.
+_FALLBACK_TX_LINGER_S = 8.0
+
+
+def lora_time_on_air_s(
+    payload_bytes: int,
+    sf: int,
+    bw_khz: float,
+    cr: int,
+    *,
+    preamble_symbols: int = 16,
+    explicit_header: bool = True,
+    crc: bool = True,
+) -> float:
+    """LoRa time-on-air (seconds) via the Semtech AN1200.13 formula.
+
+    `cr` is the Meshtastic coding-rate denominator (5..8 for 4/5..4/8).
+    `preamble_symbols` defaults to 16 (Meshtastic's setting). Low-data-rate
+    optimization is applied automatically when the symbol time exceeds 16 ms
+    (SF11/125 kHz and SF12), matching firmware. Used to size the sweep's TX
+    linger so a burst isn't cut off before it finishes transmitting.
+    """
+    bw_hz = bw_khz * 1000.0
+    t_sym = (2**sf) / bw_hz
+    low_data_rate_opt = 1 if t_sym > 16e-3 else 0
+    header = 0 if explicit_header else 1
+    crc_on = 1 if crc else 0
+    cr_val = cr - 4  # 5..8 (4/5..4/8) -> 1..4
+    numerator = 8 * payload_bytes - 4 * sf + 28 + 16 * crc_on - 20 * header
+    denominator = 4 * (sf - 2 * low_data_rate_opt)
+    payload_symbols = 8 + max(math.ceil(numerator / denominator) * (cr_val + 4), 0)
+    t_preamble = (preamble_symbols + 4.25) * t_sym
+    t_payload = payload_symbols * t_sym
+    return t_preamble + t_payload
+
+
+def _derive_tx_linger_s(ctx: dict[str, Any]) -> float:
+    """Size the per-burst TX linger from the node's live LoRa preset.
+
+    Predicts SF/BW/CR from `ctx` (same path as `rf_oracle`), computes the burst's
+    time-on-air, and returns politeness delay + airtime + margin — so a fast
+    preset gets a short linger and a slow one (LONG_SLOW: multi-second airtime)
+    gets a long enough linger not to clip. Falls back to a safe constant if the
+    preset can't be predicted; linger sizing must never crash a sweep.
+    """
+    try:
+        pred = lora_compliance.predict_lora_params(
+            ctx["region"],
+            ctx.get("modem_preset", "LONG_FAST"),
+            channel_name=ctx.get("channel_name", ""),
+            channel_num=ctx.get("channel_num", 0),
+            use_preset=ctx.get("use_preset", True),
+            bandwidth_khz=ctx.get("bandwidth"),
+            spread_factor=ctx.get("spread_factor"),
+            coding_rate=ctx.get("coding_rate"),
+            override_frequency_mhz=ctx.get("override_frequency", 0.0),
+            frequency_offset_mhz=ctx.get("frequency_offset", 0.0),
+            device_role=ctx.get("device_role", "CLIENT"),
+        )
+        toa = lora_time_on_air_s(
+            len(_BURST_TEXT) + _MESH_PACKET_OVERHEAD_BYTES, pred.sf, pred.bw_khz, pred.cr
+        )
+        return _TX_POLITENESS_S + toa + _TX_LINGER_MARGIN_S
+    except Exception:
+        return _FALLBACK_TX_LINGER_S
 
 
 def resolve_band_mhz(band: str) -> float:
@@ -372,7 +451,7 @@ def sweep(
     attenuator_db: float = 0.0,
     burst_repeat: int = 3,
     burst_gap_s: float = 0.3,
-    tx_linger_s: float = 6.0,
+    tx_linger_s: float | None = None,
     settle_s: float = 1.5,
     floor_samples: int = 20,
     floor_margin_db: float = 5.0,
@@ -397,12 +476,13 @@ def sweep(
 
     Each step keys `burst_repeat` broadcasts, holding the node's port open
     `tx_linger_s` per send so the firmware's ~4 s broadcast politeness delay plus
-    the packet's airtime finish before close (without it, queued TX is lost). The
-    default (6 s) covers a fast-preset ~200 B packet; raise it for slow presets
-    (LONG_SLOW and friends have multi-second airtime that a 6 s linger would clip)
-    and lower it only if you know the airtime is short. This is paid once per
-    burst per step, so it dominates sweep wall-clock — the meter sampler runs
-    throughout, so it does not need the conservative interactive send default.
+    the packet's airtime finish before close (without it, queued TX is lost).
+    `tx_linger_s=None` (default) **auto-derives** it from the live preset's
+    time-on-air (`_derive_tx_linger_s`): politeness + airtime + margin, so a fast
+    preset gets a short linger and LONG_SLOW (multi-second airtime) gets a long
+    enough one — no clipping, no manual tuning. Pass a number to override. This is
+    paid once per burst per step and dominates sweep wall-clock; the value used is
+    reported as `tx_linger_s` in the result.
 
     Safety: refuses any step whose *expected* meter input (configured power minus
     attenuator) would exceed the meter's absolute max — protect the instrument
@@ -423,6 +503,7 @@ def sweep(
     if band is None:
         band = region
     center_mhz = resolve_band_mhz(band)
+    linger_s = tx_linger_s if tx_linger_s is not None else _derive_tx_linger_s(ctx)
 
     # Protect the meter: the pad must knock the highest configured step below the
     # meter's absolute max. (Approximate — ignores PA gain error, which is what
@@ -469,7 +550,7 @@ def sweep(
 
                 sampler = _BackgroundSampler(m, interval_s=sample_interval_s)
                 sampler.start()
-                _key_burst(_BURST_TEXT, channel_index, port, burst_repeat, burst_gap_s, tx_linger_s)
+                _key_burst(_BURST_TEXT, channel_index, port, burst_repeat, burst_gap_s, linger_s)
                 # Let the queued bursts drain onto the air before we stop watching.
                 time.sleep(settle_s)
                 raw = sampler.stop()
@@ -503,6 +584,7 @@ def sweep(
         "requested_center_mhz": round(center_mhz, 3),
         "meter_cal_mhz": cal_mhz,
         "attenuator_db": attenuator_db,
+        "tx_linger_s": round(linger_s, 2),
         "floor_dbm": round(floor_dbm, 2),
         "floor_margin_db": floor_margin_db,
         "table": table,

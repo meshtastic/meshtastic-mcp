@@ -329,6 +329,43 @@ def test_sweep_enables_then_restores_duty_override_when_originally_off(monkeypat
     assert duty_writes[-1] is False, "should restore to the original (off) value, not force True"
 
 
+def test_lora_time_on_air_matches_known_values() -> None:
+    # Semtech AN1200.13, Meshtastic 16-symbol preamble.
+    # LONG_FAST (SF11/250 kHz, 4/5), 20 B payload ~= 0.395 s.
+    fast = pa_sweep.lora_time_on_air_s(20, sf=11, bw_khz=250, cr=5)
+    assert fast == pytest.approx(0.395, abs=0.01)
+    # LONG_SLOW (SF12/125 kHz, 4/8) is far longer for the same payload.
+    slow = pa_sweep.lora_time_on_air_s(20, sf=12, bw_khz=125, cr=8)
+    assert slow == pytest.approx(1.974, abs=0.02)
+    assert slow > 4 * fast
+
+
+def test_derive_tx_linger_scales_with_preset() -> None:
+    base = {
+        "use_preset": True,
+        "channel_name": "",
+        "channel_num": 0,
+        "bandwidth": None,
+        "spread_factor": None,
+        "coding_rate": None,
+        "override_frequency": 0.0,
+        "frequency_offset": 0.0,
+        "device_role": "CLIENT",
+    }
+    fast = pa_sweep._derive_tx_linger_s({**base, "region": "US", "modem_preset": "LONG_FAST"})
+    slow = pa_sweep._derive_tx_linger_s({**base, "region": "US", "modem_preset": "LONG_SLOW"})
+    # politeness (~4 s) + airtime + margin: a fast preset is single-digit seconds,
+    # LONG_SLOW is much longer (its ~200 B airtime alone is ~12 s).
+    assert 5.0 < fast < 10.0
+    assert slow > fast
+    assert slow > 12.0
+
+
+def test_derive_tx_linger_falls_back_on_bad_ctx() -> None:
+    # Sizing the linger must never crash a sweep, even on an unpredictable ctx.
+    assert pa_sweep._derive_tx_linger_s({}) == pa_sweep._FALLBACK_TX_LINGER_S
+
+
 def test_sweep_passes_tuned_tx_linger_to_send_text(monkeypatch) -> None:
     # Bursts must key with the sweep's tuned tx_linger_s, not send_text's 8 s
     # interactive default (which would be paid per burst per step).

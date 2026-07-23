@@ -111,11 +111,12 @@ about regions; it speaks MHz only.
 - **TX linger tuning:** each broadcast holds the node's port open `tx_linger_s`
   after the send so the firmware's ~4 s broadcast politeness delay and the
   packet's airtime complete before the close-triggered DTR reset drops the queued
-  TX. `pa_sweep` sets this explicitly (default 6 s) rather than inheriting
-  `send_text`'s conservative 8 s interactive default — it is paid per burst per
-  step, so it dominates sweep wall-clock. Raise it for slow presets (LONG_SLOW
-  and friends have multi-second airtime a 6 s linger would clip); lower it only
-  when you know the airtime is short.
+  TX. It is paid per burst per step, so it dominates sweep wall-clock. `pa_sweep`
+  leaves `tx_linger_s=None` by default and **auto-derives** it from the node's
+  live preset time-on-air (Semtech AN1200.13, `lora_time_on_air_s`): politeness +
+  airtime + margin. A fast preset (LONG_FAST ~200 B ≈ 2 s airtime) gets ~7 s;
+  LONG_SLOW (~12 s airtime) gets ~18 s — no clipping and no manual tuning. Pass a
+  number to override; the value used is echoed as `tx_linger_s` in the result.
 
 Every reading is an uncalibrated bench regression check (±0.5 dB instrument plus a
 hand-entered attenuator value), not a substitute for certified EMC-lab compliance

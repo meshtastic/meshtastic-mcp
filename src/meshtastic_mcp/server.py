@@ -1604,7 +1604,7 @@ def pa_sweep(
     channel_index: int = 0,
     attenuator_db: float = 0.0,
     burst_repeat: int = 3,
-    tx_linger_s: float = 6.0,
+    tx_linger_s: float | None = None,
     settle_s: float = 1.5,
     reboot_between_steps: bool = False,
     override_duty_cycle: bool = True,
@@ -1622,12 +1622,13 @@ def pa_sweep(
     firmware that doesn't apply LoRa config live). It captures the meter's noise
     floor first, then keeps only TX-active samples (floor + margin) per step.
 
-    `tx_linger_s` (default 6 s) is how long each broadcast holds the port open so
-    the firmware's ~4 s politeness delay + airtime finish before close drops the
-    TX; it is paid per burst per step and dominates wall-clock, so it is tuned
-    below `send_text`'s conservative 8 s default. Raise it for slow presets
-    (multi-second airtime would be clipped at 6 s); lower it only for short
-    airtime.
+    `tx_linger_s` is how long each broadcast holds the port open so the firmware's
+    ~4 s politeness delay + airtime finish before close drops the TX; it is paid
+    per burst per step and dominates wall-clock. Leave it `None` (default) to
+    **auto-derive** it from the node's live preset time-on-air — a fast preset
+    gets a short linger, LONG_SLOW gets a long enough one, no clipping and no
+    tuning. Pass a number to override. The value used is echoed as `tx_linger_s`
+    in the result.
 
     Instrument safety: pick `attenuator_db` so the highest configured power minus
     the pad stays under the meter's +31 dBm absolute max — the sweep refuses to
@@ -1647,7 +1648,7 @@ def pa_sweep(
 
     Returns:
         {band, region, requested_center_mhz, meter_cal_mhz, attenuator_db,
-         floor_dbm, floor_margin_db, table: [{configured_dbm, measured_avg_dbm,
+         tx_linger_s, floor_dbm, floor_margin_db, table: [{configured_dbm, measured_avg_dbm,
          measured_peak_dbm, delta_db, active_samples, total_samples, rf_observed}],
          curve: {points, saturation_dbm, max_measured_dbm,
          max_measured_at_configured_dbm, offset_at_min_db, monotonic},
