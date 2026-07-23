@@ -1304,10 +1304,17 @@ def _confirm_tx(
       * `None`  — no evidence channel available, so we genuinely cannot tell.
 
     The `None` case matters. A node cannot observe its own transmission through
-    the receive path: the recorder's packet stream is fed by the
-    `meshtastic.receive` pubsub topic, which only carries packets the node
-    *received*. Reporting that absence as `False` claimed failure for messages
-    that were verifiably delivered.
+    the receive path. The firmware *does* echo the packet back, but it omits the
+    now-redundant `from` field on that echo, and
+    `MeshInterface._handlePacketFromRadio` treats a missing `from` as "Device
+    returned a packet we sent, ignoring" and returns before publishing any pubsub
+    event (`mesh_interface.py`). So it never reaches `meshtastic.receive`, and so
+    never reaches the recorder's packet stream. Reporting that absence as `False`
+    claimed failure for messages that were verifiably delivered.
+
+    `rf_oracle.confirm_tx` documents the same constraint from the RF side, and
+    its `firmware_self_reported_tx` field carries the identical caveat — it is a
+    known, documented limitation there, not a bug.
 
     Two things do constitute evidence:
 

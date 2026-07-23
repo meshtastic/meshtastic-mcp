@@ -198,9 +198,13 @@ send_text(port=<port>, text="…", wait_for_tx=True)  # tx_confirmed + tx_latenc
 ```
 **A node cannot see its own transmission on the receive path.** `packets_window`
 (and the recorder's packet stream generally) is fed by the `meshtastic.receive`
-pubsub topic, which only carries packets the node *received* — a message you
-just sent will never appear there. Do not "confirm" a local send with
-`packets_window`; it returns empty even when the message was delivered.
+pubsub topic, which a self-originated packet never reaches: the firmware echoes
+it back but omits the now-redundant `from` field, and
+`MeshInterface._handlePacketFromRadio` treats that as *"Device returned a packet
+we sent, ignoring"* and returns before publishing. Do not "confirm" a local send
+with `packets_window`; it returns empty even when the message was delivered.
+`rf_oracle.confirm_tx` documents the same constraint for its
+`firmware_self_reported_tx` field.
 
 `wait_for_tx=True` instead looks for the firmware's `Started Tx (id=…)` log line
 (and for a neighbour rebroadcasting the packet). That log only reaches the
@@ -318,7 +322,7 @@ These will produce flaky, slow, or incorrect results:
 
 - **Polling `device_info()` or `list_nodes()` in a tight loop.** Both open/hold/close the serial port. The exclusive lock is non-blocking — a concurrent caller does not queue; it fails fast with a `... is busy — ... Retry shortly.` error you must catch and retry. Use `recorder_status()` + `events_window()` for ongoing observation instead.
 - **Asserting immediately after `send_text`.** Mesh delivery is best-effort and async. Use `wait_for_tx=True` (bounded by `tx_timeout_s`), not a bare sleep.
-- **Confirming a local send with `packets_window`.** That stream only carries packets the node *received*; your own transmission never appears there, so it reads as failure on a working mesh. Use `wait_for_tx=True` with `set_debug_log_api(True)`, and treat `tx_confirmed: null` as "not observable", not "failed". See *Send a message and confirm delivery*.
+- **Confirming a local send with `packets_window`.** A self-originated packet never reaches that stream — the library drops the firmware's echo as "a packet we sent" — so it reads as failure on a working mesh. Use `wait_for_tx=True` with `set_debug_log_api(True)`, and treat `tx_confirmed: null` as "not observable", not "failed". See *Send a message and confirm delivery*.
 - **Calling a firmware tool without checking `doctor()` first.** If `MESHTASTIC_FIRMWARE_ROOT` is unset, firmware tools are not registered at all. Call `doctor()` on first failure; parse `fix_commands` and surface them to the user.
 - **Omitting `confirm=True` on destructive tools then retrying.** The confirm gate is intentional — don't loop-retry without it. Surface the confirmation requirement to the user.
 - **Assuming the recorder has data immediately.** It starts capturing when a serial session opens. If you just opened the port, query with `start="-5s"` and check `line_count > 0` before asserting content.

@@ -5,11 +5,17 @@
 
 The original implementation polled the recorder's *packet* stream for the
 packet it had just sent. That stream is fed by the `meshtastic.receive` pubsub
-topic (see `recorder/recorder.py`), which carries packets the node **received**
-— a node's own transmission is never published there. So the check could never
-succeed for locally-originated traffic and reported `tx_confirmed: false` even
-when the message was verifiably delivered (reproduced on a T-Beam S3: the peer
-decoded the broadcast while the sender reported failure).
+topic (see `recorder/recorder.py`), which a self-originated packet never
+reaches: the firmware echoes the packet back but omits the now-redundant `from`
+field, and `MeshInterface._handlePacketFromRadio` treats a missing `from` as
+"Device returned a packet we sent, ignoring" and returns before publishing.
+
+So the check could never succeed for locally-originated traffic and reported
+`tx_confirmed: false` even when the message was verifiably delivered (reproduced
+on a T-Beam S3: the peer decoded the broadcast while the sender reported
+failure; separately an RTL-SDR observed the 0.32 s burst on air while the
+firmware-side check still said false). `rf_oracle.confirm_tx` documents the same
+constraint for its `firmware_self_reported_tx` field.
 
 The firmware does log the transmission, with the packet id in lowercase hex:
 
