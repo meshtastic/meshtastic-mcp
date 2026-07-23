@@ -2657,8 +2657,7 @@ _READ_ONLY = {
     "triage_window",  # reads device window (+optional screenshot); no mutation
     "local_model_status",  # reports backend/reachability; no mutation
     "rf_scan",  # passive SDR capture; no device/host mutation
-    "pa_meter_status",  # reads the power meter; no device/host mutation
-    "pa_measure",  # passive meter read; no Meshtastic-device mutation
+    "pa_meter_status",  # reads the power meter (version/stored freq/live dBm); no state change
     "sdk_status",  # reports SDK-CLI bridge availability; no mutation
     "sdk_device_info",  # reads device snapshot via the Kotlin SDK CLI; no mutation
     "sdk_list_nodes",  # reads the device node DB via the Kotlin SDK CLI; no mutation
@@ -2680,6 +2679,10 @@ _DESTRUCTIVE = {
     "send_text",  # injects a mesh packet; cannot be recalled
     "inject_frame",  # injects a forged frame into the RX pipeline; cannot be recalled
     "rf_confirm_tx",  # calls send_text internally; injects a mesh packet
+    # Selects the meter's active calibration curve (set_freq_mhz) — a transient,
+    # non-persisted instrument state change, so not read-only. Idempotent (same
+    # band -> same curve) and harmless to any DUT; the set_config-style pattern.
+    "pa_measure",
     "pa_sweep",  # writes lora.tx_power, keys TX, may reboot the node
     "send_input_event",  # drives device button/GPIO; side-effect on hardware
     "reboot",
@@ -2726,6 +2729,7 @@ _IDEMPOTENT_WRITES = {
     "set_owner",
     "set_channel_url",
     "userprefs_set",
+    "pa_measure",  # re-selecting the same band leaves the meter in the same state
 }
 # Open-world: interacts with an external device, radio mesh, or host hardware.
 # Also includes tools whose OUTPUT may contain untrusted content sourced from

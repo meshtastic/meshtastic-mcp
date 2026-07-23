@@ -118,7 +118,7 @@ measurement.
 | Tool | Kind | Purpose |
 |------|------|---------|
 | `pa_meter_status` | read-only | Detect the meter; report version, stored frequency, and a live avg/peak reading. Returns `{"present": false, ...}` when none is attached. |
-| `pa_measure`      | read-only | Passive read at a band (region name or MHz): min/mean/max dBm over N samples. No Meshtastic device driven. |
+| `pa_measure`      | write (meter only) | Reads min/mean/max dBm over N samples; **selects the band's active calibration curve** on the meter (transient, not persisted), so it is not read-only. Harmless to any device under test — no Meshtastic device driven. |
 | `pa_sweep`        | destructive (`confirm=True`) | Closed-loop: step `lora.tx_power`, key TX, measure the PA output at each step; returns a configured-vs-measured table plus a compression/saturation analysis. |
 
 The tools are always registered (they cost nothing without a meter) and return a

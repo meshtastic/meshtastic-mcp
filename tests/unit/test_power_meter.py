@@ -59,6 +59,7 @@ def _meter_with(replies: dict[str, list[str]]) -> power_meter.PowerMeter:
     m._baud = 9600  # type: ignore[attr-defined]
     m._timeout = 0.5  # type: ignore[attr-defined]
     m._ser = FakeSerial(replies)  # type: ignore[attr-defined]
+    m._lock = None  # type: ignore[attr-defined]  # built via __new__, never took the port lock
     return m
 
 
@@ -155,6 +156,25 @@ def test_resolve_band_mhz_accepts_bare_mhz() -> None:
 def test_resolve_band_mhz_rejects_garbage() -> None:
     with pytest.raises(pa_sweep.PaSweepError, match="Unknown band"):
         pa_sweep.resolve_band_mhz("NOTABAND")
+
+
+def test_open_is_exclusive_per_port(monkeypatch) -> None:
+    # A second open on the same meter port fails fast with a busy error (the
+    # "one call per serial port" rule), and the port frees again after close.
+    from meshtastic_mcp import registry
+
+    monkeypatch.setattr(power_meter.serial, "Serial", lambda *_a, **_k: FakeSerial({}))
+    registry.clear_port_lock("COM-LOCK-TEST")
+
+    m1 = power_meter.PowerMeter("COM-LOCK-TEST").open()
+    try:
+        with pytest.raises(power_meter.PowerMeterError, match="busy"):
+            power_meter.PowerMeter("COM-LOCK-TEST").open()
+    finally:
+        m1.close()
+
+    m2 = power_meter.PowerMeter("COM-LOCK-TEST").open()  # freed after close -> succeeds
+    m2.close()
 
 
 def test_list_meters_never_raises(monkeypatch) -> None:
@@ -274,9 +294,11 @@ def _patch_sweep(monkeypatch, *, original_duty: bool) -> list[tuple[str, object]
     monkeypatch.setattr(
         pa_sweep,
         "read_lora_context",
+        # tx_power distinct from every swept step (17, 20) so the restore
+        # assertion verifies cleanup ran, not just the last step's write.
         lambda port=None: {
             "region": "EU_868",
-            "tx_power": 20,
+            "tx_power": 13,
             "override_duty_cycle": original_duty,
         },
     )
@@ -292,9 +314,9 @@ def test_sweep_leaves_duty_override_untouched_when_already_on(monkeypatch) -> No
     )
     duty_writes = [c for c in calls if c[0] == "lora.override_duty_cycle"]
     assert duty_writes == [], "must not write override_duty_cycle when it was already True"
-    # tx_power still restored to the original.
+    # tx_power restored to the original (13), distinct from the last step (20).
     tx_writes = [v for p, v in calls if p == "lora.tx_power"]
-    assert tx_writes[-1] == 20
+    assert tx_writes[-1] == 13
 
 
 def test_sweep_enables_then_restores_duty_override_when_originally_off(monkeypatch) -> None:

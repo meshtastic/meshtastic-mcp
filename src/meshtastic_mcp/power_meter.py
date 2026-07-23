@@ -33,11 +33,14 @@ certified measurement.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 
 import serial
 from serial.tools import list_ports
+
+from . import registry
 
 # USB CDC identifiers for the ImmersionRC RF Power Meter v2 (Microchip CDC stack).
 # This firmware (1.0.11) reports no manufacturer string, so match on VID/PID only;
@@ -134,14 +137,32 @@ class PowerMeter:
         self._baud = baud
         self._timeout = timeout
         self._ser: serial.Serial | None = None
+        self._lock: threading.Lock | None = None
 
     # -- lifecycle ----------------------------------------------------------
     def open(self) -> PowerMeter:
+        """Acquire the meter's exclusive port lock and open the serial connection.
+
+        Uses the same non-blocking `registry.port_lock` as the Meshtastic serial
+        path (the "one call per serial port" rule), so a concurrent bench call on
+        the same meter fails fast with a busy error instead of two callers
+        stepping on one instrument. The lock is held for the whole open/act/close
+        lifecycle (i.e. the enclosing `with` block) and released in `close`, and
+        the underlying port is opened `exclusive=True`.
+        """
         if self._ser is not None:
             return self
+        lock = registry.port_lock(self.port)
+        if not lock.acquire(blocking=False):
+            raise PowerMeterError(
+                f"Power meter port {self._port} is busy — another operation is in flight. "
+                "Retry shortly."
+            )
+        self._lock = lock
         try:
-            self._ser = serial.Serial(self._port, self._baud, timeout=self._timeout)
-        except serial.SerialException as exc:
+            self._ser = serial.Serial(self._port, self._baud, timeout=self._timeout, exclusive=True)
+        except (serial.SerialException, ValueError) as exc:
+            self._release_lock()
             raise PowerMeterError(f"Could not open power meter at {self._port}: {exc}") from exc
         return self
 
@@ -151,6 +172,15 @@ class PowerMeter:
                 self._ser.close()
             finally:
                 self._ser = None
+        self._release_lock()
+
+    def _release_lock(self) -> None:
+        if self._lock is not None:
+            try:
+                self._lock.release()
+            except RuntimeError:
+                pass
+            self._lock = None
 
     def __enter__(self) -> PowerMeter:
         return self.open()
