@@ -32,7 +32,7 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import uhubctl
+from meshtastic_mcp import admin, uhubctl
 from meshtastic_mcp.connection import connect
 from tests import _power
 from tests._port_discovery import resolve_port_by_role
@@ -200,9 +200,19 @@ def test_peer_offline_then_recovers(
     new_rx_port = _reconnect_after_power_on(rx_role, rx_slot)
     hub_devices[rx_role] = new_rx_port
 
-    # Step 6 + 7: bilateral re-warmup + directed send that should now work.
-    with ReceiveCollector(new_rx_port, topic="meshtastic.receive.text") as rx:
-        # RX rebooted → its PKI cache is gone. Re-warm.
+    # Best-effort: turn on the RX firmware log API so a post-recovery failure
+    # below is diagnosable (see the assertion). Off by default in the profile.
+    try:
+        admin.set_debug_log_api(port=new_rx_port, enabled=True)
+    except Exception:
+        pass
+
+    # Step 6 + 7: bilateral re-nudge + directed send that should now work.
+    with ReceiveCollector(new_rx_port, topic="meshtastic.receive.text", capture_logs=True) as rx:
+        # Peer pubkeys PERSIST to flash (NodeDB), so they survive the RX reboot —
+        # the re-nudge is cheap insurance for a stale in-RAM cache, not a
+        # correctness requirement. If delivery still fails here the likely cause
+        # is RF/radio re-init after the VBUS cut, not PKI (see the assertion).
         rx.broadcast_nodeinfo_ping()
         with connect(port=tx_port) as tx_iface:
             nudge_nodeinfo(tx_iface)
@@ -226,7 +236,17 @@ def test_peer_offline_then_recovers(
                 nudge_nodeinfo(tx_iface)
                 time.sleep(5.0)
 
+        # Capture RX-side evidence while the collector is still open, so a
+        # failure distinguishes the real causes instead of guessing "recovery
+        # path may be broken": (a) RX saw NOTHING → radio/AGC never came back
+        # after the VBUS cut (hardware/firmware); (b) RX saw OTHER text but not
+        # ours, or firmware logs show Routing.Error 35/39 → PKI/stack fault;
+        # (c) firmware logs show an SX126x/AGC calibration failure → RF re-init.
+        rx_texts = [p.get("decoded", {}).get("text") for p in rx.snapshot()]
+        rx_logs = rx.log_snapshot()
+
     assert got is not None, (
-        f"post-recovery directed send {unique_post!r} ({tx_role}→{rx_role}) "
-        "never landed — recovery path may be broken"
+        f"post-recovery directed send {unique_post!r} ({tx_role}→{rx_role}) never "
+        f"landed. RX observed {len(rx_texts)} text packet(s): {rx_texts!r}. "
+        f"RX firmware log tail:\n" + "\n".join(rx_logs[-40:])
     )
