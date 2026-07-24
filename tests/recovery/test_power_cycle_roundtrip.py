@@ -49,26 +49,34 @@ def test_power_cycle_preserves_node_identity(
 
     # The pre_info handshake (and baked_single's earlier probe) can leave a serial
     # fd open on a daemon close-thread (connection._close_bounded abandons a slow
-    # close after 5s). On macOS a held fd pins the CDC node in the IORegistry, so
-    # a VBUS cut would NOT remove the device from list_devices until that fd
-    # closes — which is what made wait_for_absence time out. Drain it (and clear
-    # any leaked in-process port lock) BEFORE cutting power.
+    # close after 5s). Drain it (and clear any leaked in-process port lock) BEFORE
+    # cutting power so the CDC node tears down cleanly and the next open isn't
+    # fighting a stale handle.
+    #
+    # NB: draining is NOT what makes the absence check work. macOS retains a
+    # zombie of a powered-off device in ioreg/`/dev` even with no fd held, which
+    # is why absence is read from the hub connect flag below rather than from OS
+    # enumeration.
     _power.drain_port_fd(pre_port, timeout_s=8.0)
 
     try:
-        # Power off; confirm THIS device's node disappears (match the exact path,
-        # not just the VID, so a second same-VID adapter can't spoof presence).
+        # Power off; confirm the device leaves THIS hub slot. The slot is
+        # strictly more specific than a /dev path — it can't be spoofed by a
+        # same-VID sibling — and unlike OS enumeration it reports the
+        # disconnect immediately instead of retaining a macOS zombie of the
+        # powered-off device (which is what made this check time out).
         _power.power_off(role, resolved=slot)
         try:
-            _power.wait_for_absence(role, timeout_s=20.0, expected_port=pre_port)
+            _power.wait_for_absence(role, timeout_s=20.0, resolved=slot)
         except TimeoutError:
             # A racy/incomplete first VBUS cut — re-issue once before giving up.
             _power.power_off(role, resolved=slot)
             try:
-                _power.wait_for_absence(role, timeout_s=15.0, expected_port=pre_port)
+                _power.wait_for_absence(role, timeout_s=15.0, resolved=slot)
             except TimeoutError:
                 pytest.fail(
-                    f"device {role!r} (port {pre_port}) stayed visible after power_off (twice)"
+                    f"device {role!r} stayed attached to hub slot "
+                    f"{slot[0]}:{slot[1]} after power_off (twice)"
                 )
 
         # Power back on + re-discover. ensure_port_responsive re-enumerates a
@@ -76,7 +84,7 @@ def test_power_cycle_preserves_node_identity(
         # below hits a live device, not a stale ghost.
         _power.power_on(role, resolved=slot)
         time.sleep(0.5)  # head-start before polling
-        new_port = resolve_port_by_role(role, timeout_s=30.0)
+        new_port = resolve_port_by_role(role, timeout_s=30.0, require_openable=True)
         new_port = port_recovery.ensure_port_responsive(new_port, role=role, reenum_timeout_s=30.0)
 
         post_info = info.device_info(port=new_port, timeout_s=10.0)

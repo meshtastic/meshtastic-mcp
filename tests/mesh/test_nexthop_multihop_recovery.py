@@ -39,6 +39,7 @@ from typing import Any
 
 import pytest
 
+from meshtastic_mcp import uhubctl
 from meshtastic_mcp.connection import connect
 from tests import _power
 from tests._port_discovery import resolve_port_by_role
@@ -281,14 +282,21 @@ def test_multihop_relay_recovery(
                 is not None
             ), "baseline multi-hop delivery failed — skipping recovery to avoid a false result"
 
-    # Power the relay OFF.
+    # Power the relay OFF. Absence MUST come from the hub connect flag: the
+    # legacy OS-enumeration check asks "is any device with this role's VID still
+    # present anywhere", which can never go false when the relay is one of the
+    # three same-VID (0x239a) nRF52 boards — the other two stay powered. That
+    # raised TimeoutError, which this except swallowed into a pytest.skip, so the
+    # whole multi-hop recovery test quietly skipped every single run.
+    relay_slot: tuple[str, int] | None = None
     try:
-        _power.power_off(relay_role)
-        _power.wait_for_absence(relay_role, timeout_s=15.0)
+        relay_slot = uhubctl.resolve_target(relay_role)
+        _power.power_off(relay_role, resolved=relay_slot)
+        _power.wait_for_absence(relay_role, timeout_s=15.0, resolved=relay_slot)
     except Exception as exc:
         try:
-            _power.power_on(relay_role)
-            resolve_port_by_role(relay_role, timeout_s=30.0)
+            _power.power_on(relay_role, resolved=relay_slot)
+            resolve_port_by_role(relay_role, timeout_s=30.0, require_openable=True)
         except Exception:
             pass
         pytest.skip(f"can't power-control relay {relay_role!r}: {exc}")
@@ -305,15 +313,15 @@ def test_multihop_relay_recovery(
             assert pkt is not None
             time.sleep(8.0)  # let retransmissions + route decay run
     except Exception as exc:
-        _power.power_on(relay_role)
-        resolve_port_by_role(relay_role, timeout_s=30.0)
+        _power.power_on(relay_role, resolved=relay_slot)
+        resolve_port_by_role(relay_role, timeout_s=30.0, require_openable=True)
         raise AssertionError(f"TX crashed sending across a downed relay: {exc}") from exc
 
     # Power the relay back ON and let it re-enumerate + boot.
-    _power.power_on(relay_role)
+    _power.power_on(relay_role, resolved=relay_slot)
     time.sleep(0.5)
     try:
-        resolve_port_by_role(relay_role, timeout_s=30.0)
+        resolve_port_by_role(relay_role, timeout_s=30.0, require_openable=True)
     except Exception:
         pass
     time.sleep(8.0)

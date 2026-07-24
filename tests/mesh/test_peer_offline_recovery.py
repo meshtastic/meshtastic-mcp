@@ -143,10 +143,17 @@ def test_peer_offline_then_recovers(
                 lambda pkt: pkt.get("decoded", {}).get("text") == unique_pre,
                 timeout=30,
             )
-            assert got is not None, (
-                f"baseline directed send ({tx_role}→{rx_role}) didn't land — "
-                "skipping offline test to avoid false positive"
-            )
+            # Report WHAT the RX actually saw. Whether the collector was dead
+            # (saw nothing at all) or the peer refused just our directed frame
+            # (saw other traffic) picks the fix, and the bare "didn't land"
+            # message could not tell those apart — so don't guess, capture it.
+            if got is None:
+                seen = [p.get("decoded", {}).get("text") for p in rx.snapshot()]
+                pytest.fail(
+                    f"baseline directed send ({tx_role}→{rx_role}) didn't land — "
+                    f"skipping offline test to avoid a false positive. RX observed "
+                    f"{len(seen)} text packet(s): {seen!r}"
+                )
 
     # Step 3: power off RX. Resolve its hub slot NOW, while it's still up — a
     # powered-off device can't be VID-resolved, and keying power on/off + the

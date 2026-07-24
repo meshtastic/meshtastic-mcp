@@ -136,12 +136,21 @@ def _prepare_nrf52_for_upload(port: str) -> str:
         except Exception as exc:
             print(f"[bake] {port}: inter-round power-cycle unavailable ({exc}); re-touching")
             continue
+        # `uhubctl.cycle` blocks through off→delay→on, so the slot's connect
+        # flag is already back to True the moment it returns — it proves nothing
+        # about the board being ready. And macOS can still be reporting the
+        # PRE-cut node on this slot (it retains a zombie of a powered-off device),
+        # so the first candidate is frequently a stale path that accepts nothing:
+        # the touch then lands on a dead node and the round is wasted. Require a
+        # path that actually OPENS before touching it.
         deadline = time.monotonic() + _DFU_REENUM_TIMEOUT_S
         while time.monotonic() < deadline:
             candidate = port_recovery.port_on_slot(hub, slot)
             if candidate:
-                port = candidate
-                break
+                openable, _ = port_recovery.port_openable(candidate, exclusive=True, timeout=1.0)
+                if openable:
+                    port = candidate
+                    break
             time.sleep(0.5)
         time.sleep(2.0)  # app boot settle — a touch mid-boot is ignored
     if not result.get("ok"):

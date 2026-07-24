@@ -33,8 +33,13 @@ def test_device_on_port_reads_hub_connect_flag(monkeypatch):
     monkeypatch.setattr(uhubctl, "list_hubs", lambda: hubs)
     assert uhubctl.device_on_port("20-3", 7) is True
     assert uhubctl.device_on_port("20-3", 5) is False
-    assert uhubctl.device_on_port("20-3", 3) is False  # unknown port
-    assert uhubctl.device_on_port("99-9", 7) is False  # unknown hub
+    # A slot we cannot SEE is not the same as a slot with nothing on it. If the
+    # hub drops out of the listing, reporting False would let an absence poll
+    # conclude "power was cut" without ever observing a disconnect.
+    with pytest.raises(uhubctl.UhubctlError):
+        uhubctl.device_on_port("20-3", 3)  # no such port on this hub
+    with pytest.raises(uhubctl.UhubctlError):
+        uhubctl.device_on_port("99-9", 7)  # hub not in the listing
 
 
 def test_wait_for_absence_returns_when_hub_drops_device(monkeypatch):
