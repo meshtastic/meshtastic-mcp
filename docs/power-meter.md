@@ -33,19 +33,23 @@ Everything below was verified live against meter firmware **1.0.11**.
 Line-based ASCII, commands terminated with `\n`, case-insensitive. Every reply is
 either a value line followed by an `OK` line, a bare `OK` line, or `ERROR`:
 
-```
+```text
 <value>\r\n
 OK\r\n
 ```
 
-| Command | Meaning | Example reply |
-|---------|---------|---------------|
+The **Example value line** column below shows only the `<value>` line; per the
+framing above it is always followed by a trailing `OK\r\n` (the driver validates
+that). `S` is the exception — it has no value line and replies with a bare `OK`.
+
+| Command | Meaning | Example value line |
+|---------|---------|--------------------|
 | `V`       | firmware version string             | `RFPowerMeterv2 1.0.11` |
 | `D`       | current **average** power (dBm)      | `-26.450439` |
 | `E`       | current **peak** power (dBm)         | `-25.9596` |
 | `F`       | query the **stored** frequency (MHz) | `35` |
 | `F<idx>`  | set the active calibration curve by index; echoes the new MHz | `900` |
-| `S`       | persist current settings (updates the LCD + stored config) | `OK` only |
+| `S`       | persist current settings (updates the LCD + stored config) | *(none; bare `OK`)* |
 
 The driver validates the trailing `OK` after every value reply; anything else is
 treated as a desynced stream and raised, rather than returning an unconfirmed
@@ -55,7 +59,7 @@ value that would let the next command read garbage.
 
 `F<idx>` selects one of 16 stored per-frequency calibration curves (0-based):
 
-```
+```text
 index:  0    1    2     3     4     5      6      7 ...                              15
 MHz:   35    72   433   868   900   1200   2400   5600 5650 5700 5750 5800 5850 5900 5950 6000
 ```
