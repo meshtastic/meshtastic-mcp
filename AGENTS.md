@@ -26,6 +26,16 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   (`local_model_status` / `local_model_serve` / `local_model_serve_stop`).
 - **sdr capability** (needs the `[sdr]` extra + `librtlsdr` + an attached RTL-SDR): `sdr.py` +
   `rf_oracle.py` RF-compliance oracle (`rf_scan` / `rf_confirm_tx`).
+- **power-meter capability** (no extra — pure `pyserial`; needs an attached, powered-on ImmersionRC
+  RF Power Meter v2, USB CDC VID `0x04D8`/PID `0x000A`): `power_meter.py` driver + `pa_sweep.py`
+  PA-calibration bench (`pa_meter_status` / `pa_measure` / `pa_sweep`). Absolute TX-power
+  measurement off a node's PA — steps `lora.tx_power` and tables configured-vs-measured dBm with a
+  compression/saturation analysis. Complements the SDR oracle (which checks frequency/presence, not
+  absolute power). Unlike the other capabilities this one does **not** gate tool registration: the
+  three tools are always registered (the meter auto-powers-off, so a startup probe would hide the
+  very tool you use to check for it) and return a clear "no meter" result/error when absent; the
+  capability is informational (reported by `doctor`/startup). Region→frequency mapping lives in
+  `pa_sweep.resolve_band_mhz` via `lora_compliance.REGIONS`. See `docs/power-meter.md`.
 - **sdk-cli capability** (experimental; needs the Kotlin SDK headless CLI): `sdk_cli.py`
   device-IO backend via the JVM CLI — see `docs/sdk-cli-bridge.md`.
 - **FleetSuite web control plane** (the `[web]` extra, separate `meshtastic-mcp-web` entrypoint,
@@ -37,9 +47,9 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
 decorator (`_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled tools only when
-`CAPS.firmware` is active — 57 always-on tools; +4 android, +17 firmware, +2 sdr, and the
-apple/sdk-cli/local-model gates on top (≈84 with everything active). Counts drift — `doctor`
-and the startup log are the source of truth.
+`CAPS.firmware` is active — 60 always-on tools (includes the 3 power-meter tools, always
+registered); +4 android, +17 firmware, +2 sdr, and the apple/sdk-cli/local-model gates on top
+(≈87 with everything active). Counts drift — `doctor` and the startup log are the source of truth.
 
 **Provisioning:** `doctor.py` (the `doctor` MCP tool / `meshtastic-mcp doctor` CLI) probes every
 external dependency and emits the exact, platform-aware acquisition command for anything missing
@@ -182,14 +192,34 @@ config_diff("before", "after")     # or diff two snapshots
 
 **Send a message and confirm delivery**
 ```
-list_devices()                      # pick port
-send_text(port=<port>, text="…")    # inject into mesh
-packets_window(port=<port>, start="-30s")  # confirm TEXT_MESSAGE_APP packet emitted
+list_devices()                          # pick port
+set_debug_log_api(port=<port>, enabled=True)        # required for confirmation (see below)
+send_text(port=<port>, text="…", wait_for_tx=True)  # tx_confirmed + tx_latency_s
 ```
-Or collapse send + confirm into one call:
-```
-send_text(port=<port>, text="…", wait_for_tx=True)  # returns tx_confirmed + tx_latency_s
-```
+**A node cannot see its own transmission on the receive path.** `packets_window`
+(and the recorder's packet stream generally) is fed by the `meshtastic.receive`
+pubsub topic, which a self-originated packet never reaches: the firmware echoes
+it back but omits the now-redundant `from` field, and
+`MeshInterface._handlePacketFromRadio` treats that as *"Device returned a packet
+we sent, ignoring"* and returns before publishing. Do not "confirm" a local send
+with `packets_window`; it returns empty even when the message was delivered.
+`rf_oracle.confirm_tx` documents the same constraint for its
+`firmware_self_reported_tx` field.
+
+`wait_for_tx=True` instead looks for the firmware's `Started Tx (id=…)` log line
+(and for a neighbour rebroadcasting the packet). That log only reaches the
+recorder when `set_debug_log_api(True)` is on for the port, or a `serial_session`
+is tapping it. `tx_confirmed` is three-valued:
+
+| value | meaning |
+| --- | --- |
+| `true` | transmission observed |
+| `false` | logs were flowing and showed no TX — a real failure signal |
+| `null` | not observable (usually debug-log capture is off) — **not** a failure |
+
+Check `tx_unconfirmed_reason` when you get `false` or `null`. Note it confirms the
+packet *reached the air*, not that any peer received it — for end-to-end delivery
+use `want_ack=True` on a direct message, or observe on a second node.
 
 **Read or write config**
 ```
@@ -291,7 +321,8 @@ UI-drive on physical phones requires USB debugging enabled and the device truste
 These will produce flaky, slow, or incorrect results:
 
 - **Polling `device_info()` or `list_nodes()` in a tight loop.** Both open/hold/close the serial port. The exclusive lock is non-blocking — a concurrent caller does not queue; it fails fast with a `... is busy — ... Retry shortly.` error you must catch and retry. Use `recorder_status()` + `events_window()` for ongoing observation instead.
-- **Asserting immediately after `send_text`.** Mesh delivery is best-effort and async. Always query the recorder window with a bounded deadline (e.g. `start="-30s"`, retry every 1 s up to 30 s), not a bare sleep.
+- **Asserting immediately after `send_text`.** Mesh delivery is best-effort and async. Use `wait_for_tx=True` (bounded by `tx_timeout_s`), not a bare sleep.
+- **Confirming a local send with `packets_window`.** A self-originated packet never reaches that stream — the library drops the firmware's echo as "a packet we sent" — so it reads as failure on a working mesh. Use `wait_for_tx=True` with `set_debug_log_api(True)`, and treat `tx_confirmed: null` as "not observable", not "failed". See *Send a message and confirm delivery*.
 - **Calling a firmware tool without checking `doctor()` first.** If `MESHTASTIC_FIRMWARE_ROOT` is unset, firmware tools are not registered at all. Call `doctor()` on first failure; parse `fix_commands` and surface them to the user.
 - **Omitting `confirm=True` on destructive tools then retrying.** The confirm gate is intentional — don't loop-retry without it. Surface the confirmation requirement to the user.
 - **Assuming the recorder has data immediately.** It starts capturing when a serial session opens. If you just opened the port, query with `start="-5s"` and check `line_count > 0` before asserting content.
