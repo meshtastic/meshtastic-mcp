@@ -1297,12 +1297,17 @@ def send_text(
     port: str | None = None,
     wait_for_tx: bool = False,
     tx_timeout_s: float = 30.0,
+    tx_linger_s: float = 8.0,
 ) -> dict[str, Any]:
     """Send a text message over the mesh.
 
     `to` defaults to broadcast ("^all"). Pass a node ID (hex string like
     "!abcdef01") or node number (int) to direct-message a specific node.
     channel_index picks which configured channel to send on.
+
+    `tx_linger_s` delays the connection close after sendText() returns, allowing
+    the firmware's channel-politeness TX delay (~4s) and RF airtime to complete
+    before the serial port resets. Prevents loss of queued broadcasts.
 
     Delivery is async and best-effort. By default this returns as soon as the
     packet is queued. Set `wait_for_tx=True` to additionally poll the recorder
@@ -1316,7 +1321,12 @@ def send_text(
         {tx_confirmed: bool, tx_latency_s: float | null}
     """
     result = admin.send_text(
-        text=text, to=to, channel_index=channel_index, want_ack=want_ack, port=port
+        text=text,
+        to=to,
+        channel_index=channel_index,
+        want_ack=want_ack,
+        port=port,
+        tx_linger_s=tx_linger_s,
     )
     if not wait_for_tx:
         return result
