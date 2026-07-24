@@ -200,9 +200,18 @@ def test_peer_offline_then_recovers(
     new_rx_port = _reconnect_after_power_on(rx_role, rx_slot)
     hub_devices[rx_role] = new_rx_port
 
-    # Step 6 + 7: bilateral re-warmup + directed send that should now work.
-    with ReceiveCollector(new_rx_port, topic="meshtastic.receive.text") as rx:
-        # RX rebooted → its PKI cache is gone. Re-warm.
+    # NB: do NOT enable security.debug_log_api_enabled on the RX here — flooding
+    # the firmware log stream over an nRF52's fragile CDC makes the collector
+    # drop the very text packet under test (observed: every nRF52-RX pair then
+    # fails post-recovery while the radio logs show it receiving fine). The
+    # packet-count diagnostic below is enough to localise a failure without it.
+
+    # Step 6 + 7: bilateral re-nudge + directed send that should now work.
+    with ReceiveCollector(new_rx_port, topic="meshtastic.receive.text", capture_logs=True) as rx:
+        # Peer pubkeys PERSIST to flash (NodeDB), so they survive the RX reboot —
+        # the re-nudge is cheap insurance for a stale in-RAM cache, not a
+        # correctness requirement. If delivery still fails here the likely cause
+        # is RF/radio re-init after the VBUS cut, not PKI (see the assertion).
         rx.broadcast_nodeinfo_ping()
         with connect(port=tx_port) as tx_iface:
             nudge_nodeinfo(tx_iface)
@@ -226,7 +235,18 @@ def test_peer_offline_then_recovers(
                 nudge_nodeinfo(tx_iface)
                 time.sleep(5.0)
 
+        # Capture what the RX observed while the collector is still open, so a
+        # failure localises the cause instead of guessing "recovery path may be
+        # broken": RX saw NOTHING → radio never came back after the VBUS cut
+        # (hardware/firmware); RX saw OTHER text but not ours → delivery/PKI.
+        # (rx_logs is populated only if the profile enabled the firmware log API;
+        # we deliberately do NOT enable it here — see the note above.)
+        rx_texts = [p.get("decoded", {}).get("text") for p in rx.snapshot()]
+        rx_logs = rx.log_snapshot()
+
+    detail = f"RX observed {len(rx_texts)} text packet(s): {rx_texts!r}."
+    if rx_logs:
+        detail += "\nRX firmware log tail:\n" + "\n".join(rx_logs[-40:])
     assert got is not None, (
-        f"post-recovery directed send {unique_post!r} ({tx_role}→{rx_role}) "
-        "never landed — recovery path may be broken"
+        f"post-recovery directed send {unique_post!r} ({tx_role}→{rx_role}) never landed. {detail}"
     )

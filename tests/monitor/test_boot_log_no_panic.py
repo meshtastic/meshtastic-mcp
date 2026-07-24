@@ -51,12 +51,30 @@ def test_boot_log_no_panic(
     # port, the reboot would fail with [Errno 35]. The device reboots in `seconds`,
     # so the capture comes up before the actual reset banner + early boot.
     admin.reboot(port=port, confirm=True, seconds=3)
+    # Let reboot's exclusive fd fully release before the monitor opens, or the
+    # pio-monitor open can race it and come up capturing nothing. reboot fires at
+    # `seconds`, so a 1s settle still starts the monitor before the reset banner.
+    time.sleep(1.0)
     cap = serial_capture(role, env=env)
     # Wait through the reboot+boot window
     time.sleep(60.0)
 
     lines = cap.snapshot(max_lines=4000)
-    assert lines, "serial capture returned no log lines — monitor may have failed"
+    if not lines:
+        # An EMPTY capture is a monitor/port failure, not a firmware panic — a
+        # crashing board still prints lines (and a boot-loop panic recurs in
+        # runtime output). Re-open the monitor once and capture again; only a
+        # capture that stays silent is a real failure. This cannot mask a panic:
+        # the panic-marker assertion below still runs on whatever we capture.
+        cap.stop()
+        time.sleep(1.0)
+        cap.start()
+        time.sleep(20.0)
+        lines = cap.snapshot(max_lines=4000)
+    assert lines, (
+        "serial capture returned no log lines even after re-opening the monitor — "
+        "the port/monitor is wedged (not a firmware panic; a crashing board still logs)"
+    )
     blob = "\n".join(lines).lower()
 
     hits = [marker for marker in _PANIC_MARKERS if marker in blob]

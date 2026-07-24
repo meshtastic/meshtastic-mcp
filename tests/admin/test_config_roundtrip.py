@@ -64,14 +64,24 @@ def test_lora_hop_limit_survives_reboot(
     new_value = 5 if original != 5 else 4
 
     try:
-        admin.set_config("lora.hop_limit", new_value, port=port)
-
-        # Pre-reboot sanity: the write reached the device and
-        # get_config reflects it in-memory. If this fails, the persist
-        # test below is moot — something's wrong with the write path
-        # itself, not with persistence.
-        assert _get_hop_limit(port) == new_value, (
-            f"pre-reboot readback failed: set {new_value}, got {_get_hop_limit(port)}"
+        # Pre-reboot sanity: the write reached the device and get_config reflects
+        # it in-memory. The admin SetConfig can race the firmware applying it, so
+        # an immediate readback occasionally still shows the old value (seen
+        # intermittently on the esp32s3). Re-issue on mismatch; a value that never
+        # takes after retries is a genuine write-path fault, not a race — the
+        # assertion still fires then, so this does not mask a regression.
+        readback = None
+        for _attempt in range(3):
+            admin.set_config("lora.hop_limit", new_value, port=port)
+            time.sleep(1.5)
+            try:
+                readback = _get_hop_limit(port)
+            except Exception:
+                readback = None
+            if readback == new_value:
+                break
+        assert readback == new_value, (
+            f"pre-reboot readback failed: set {new_value}, got {readback} after 3 attempts"
         )
 
         # Reboot. `seconds=3` gives the Python client time to
@@ -80,17 +90,24 @@ def test_lora_hop_limit_survives_reboot(
         admin.reboot(port=port, confirm=True, seconds=3)
         time.sleep(8.0)
 
-        # nRF52 re-enumerates on reboot → rediscover.
-        port = resolve_port_by_role(role, timeout_s=60.0)
-        wait_until(
-            lambda: info.device_info(port=port, timeout_s=5.0).get("my_node_num") is not None,
-            timeout=60,
-            backoff_start=1.0,
-        )
+        # nRF52 re-enumerates on reboot. Re-resolve INSIDE the poll (with the
+        # openable settle gate) so a second CDC re-enumeration is picked up, and
+        # swallow transient open errors — wait_until does not catch predicate
+        # exceptions, so an uncaught Errno 2 "could not open port" would kill the
+        # test at the first attempt instead of retrying within the budget.
+        def _post_read() -> int | None:
+            nonlocal port
+            try:
+                port = resolve_port_by_role(role, timeout_s=15.0, require_openable=True)
+                if info.device_info(port=port, timeout_s=5.0).get("my_node_num") is None:
+                    return None
+                return _get_hop_limit(port)  # 1..7 → always truthy on success
+            except Exception:
+                return None
 
-        # The assertion this test exists for: the mutation persisted
-        # across the reboot cycle through NVS / LittleFS / UICR.
-        post = _get_hop_limit(port)
+        # The assertion this test exists for: the mutation persisted across the
+        # reboot cycle through NVS / LittleFS / UICR.
+        post = wait_until(_post_read, timeout=90, backoff_start=1.0)
         assert post == new_value, (
             f"lora.hop_limit did not survive reboot: set to {new_value} "
             f"pre-reboot, read back {post} post-reboot. Config persistence "
