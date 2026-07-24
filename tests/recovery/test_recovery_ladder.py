@@ -20,7 +20,10 @@ from tests import _power, _recovery
 from tests._port_discovery import resolve_port_by_role
 
 
-@pytest.mark.timeout(180)
+# The ladder body — heal (reboot attempt → power_cycle) → re-resolve → identity
+# handshake — has never actually executed on this bench: every run died at the
+# absence check before reaching it, so 180 s was never a measured budget.
+@pytest.mark.timeout(360)
 def test_ladder_recovers_a_dead_node(baked_single: dict[str, object]) -> None:
     role = baked_single["role"]
     port = baked_single["port"]
@@ -29,20 +32,29 @@ def test_ladder_recovers_a_dead_node(baked_single: dict[str, object]) -> None:
     healthy, detail = recovery.is_healthy(port, timeout_s=5.0)
     assert healthy, f"{role} not healthy before test: {detail}"
 
-    # Resolve the hub slot ONCE, while the device is still visible — once it's
-    # powered off, resolve_target can't find it (its VID is gone from every hub)
-    # and would raise, so the finally could never restore the bench.
+    # Resolve the hub slot ONCE, up front. Env pins (seeded by
+    # conftest.pytest_configure) resolve even a powered-off board, but resolving
+    # here keeps one authority for both the cut and the restore.
     slot = uhubctl.resolve_target(role)
 
     # Wedge it: cut power so a soft reboot can't reach it.
     _power.power_off(role, resolved=slot)
-    _power.wait_for_absence(role, timeout_s=10.0)
+    # Absence MUST come from the hub's connect flag for this slot. The legacy
+    # OS-enumeration check is unusable here twice over: macOS retains a zombie of
+    # a powered-off device indefinitely, AND the VID-any predicate is
+    # unsatisfiable for the nRF52 roles — t_echo, heltec_t114 and rak4631 all
+    # report 0x239a, so cutting one leaves two siblings enumerated and the
+    # "no device with this VID anywhere" condition can never become true.
+    _power.wait_for_absence(role, timeout_s=10.0, resolved=slot)
     try:
         # reboot fails (it's gone) → power_cycle revives it.
         report = _recovery.heal(port, role=role)
     finally:
         _power.power_on(role, resolved=slot)  # never leave it dark for the next test
-        resolve_port_by_role(role, timeout_s=30.0)
+        # require_openable: the hub flag flips back the moment VBUS returns, but
+        # an nRF52 CDC can re-enumerate on a path that lists and then vanishes.
+        # Don't hand the next test a port that won't open.
+        resolve_port_by_role(role, timeout_s=30.0, require_openable=True)
 
     assert report["recovered"], f"ladder did not recover {role}: {report}"
     assert report["final_step"] in ("power_cycle", "reappeared"), report
@@ -53,7 +65,7 @@ def test_ladder_recovers_a_dead_node(baked_single: dict[str, object]) -> None:
     )
 
     # Identity preserved — a hard reset, not a re-flash.
-    new_port = resolve_port_by_role(role, timeout_s=30.0)
+    new_port = resolve_port_by_role(role, timeout_s=30.0, require_openable=True)
     time.sleep(2.0)
     post = info.device_info(port=new_port, timeout_s=10.0)
     assert post.get("my_node_num") == node_num, (
