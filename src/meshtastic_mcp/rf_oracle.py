@@ -92,6 +92,7 @@ def read_lora_context(port: str | None = None) -> dict[str, Any]:
         "override_frequency": lora.get("override_frequency", 0.0),
         "frequency_offset": lora.get("frequency_offset", 0.0),
         "tx_power": lora.get("tx_power", 0),
+        "override_duty_cycle": lora.get("override_duty_cycle", False),
         "device_role": device.get("role", "CLIENT"),
         "channel_name": channel_name,
     }

@@ -26,6 +26,16 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   (`local_model_status` / `local_model_serve` / `local_model_serve_stop`).
 - **sdr capability** (needs the `[sdr]` extra + `librtlsdr` + an attached RTL-SDR): `sdr.py` +
   `rf_oracle.py` RF-compliance oracle (`rf_scan` / `rf_confirm_tx`).
+- **power-meter capability** (no extra — pure `pyserial`; needs an attached, powered-on ImmersionRC
+  RF Power Meter v2, USB CDC VID `0x04D8`/PID `0x000A`): `power_meter.py` driver + `pa_sweep.py`
+  PA-calibration bench (`pa_meter_status` / `pa_measure` / `pa_sweep`). Absolute TX-power
+  measurement off a node's PA — steps `lora.tx_power` and tables configured-vs-measured dBm with a
+  compression/saturation analysis. Complements the SDR oracle (which checks frequency/presence, not
+  absolute power). Unlike the other capabilities this one does **not** gate tool registration: the
+  three tools are always registered (the meter auto-powers-off, so a startup probe would hide the
+  very tool you use to check for it) and return a clear "no meter" result/error when absent; the
+  capability is informational (reported by `doctor`/startup). Region→frequency mapping lives in
+  `pa_sweep.resolve_band_mhz` via `lora_compliance.REGIONS`. See `docs/power-meter.md`.
 - **sdk-cli capability** (experimental; needs the Kotlin SDK headless CLI): `sdk_cli.py`
   device-IO backend via the JVM CLI — see `docs/sdk-cli-bridge.md`.
 - **FleetSuite web control plane** (the `[web]` extra, separate `meshtastic-mcp-web` entrypoint,
@@ -37,9 +47,9 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
 decorator (`_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled tools only when
-`CAPS.firmware` is active — 57 always-on tools; +4 android, +17 firmware, +2 sdr, and the
-apple/sdk-cli/local-model gates on top (≈84 with everything active). Counts drift — `doctor`
-and the startup log are the source of truth.
+`CAPS.firmware` is active — 60 always-on tools (includes the 3 power-meter tools, always
+registered); +4 android, +17 firmware, +2 sdr, and the apple/sdk-cli/local-model gates on top
+(≈87 with everything active). Counts drift — `doctor` and the startup log are the source of truth.
 
 **Provisioning:** `doctor.py` (the `doctor` MCP tool / `meshtastic-mcp doctor` CLI) probes every
 external dependency and emits the exact, platform-aware acquisition command for anything missing

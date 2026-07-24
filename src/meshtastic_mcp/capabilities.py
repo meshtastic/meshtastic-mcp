@@ -93,6 +93,23 @@ def has_llama_server() -> bool:
     return llama_server.available()
 
 
+def has_power_meter() -> bool:
+    """True when an ImmersionRC RF Power Meter v2 is attached (VID 0x04D8/PID 0x000A).
+
+    Informational only — reported by `doctor` and the startup summary. Unlike the
+    other capabilities this does NOT gate tool registration: the PA-calibration
+    bench tools (`pa_meter_status`, `pa_measure`, `pa_sweep`) are always
+    registered, because the meter auto-powers-off on a battery timeout and drops
+    off USB, so a startup-time probe would hide exactly the tool
+    (`pa_meter_status`) you reach for to check whether it's asleep. The tools
+    return a clear "no meter" result/error instead. Needs no extra — the driver
+    is pure `pyserial`, already a core dep.
+    """
+    from . import power_meter
+
+    return len(power_meter.list_meters()) > 0
+
+
 def has_tak() -> bool:
     """True when the meshtastic-tak SDK is importable (the ``[tak]`` extra).
 
@@ -126,6 +143,7 @@ class Capabilities:
     local_model: bool
     llama_server: bool
     sdr: bool
+    power_meter: bool
     tak: bool
     sdk_cli: bool
 
@@ -140,6 +158,7 @@ class Capabilities:
                 ("local_model", self.local_model),
                 ("llama_server", self.llama_server),
                 ("sdr", self.sdr),
+                ("power_meter", self.power_meter),
                 ("tak", self.tak),
                 ("sdk_cli", self.sdk_cli),
             )
@@ -157,6 +176,7 @@ def detect() -> Capabilities:
         local_model=has_local_model(),
         llama_server=has_llama_server(),
         sdr=has_sdr(),
+        power_meter=has_power_meter(),
         tak=has_tak(),
         sdk_cli=has_sdk_cli(),
     )
