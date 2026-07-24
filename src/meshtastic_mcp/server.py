@@ -1291,6 +1291,97 @@ def config_diff(name_a: str, name_b: str | None = None, port: str | None = None)
     return config_snapshot_mod.diff(name_a, name_b, port=port)
 
 
+def _confirm_tx(
+    packet_id: int | None,
+    port: str | None,
+    tx_timeout_s: float,
+) -> tuple[bool | None, float | None, str | None]:
+    """Poll for evidence that `packet_id` actually reached the air.
+
+    Returns `(confirmed, latency_s, reason)` where `confirmed` is:
+      * `True`  — positive evidence of transmission,
+      * `False` — an evidence channel was working and showed no transmission,
+      * `None`  — no evidence channel available, so we genuinely cannot tell.
+
+    The `None` case matters. A node cannot observe its own transmission through
+    the receive path. The firmware *does* echo the packet back, but it omits the
+    now-redundant `from` field on that echo, and
+    `MeshInterface._handlePacketFromRadio` treats a missing `from` as "Device
+    returned a packet we sent, ignoring" and returns before publishing any pubsub
+    event (`mesh_interface.py`). So it never reaches `meshtastic.receive`, and so
+    never reaches the recorder's packet stream. Reporting that absence as `False`
+    claimed failure for messages that were verifiably delivered.
+
+    `rf_oracle.confirm_tx` documents the same constraint from the RF side, and
+    its `firmware_self_reported_tx` field carries the identical caveat — it is a
+    known, documented limitation there, not a bug.
+
+    Two things do constitute evidence:
+
+    1. The firmware's own log line ``Started Tx (id=0x…)``, captured when
+       `set_debug_log_api(True)` is on (or a `serial_session` is tapping the
+       port). Deliberately NOT ``enqueue for send`` — a packet can be enqueued
+       and then killed before airtime, which is exactly the bug PR #18 fixed,
+       so matching the enqueue line would restore a false positive.
+    2. A neighbour rebroadcasting our packet, which arrives back on the receive
+       path carrying the same id. Real proof it reached the air, and it works
+       even with no log capture.
+    """
+    if packet_id is None:
+        return None, None, "no packet id was returned for this send, so nothing to match against"
+
+    # Firmware prints the id as lowercase, zero-padded 32-bit hex. Push this at
+    # `logs_window` as its `grep` rather than filtering the results ourselves:
+    # grep is applied *before* the max_lines cap, so the one line we need can
+    # never be truncated away by an unrelated burst of firmware chatter. That is
+    # not hypothetical — an unfiltered 2 min window on real hardware measured
+    # total_matched=455 / dropped=395.
+    tx_pattern = rf"Started Tx \(id=0x{packet_id:08x}\b"
+    t0 = time.monotonic()
+    deadline = t0 + tx_timeout_s
+    saw_any_log = False
+    packets_truncated = False
+
+    while True:
+        hits = log_query.logs_window(start="-2m", port=port, grep=tx_pattern, max_lines=20)
+        if hits.get("lines"):
+            return True, round(time.monotonic() - t0, 2), None
+
+        # Separate existence probe: "is any log flowing for this port at all?"
+        # Only ever asks for one line, so the cap is irrelevant here too.
+        if not saw_any_log:
+            probe = log_query.logs_window(start="-2m", port=port, max_lines=1)
+            if probe.get("lines") or probe.get("total_matched"):
+                saw_any_log = True
+
+        # A neighbour's rebroadcast comes back with our id. `packets_window` has
+        # no grep, so honour `dropped` instead of silently trusting a capped list.
+        packets = log_query.packets_window(start="-2m", max=200)
+        for pkt in packets.get("packets", []):
+            if pkt.get("id") == packet_id:
+                return True, round(time.monotonic() - t0, 2), None
+        if packets.get("dropped", 0) > 0:
+            packets_truncated = True
+
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
+
+    if not saw_any_log:
+        reason = (
+            "no firmware log lines were captured for this port, so transmission "
+            "could not be observed — enable set_debug_log_api(True) (or hold a "
+            "serial_session) to make tx_confirmed meaningful"
+        )
+        if packets_truncated:
+            reason += (
+                "; the packet window was also truncated (dropped>0), so a "
+                "rebroadcast may have been missed — narrow the window and retry"
+            )
+        return None, None, reason
+    return False, None, "firmware logs were captured but showed no 'Started Tx' for this packet"
+
+
 @app.tool()
 def send_text(
     text: str,
@@ -1313,15 +1404,23 @@ def send_text(
     before the serial port resets. Prevents loss of queued broadcasts.
 
     Delivery is async and best-effort. By default this returns as soon as the
-    packet is queued. Set `wait_for_tx=True` to additionally poll the recorder
-    (up to `tx_timeout_s`) for the matching TEXT_MESSAGE_APP packet on the wire
-    — collapsing the usual send + `packets_window` confirmation dance into one
-    call.
+    packet is queued. Set `wait_for_tx=True` to additionally poll (up to
+    `tx_timeout_s`) for evidence the radio actually transmitted: the firmware's
+    `Started Tx (id=…)` log line, or a neighbour rebroadcasting the packet.
+
+    `tx_confirmed` is three-valued. `true` means transmission was observed;
+    `false` means logs were flowing and showed no transmission; **`null` means
+    it could not be observed at all** — most often because firmware logs are not
+    being captured. Call `set_debug_log_api(True)` on the port (or hold a
+    `serial_session`) to make confirmation meaningful; without it, `null` is the
+    expected answer and does NOT mean the message failed. `tx_unconfirmed_reason`
+    explains which case you got.
 
     Returns:
         {ok: true, packet_id: int | null, destination: str}
         plus when wait_for_tx=True:
-        {tx_confirmed: bool, tx_latency_s: float | null}
+        {tx_confirmed: bool | null, tx_latency_s: float | null,
+         tx_unconfirmed_reason?: str}
     """
     result = admin.send_text(
         text=text,
@@ -1334,26 +1433,11 @@ def send_text(
     if not wait_for_tx:
         return result
 
-    packet_id = result.get("packet_id")
-    t0 = time.monotonic()
-    deadline = t0 + tx_timeout_s
-    confirmed = False
-    while time.monotonic() < deadline:
-        window = log_query.packets_window(start="-1m", portnum="TEXT_MESSAGE_APP", max=50)
-        for pkt in window.get("packets", []):
-            # Match by packet id when we have one; else fall back to any recent TX.
-            if packet_id is not None and pkt.get("id") == packet_id:
-                confirmed = True
-                break
-            if packet_id is None and pkt.get("portnum") == "TEXT_MESSAGE_APP":
-                confirmed = True
-                break
-        if confirmed:
-            break
-        time.sleep(1.0)
-
+    confirmed, latency_s, reason = _confirm_tx(result.get("packet_id"), port, tx_timeout_s)
     result["tx_confirmed"] = confirmed
-    result["tx_latency_s"] = round(time.monotonic() - t0, 2) if confirmed else None
+    result["tx_latency_s"] = latency_s
+    if reason is not None:
+        result["tx_unconfirmed_reason"] = reason
     return result
 
 
