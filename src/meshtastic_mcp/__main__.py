@@ -522,9 +522,101 @@ def _cmd_watch(args) -> int:
         return 0
 
 
+def _build_replay_session(args):
+    """Resolve CLI args into a started-but-not-served ReplaySession (testable)."""
+    from meshtastic_mcp.replay import ReplayParams, ReplaySession
+    from meshtastic_mcp.replay import capture as replay_capture
+    from meshtastic_mcp.replay import sim as replay_sim
+
+    if args.source in ("sim", *replay_sim.PRESETS):
+        import time as _t
+
+        override = _json_mod.loads(args.profile) if args.profile else None
+        preset = "meshcon" if args.source == "sim" else args.source
+        prof = replay_sim.preset_profile(preset, override)
+        start = int(_t.time()) - args.days * 86400  # end "now" like replay_start
+        cap = replay_sim.generate(
+            nodes=args.nodes, days=args.days, seed=args.seed, start=start, profile=prof
+        )
+    elif args.source.endswith(".jsonl"):
+        cap = replay_capture.from_recorder_jsonl(args.source)
+    else:
+        cap = replay_capture.from_sqlite(args.source)
+
+    params = ReplayParams(
+        host=args.host,
+        port=args.port,
+        rate=args.rate,
+        duration=args.duration,
+        speed=args.speed,
+        loop=args.loop,
+        node_delay=args.node_delay,
+        announce_interval=args.announce_interval,
+        firmware_edition=args.edition,
+        mdns=False if args.no_mdns else None,
+    )
+    if args.fuzz:
+        from meshtastic_mcp.replay import fuzz as replay_fuzz
+
+        params.fuzz = replay_fuzz.from_spec(args.fuzz)
+    return ReplaySession("cli", cap, params)
+
+
+def _cmd_replay(args) -> int:
+    """Serve a replay session in the foreground. Ctrl-C to stop."""
+    import time
+
+    from meshtastic_mcp.replay.engine import _status_dict
+
+    try:
+        sess = _build_replay_session(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    sess.start()
+    st = _status_dict(sess)
+    print(f"serving {st['capture']}: {st['packets_total']} packets, {st['nodes']} nodes")
+    print(f"mode: {st['mode']}  loop: {st['loop']}")
+    print(f"connect: {', '.join(st['connect'])}")
+    if st["mdns"]:
+        m = st["mdns"]
+        label = m["display_name"] if m["advertised"] else f"off ({m['error']})"
+        print(f"mdns: {label}")
+    # stdout is block-buffered when piped; surface the connect info immediately
+    sys.stdout.flush()
+    print("Ctrl-C to stop…", file=sys.stderr)
+    try:
+        while not sess.state.ended:
+            time.sleep(args.status_interval)
+            st = _status_dict(sess)
+            print(
+                _json_mod.dumps(
+                    {
+                        "connected": st["connected"],
+                        "client": st["client"],
+                        "packets_sent": st["packets_sent"],
+                        "target_rate": st["target_rate"],
+                        "achieved_rate": st["achieved_rate"],
+                        "uptime_s": st["uptime_s"],
+                    }
+                ),
+                flush=True,
+            )
+        print("replay complete.", file=sys.stderr)
+        return 0
+    except KeyboardInterrupt:
+        print("\nstopped.", file=sys.stderr)
+        return 0
+    finally:
+        sess.stop()
+
+
 def _cmd_completion(args) -> int:
     """Print a shell completion script for bash or zsh."""
-    cmds = "install uninstall doctor skills provision devices boards info nodes watch completion"
+    cmds = (
+        "install uninstall doctor skills provision devices boards info nodes "
+        "watch replay capture-stats completion"
+    )
     if args.shell == "bash":
         print(f"""# meshtastic-mcp bash completion
 # Add to ~/.bashrc:  eval "$(meshtastic-mcp completion bash)"
@@ -643,6 +735,52 @@ def main(argv=None) -> None:
     )
     wat.add_argument("--interval", type=float, default=2.0, help="poll interval seconds")
 
+    rpl = sub.add_parser(
+        "replay",
+        help="serve a capture or sim preset as a Meshtastic TCP device (foreground)",
+        description=(
+            "Serve a simulated Meshtastic TCP device in the foreground (Ctrl-C to stop). "
+            "Apps connect to the printed address — or discover it via mDNS/Bonjour. "
+            "Stress one-liner: meshtastic-mcp replay conference-stress "
+            "--nodes 1600 --rate 140 --loop"
+        ),
+    )
+    rpl.add_argument(
+        "source",
+        nargs="?",
+        default="meshcon",
+        help="sim preset (meshcon/burningman/defcon/conference-stress) or a *.db/*.jsonl capture",
+    )
+    rpl.add_argument("--host", default="0.0.0.0", help="bind address (default 0.0.0.0)")
+    rpl.add_argument("--port", type=int, default=4403, help="listen port (0 = auto-pick)")
+    rpl.add_argument("--rate", type=float, default=None, help="steady packets/sec")
+    rpl.add_argument(
+        "--duration", type=float, default=None, help="whole capture in N seconds (overrides rate)"
+    )
+    rpl.add_argument("--speed", type=float, default=1.0, help="cadence multiplier (default 1x)")
+    rpl.add_argument("--loop", action="store_true", help="restart the stream at the end")
+    rpl.add_argument("--nodes", type=int, default=800, help="sim node count (preset sources)")
+    rpl.add_argument("--days", type=int, default=3, help="sim capture span (preset sources)")
+    rpl.add_argument("--seed", type=int, default=1337, help="sim seed (preset sources)")
+    rpl.add_argument(
+        "--profile", default=None, metavar="JSON", help="inline profile-override JSON object"
+    )
+    rpl.add_argument("--fuzz", default=None, help="fuzz preset (light/parser/adversary/chaos)")
+    rpl.add_argument(
+        "--edition", default="VANILLA", help="firmware edition banner (e.g. DEFCON, VANILLA)"
+    )
+    rpl.add_argument(
+        "--announce-interval",
+        type=float,
+        default=0.0,
+        help="post in-app Replay Clock progress every N seconds (0 = off)",
+    )
+    rpl.add_argument("--node-delay", type=float, default=0.005, help="node-DB pacing seconds")
+    rpl.add_argument("--no-mdns", action="store_true", help="don't advertise via mDNS/Bonjour")
+    rpl.add_argument(
+        "--status-interval", type=float, default=30.0, help="status line cadence seconds"
+    )
+
     cst = sub.add_parser(
         "capture-stats",
         help="compute realism statistics for a capture (SQLite/JSONL) or a sim preset",
@@ -702,6 +840,9 @@ def main(argv=None) -> None:
 
     if args.cmd == "watch":
         raise SystemExit(_cmd_watch(args))
+
+    if args.cmd == "replay":
+        raise SystemExit(_cmd_replay(args))
 
     if args.cmd == "capture-stats":
         raise SystemExit(_cmd_capture_stats(args))

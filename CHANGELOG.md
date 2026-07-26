@@ -3,6 +3,66 @@
 All notable changes are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com); versions follow SemVer.
 
+## [Unreleased]
+
+### Added
+- **`meshtastic-mcp replay` CLI + `conference-stress` preset** — serve a simulated device
+  from the shell with no MCP session: `meshtastic-mcp replay conference-stress --nodes 1600
+  --rate 140 --loop` runs the dense-convention stress scenario (gateway-observed density +
+  the 17-bot BBS plane, tapback storms, traceroute pairs) in the foreground with periodic
+  target-vs-achieved status lines, mDNS-advertised so apps auto-discover it; Ctrl-C stops.
+  Accepts any sim preset or a `*.db`/`*.jsonl` capture, `--duration`/`--rate`/`--speed`
+  pacing, `--profile` inline-JSON overrides, `--fuzz`, and `--no-mdns`.
+- **Replay mDNS/Bonjour advertisement** (`replay_start(mdns=…)`, auto-on for non-loopback
+  binds) — the session advertises `_meshtastic._tcp` on `local.` with the `shortname`/`id`
+  TXT records real firmware publishes, so apps list it in network discovery (the Apple app
+  renders `RPLY_4331`) without manual IP entry. Best-effort backends in preference order:
+  the `zeroconf` package if installed, `dns-sd` (macOS), `avahi-publish-service` (Linux);
+  none present degrades to an actionable hint under `mdns` in `replay_status`, never a
+  session failure. Advertisement is registered after bind (so `port=0` auto-picks are
+  advertised correctly) and withdrawn on `replay_stop`.
+- **BBS/bot plane for the sim** (`sim_profile={"bots": {...}}`, off by default) — a
+  meshing-around-style scene: `count` auto-reply bots (ping→pong pile-ons with bot-to-bot
+  chain reactions, cmd/motd/wx/joke/games menus) egged on by attendee nodes, tapback
+  (emoji-reaction) storms threading real packet ids via `reply_id` — a power-law long tail
+  plus one legendary broadcast collecting `tapback_storm` (default 150) reactions, its body
+  carrying the word "tapback" so it's findable in an app search — per-bot advertisement
+  beacons, and attendee→bot traceroute request/response pairs. Emitted after the RF-observer
+  stage (bots sit at the venue core; the scene arrives intact) on an isolated child RNG.
+  `build.from_kind("text", ...)` accepts `reply_id` + `emoji` so `replay_inject` can fire a
+  tapback on demand.
+- **Replay `duration` pacing** (`replay_start(duration=…)`) — compress the whole (windowed)
+  capture into a fixed wall-clock span by deriving a steady rate of `packets / duration`
+  (e.g. `duration=150` replays an entire DEF CON capture in 2.5 minutes regardless of packet
+  count). Takes precedence over `rate`. `replay_status` now reports `target_rate` and the live
+  `achieved_rate`, so a stress run is self-verifying.
+
+### Fixed
+- **Traceroutes now surface in app traceroute logs** — the sim emitted only in-flight
+  traceroute *requests* (`request_id` 0), which apps ignore: their traceroute logs persist
+  only *responses* (nonzero `decoded.request_id`), so a whole capture streamed with an empty
+  traceroute log (found live against the Apple app). The sim now emits request → response
+  pairs, and `RouteDiscovery` payloads follow firmware semantics everywhere (sim + the live
+  traceroute responder): `route`/`route_back` carry intermediate relays only — endpoints are
+  implied by the packet from/to, so listing them drew duplicated hop lists — SNR lists carry
+  one entry per receiving hop (`len(route) + 1`, SNR×4), and responses set `hop_start > 0`
+  (apps gate route-back rendering on it). `build.from_kind("traceroute", ...)` accepts
+  `request_id` to craft responses; the traceroute block runs on an isolated child RNG so
+  future changes there can't reshuffle other sections' seeded draws.
+- **Replay survives mid-stream client disconnects** — the stream thread treated any send
+  failure as session-fatal (`stop.set()`), so an app closing or resetting the connection
+  mid-pass tore down the whole listener even with `loop=true` (found live: a real app
+  disconnect ended a stress session with `Connection reset by peer`). The stream now severs
+  only its own connection (a `shutdown()` that also unblocks the reader for the
+  stalled-but-connected send-timeout case); the accept loop keeps listening and a reconnect
+  handshakes and streams again. `achieved_rate` re-anchors per connection so reconnect gaps
+  don't dilute it.
+- **Replay pacing drift** — the stream loop slept a fixed `1/rate` per packet, so per-packet
+  protobuf work and OS wait-overshoot accumulated on top of every interval and the achieved
+  rate sagged ~15–25% below target (requesting 120 pkt/s delivered ~99 pkt/s; the gap widened
+  with rate). Pacing (both `rate` and `speed` modes) is now anchored to absolute deadlines, so
+  the requested rate is delivered exactly up to the raw send ceiling (thousands/sec).
+
 ## [0.1.0] — 2026-07-02 (first public release)
 
 ### Added

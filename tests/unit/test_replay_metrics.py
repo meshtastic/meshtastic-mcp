@@ -350,7 +350,7 @@ def test_text_spike_multiplies_hourly_budget():
 def test_scenario_presets_shape_the_mesh():
     from meshtastic_mcp.replay import sim as _sim
 
-    assert set(_sim.PRESETS) == {"meshcon", "burningman", "defcon"}
+    assert set(_sim.PRESETS) == {"meshcon", "burningman", "defcon", "conference-stress"}
     bm = _sim.generate(nodes=500, days=2, seed=7, start=1_700_000_000, profile="burningman")
     dc = _sim.generate(nodes=500, days=2, seed=7, start=1_700_000_000, profile="defcon")
     assert bm.label.startswith("burningman") and dc.label.startswith("defcon")

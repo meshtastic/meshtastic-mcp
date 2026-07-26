@@ -263,6 +263,7 @@ def packet(
     hop_limit: int = 3,
     want_ack: bool = False,
     rx_time: int | None = None,
+    request_id: int = 0,
 ) -> mesh_pb2.MeshPacket:
     mp = mesh_pb2.MeshPacket()
     setattr(mp, "from", from_node & 0xFFFFFFFF)
@@ -276,6 +277,11 @@ def packet(
         mp.want_ack = True
     mp.decoded.portnum = portnum
     mp.decoded.payload = payload
+    # nonzero marks this packet a *response* to that request id — apps gate on
+    # it (e.g. a traceroute with request_id 0 is an in-flight request and is
+    # not persisted to any log; only responses are).
+    if request_id:
+        mp.decoded.request_id = request_id & 0xFFFFFFFF
     return mp
 
 
@@ -302,10 +308,14 @@ def from_kind(
 
     kinds: ``waypoint`` (lat, lon, name, geofence_radius, bbox, notify_on_enter,
     notify_on_exit, notify_favorites_only, icon), ``position`` (lat, lon),
-    ``text`` (body), ``nodeinfo`` (id, long_name, short_name, hw_model, role),
+    ``text`` (body; pass reply_id + emoji=true for a tapback — an emoji
+    reaction on that message id), ``nodeinfo`` (id, long_name, short_name,
+    hw_model, role),
     ``beacon`` (message, offer_channel_name, offer_channel_psk_hex,
     offer_region, offer_preset), ``traceroute`` (route: [node_num, …],
-    snr_towards: [int, …], route_back: [node_num, …], snr_back: [int, …]),
+    snr_towards: [int, …], route_back: [node_num, …], snr_back: [int, …],
+    request_id — set nonzero to build a *response*; apps only log traceroute
+    responses, a request_id of 0 is an in-flight request they ignore),
     ``raw`` (portnum, payload_hex).
     """
     a = args or {}
@@ -327,13 +337,21 @@ def from_kind(
         pl = position_payload(a["lat"], a["lon"], altitude=a.get("altitude", 0))
         return packet(3, pl, from_node=from_node, to_node=to_node, channel_idx=channel_idx)
     if kind == "text":
-        return packet(
+        mp = packet(
             1,
             str(a.get("body", "")).encode("utf-8"),
             from_node=from_node,
             to_node=to_node,
             channel_idx=channel_idx,
         )
+        # tapback (emoji reaction): body is the emoji, reply_id targets the
+        # reacted-to message's packet id, and the emoji flag marks it a reaction
+        # rather than a normal reply.
+        if a.get("reply_id"):
+            mp.decoded.reply_id = int(a["reply_id"]) & 0xFFFFFFFF
+        if a.get("emoji"):
+            mp.decoded.emoji = 1
+        return mp
     if kind == "nodeinfo":
         pl = nodeinfo_payload(
             a.get("id", f"!{from_node:08x}"),
@@ -362,7 +380,14 @@ def from_kind(
             route_back=a.get("route_back"),
             snr_back=a.get("snr_back"),
         )
-        return packet(70, pl, from_node=from_node, to_node=to_node, channel_idx=channel_idx)
+        return packet(
+            70,
+            pl,
+            from_node=from_node,
+            to_node=to_node,
+            channel_idx=channel_idx,
+            request_id=int(a.get("request_id", 0)),
+        )
     if kind == "raw":
         return packet(
             int(a["portnum"]),

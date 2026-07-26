@@ -520,6 +520,169 @@ def test_replay_clock_and_observer_position_and_preset():
         sess.stop()
 
 
+@pytest.mark.timing
+def test_rate_is_accurately_paced():
+    """A requested steady `rate` must actually be delivered.
+
+    Regression for drift-prone pacing: the old loop slept a fixed `1/rate` each
+    packet, so the per-packet protobuf work + OS wait-overshoot were *added* on
+    top of every interval and the achieved rate sagged ~15-25% below target
+    (requesting 120/s yielded ~99/s). Deadline-anchored pacing absorbs that, so
+    the measured rate tracks the request closely. Tolerance is generous to stay
+    non-flaky on a loaded CI box; the pre-fix behavior missed the lower bound.
+    """
+    cap = sim.generate(nodes=60, days=1, seed=13, start=1_700_000_000)
+    target = 200.0
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession(
+        "paced",
+        cap,
+        ReplayParams(host="127.0.0.1", port=port, rate=target, node_delay=0, loop=True),
+    )
+    sess.start()
+    try:
+        deadline = time.time() + 5
+        client = None
+        while time.time() < deadline:
+            try:
+                client = socket.create_connection(("127.0.0.1", port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        assert client is not None
+        client.settimeout(10)
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+        # drain handshake, then skip the node-DB burst so we measure the stream
+        t0 = time.time()
+        while time.time() - t0 < 5 and not sess.state.connected:
+            _read_frame(client)
+        skip_until = time.time() + 0.4
+        while time.time() < skip_until:
+            _read_frame(client)
+        # measure achieved stream rate over a ~2s window
+        pkts = 0
+        start = time.time()
+        while time.time() - start < 2.0:
+            fr = _read_frame(client)
+            if fr.WhichOneof("payload_variant") == "packet":
+                pkts += 1
+        measured = pkts / (time.time() - start)
+        client.close()
+        assert 0.88 * target <= measured <= 1.15 * target, (
+            f"measured {measured:.1f}/s vs {target}/s"
+        )
+    finally:
+        sess.stop()
+
+
+def test_client_disconnect_mid_stream_survives_with_loop():
+    """A mid-stream client disconnect must not kill a `loop=True` session.
+
+    Regression: the stream thread treated any send failure as session-fatal
+    (`stop.set()`), so an app closing/reconnecting mid-pass tore down the whole
+    listener despite `loop=True` (found live: a real app disconnect ended the
+    session with 'Connection reset by peer'). Now the stream severs only its own
+    connection; the accept loop keeps listening and a reconnect streams again.
+    """
+
+    def _connect(port):
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                return socket.create_connection(("127.0.0.1", port), timeout=1)
+            except OSError:
+                time.sleep(0.05)
+        return None
+
+    def _handshake_and_get_packet(client):
+        client.settimeout(10)
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+        t0 = time.time()
+        while time.time() - t0 < 5:
+            fr = _read_frame(client)
+            if fr.WhichOneof("payload_variant") == "packet":
+                return True
+        return False
+
+    cap = sim.generate(nodes=20, days=1, seed=8, start=1_700_000_000)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession(
+        "reconnect",
+        cap,
+        ReplayParams(host="127.0.0.1", port=port, rate=300, node_delay=0, loop=True),
+    )
+    sess.start()
+    try:
+        first = _connect(port)
+        assert first is not None
+        assert _handshake_and_get_packet(first)  # stream is flowing
+        # hard-disconnect mid-stream (app closed / reset by peer)
+        first.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        first.close()
+        # the session must survive: not ended, stop not set
+        deadline = time.time() + 3
+        while time.time() < deadline and sess.state.connected:
+            time.sleep(0.05)
+        assert not sess.state.stop.is_set()
+        assert sess.state.ended is False
+        # and a reconnect must handshake + stream again
+        second = _connect(port)
+        assert second is not None, "listener gone after mid-stream disconnect"
+        assert _handshake_and_get_packet(second), "no stream after reconnect"
+        second.close()
+    finally:
+        sess.stop()
+
+
+def test_duration_derives_steady_rate():
+    """`duration` compresses the whole windowed capture into a fixed wall-clock
+    span by deriving a steady rate of `len(window) / duration`, overriding any
+    `rate`. Status must surface the duration mode + target/achieved rate.
+    """
+    cap = sim.generate(nodes=40, days=1, seed=17, start=1_700_000_000)
+    n = len(cap.packets)
+    assert n > 0
+    sess = ReplaySession(
+        "dur",
+        cap,
+        # duration wins over the (contradictory) rate below
+        ReplayParams(host="127.0.0.1", port=0, rate=999.0, duration=30.0, node_delay=0),
+    )
+    assert sess.params.rate == pytest.approx(n / 30.0)
+    from meshtastic_mcp.replay.engine import _status_dict
+
+    st = _status_dict(sess)
+    assert st["target_rate"] == pytest.approx(round(n / 30.0, 2))
+    assert "duration 30.0s" in st["mode"]
+
+
+def test_duration_nonpositive_is_rejected():
+    """`duration <= 0` is a boundary error, not a silent fall-through to 1x."""
+    cap = sim.generate(nodes=10, days=1, seed=1, start=1_700_000_000)
+    for bad in (0, -5.0):
+        with pytest.raises(ValueError, match="duration"):
+            ReplaySession("bad", cap, ReplayParams(host="127.0.0.1", port=0, duration=bad))
+
+
+def test_session_does_not_mutate_caller_params():
+    """Constructing a session must not mutate the caller's ReplayParams (it owns
+    a private copy — it derives rate from duration and rewrites port on bind).
+    """
+    cap = sim.generate(nodes=10, days=1, seed=1, start=1_700_000_000)
+    params = ReplayParams(host="127.0.0.1", port=0, duration=30.0, node_delay=0)
+    ReplaySession("copy", cap, params)
+    assert params.rate is None  # derivation happened on the session's copy
+    assert params.duration == 30.0
+
+
 def test_status_includes_connect_hint():
     from meshtastic_mcp.replay import get_manager
 
@@ -957,6 +1120,301 @@ def test_from_kind_waypoint_wires_description():
     assert w.description == "geofenced POI"
 
 
+def test_sim_traceroutes_are_request_response_pairs():
+    """The sim must emit traceroute *responses*, not just in-flight requests.
+
+    Apps only surface traceroute responses — their logs gate on a nonzero
+    `decoded.request_id` (a zero id is an in-flight request they ignore). A
+    capture of request-style-only traceroutes therefore renders an empty
+    traceroute log (found live streaming to the Apple app). Responses must
+    reference a real request id and follow firmware RouteDiscovery semantics:
+    intermediate relays only in route (endpoints implied by from/to), SNR lists
+    one-per-receiving-hop (len == len(route) + 1), mirrored route_back.
+    """
+    cap = sim.generate(nodes=60, days=2, seed=7, start=1_700_000_000)
+    requests: dict[int, mesh_pb2.MeshPacket] = {}
+    responses = []
+    for _ts, raw, _ch in cap.packets:
+        mp = mesh_pb2.MeshPacket()
+        mp.ParseFromString(raw)
+        if mp.decoded.portnum != 70:
+            continue
+        if mp.decoded.request_id:
+            responses.append(mp)
+        else:
+            requests[mp.id] = mp
+    assert requests, "no traceroute requests in the sim"
+    assert responses, "no traceroute responses in the sim (apps would log nothing)"
+    for resp in responses:
+        req = requests.get(resp.decoded.request_id)
+        assert req is not None, "response references a request id that was never emitted"
+        # response flows dest -> requester
+        assert getattr(resp, "from") == req.to
+        assert resp.to == getattr(req, "from")
+        assert resp.hop_start > 0  # apps gate route-back rendering on this
+        rd = mesh_pb2.RouteDiscovery()
+        rd.ParseFromString(resp.decoded.payload)
+        assert getattr(req, "from") not in rd.route  # endpoints implied, not listed
+        assert req.to not in rd.route
+        assert len(rd.snr_towards) == len(rd.route) + 1
+        assert len(rd.snr_back) == len(rd.route_back) + 1
+        assert list(rd.route_back) == list(reversed(rd.route))
+    # requests are want_response probes with an empty RouteDiscovery
+    for req in requests.values():
+        assert req.decoded.want_response is True
+
+
+# ── BBS/bot plane (PROFILE["bots"], opt-in) ─────────────────────────────────
+def test_sim_bots_off_by_default():
+    """Presets stay calibrated: no bot nodes, no tapbacks unless opted in."""
+    cap = sim.generate(nodes=40, days=1, seed=9, start=1_700_000_000)
+    bot_names = {ln for ln, _sn, _hw in sim._BOT_IDENTITIES}
+    assert not any(n.long_name in bot_names for n in cap.nodes)
+    mp = mesh_pb2.MeshPacket()
+    for _ts, raw, _ch in cap.packets:
+        mp.Clear()
+        mp.ParseFromString(raw)
+        assert not (mp.decoded.portnum == 1 and mp.decoded.emoji)
+
+
+def test_sim_bot_nums_never_collide_with_attendees():
+    """Bot node nums must sit outside the attendee draw range (0x10000000..
+    0xEFFFFFFF) so a bot never merges with a generated attendee in the node DB.
+    """
+    prof = {"bots": {"count": 17, "storms_per_day": 5, "tapback_storm": 5}}
+    cap = sim.generate(nodes=200, days=1, seed=4, start=1_700_000_000, profile=prof)
+    bot_names = {ln for ln, _sn, _hw in sim._BOT_IDENTITIES}
+    bot_nums = {n.num for n in cap.nodes if n.long_name in bot_names}
+    attendee_nums = {n.num for n in cap.nodes if n.long_name not in bot_names}
+    assert len(bot_nums) == 17
+    assert bot_nums.isdisjoint(attendee_nums)
+    assert all(n > 0xEFFFFFFF for n in bot_nums)  # above the attendee range
+    assert all(n < 0xFFFFFFFF for n in bot_nums)  # below broadcast
+
+
+def test_sim_bots_scene():
+    """`profile={"bots": {...}}` emits the full BBS scene: bot nodes in the DB,
+    trigger/pile-on text storms, tapbacks threading real packet ids (one
+    legendary message collecting `tapback_storm` reactions, its body carrying
+    the word "tapback" so it's findable in an app search), per-bot beacons, and
+    attendee→bot traceroute response pairs — deterministic per seed.
+    """
+    prof = {"bots": {"count": 5, "storms_per_day": 40, "tapback_storm": 30}}
+    cap = sim.generate(nodes=60, days=1, seed=9, start=1_700_000_000, profile=prof)
+    base = sim.generate(nodes=60, days=1, seed=9, start=1_700_000_000)
+    assert len(cap.nodes) == len(base.nodes) + 5
+    bot_nums = {
+        n.num for n in cap.nodes if n.long_name in {ln for ln, _sn, _hw in sim._BOT_IDENTITIES}
+    }
+    assert len(bot_nums) == 5
+
+    mp = mesh_pb2.MeshPacket()
+    all_ids: set[int] = set()
+    reactions: Counter = Counter()
+    legendary_id = None
+    bot_texts = bot_beacons = bot_tr_responses = 0
+    for _ts, raw, _ch in cap.packets:
+        mp.Clear()
+        mp.ParseFromString(raw)
+        all_ids.add(mp.id)
+        frm = getattr(mp, "from")
+        if mp.decoded.portnum == 1:
+            if mp.decoded.emoji:
+                assert mp.decoded.reply_id != 0  # a tapback always threads a message
+                reactions[mp.decoded.reply_id] += 1
+            else:
+                if "tapback" in mp.decoded.payload.decode("utf-8", "replace"):
+                    legendary_id = mp.id
+                if frm in bot_nums:
+                    bot_texts += 1
+        elif mp.decoded.portnum == 37 and frm in bot_nums:
+            bot_beacons += 1
+        elif mp.decoded.portnum == 70 and mp.decoded.request_id and frm in bot_nums:
+            bot_tr_responses += 1
+
+    assert bot_texts > 0  # bots piled on triggers
+    assert bot_beacons > 0  # bots advertise themselves
+    assert bot_tr_responses > 0  # attendees traced the bots, bots answered
+    assert sum(reactions.values()) > 0
+    assert all(rid in all_ids for rid in reactions)  # every tapback threads a real packet
+    assert legendary_id is not None, 'no searchable "tapback" message emitted'
+    assert reactions[legendary_id] == 30  # the legendary storm hits tapback_storm exactly
+    ts = [p[0] for p in cap.packets]
+    assert ts == sorted(ts)  # merged scene stays time-ordered
+    cap2 = sim.generate(nodes=60, days=1, seed=9, start=1_700_000_000, profile=prof)
+    assert [p[0] for p in cap2.packets] == ts  # deterministic per seed
+
+
+def test_from_kind_text_tapback():
+    from meshtastic_mcp.replay import build
+
+    mp = build.from_kind("text", {"body": "👍", "reply_id": 0xBEEF, "emoji": True}, from_node=1)
+    assert mp.decoded.portnum == 1
+    assert mp.decoded.reply_id == 0xBEEF
+    assert mp.decoded.emoji == 1
+    plain = build.from_kind("text", {"body": "hi"}, from_node=1)
+    assert plain.decoded.reply_id == 0 and plain.decoded.emoji == 0
+
+
+def test_from_kind_traceroute_request_id_builds_response():
+    from meshtastic_mcp.replay import build
+
+    mp = build.from_kind(
+        "traceroute",
+        {"route": [0x2222], "snr_towards": [10, 20], "request_id": 0xAB12},
+        from_node=0x3333,
+        to_node=0x1111,
+    )
+    assert mp.decoded.request_id == 0xAB12
+    # default stays a request (0 = unset on the wire)
+    mp2 = build.from_kind("traceroute", {"route": []}, from_node=1, to_node=2)
+    assert mp2.decoded.request_id == 0
+
+
+# ── conference-stress preset + replay CLI ───────────────────────────────────
+PROFILE_DEFAULT_TELEMETRY = 1800  # firmware-default cadence in the base PROFILE
+
+
+def test_conference_stress_preset_bundles_the_scene():
+    """`conference-stress` = the dense-convention scenario at gateway-observed
+    density with the BBS/bot plane on by default — the one-preset stress run.
+    """
+    prof = sim.preset_profile("conference-stress")
+    assert prof["label_prefix"] == "conference-stress"
+    assert prof["bots"]["count"] == 17
+    assert prof["telemetry_interval"] > PROFILE_DEFAULT_TELEMETRY  # throttled cadences
+    cap = sim.generate(nodes=50, days=1, seed=3, start=1_700_000_000, profile=prof)
+    mp = mesh_pb2.MeshPacket()
+    tapbacks = 0
+    for _ts, raw, _ch in cap.packets:
+        mp.Clear()
+        mp.ParseFromString(raw)
+        if mp.decoded.portnum == 1 and mp.decoded.emoji:
+            tapbacks += 1
+    assert len(cap.nodes) == 50 + 17  # attendees + the bot herd
+    assert tapbacks > 0
+
+
+def test_cli_replay_builds_session_from_args():
+    """`meshtastic-mcp replay` resolves args into a ReplaySession without
+    touching the network until start(): preset source, pacing, mdns opt-out.
+    """
+    import argparse
+
+    from meshtastic_mcp.__main__ import _build_replay_session
+
+    args = argparse.Namespace(
+        source="conference-stress",
+        host="127.0.0.1",
+        port=0,
+        rate=140.0,
+        duration=None,
+        speed=1.0,
+        loop=True,
+        nodes=30,
+        days=1,
+        seed=3,
+        profile='{"bots": {"count": 2}}',
+        fuzz=None,
+        edition="DEFCON",
+        announce_interval=0.0,
+        node_delay=0.0,
+        no_mdns=True,
+        status_interval=30.0,
+    )
+    sess = _build_replay_session(args)
+    assert sess.params.rate == 140.0
+    assert sess.params.loop is True
+    assert sess.params.mdns is False  # --no-mdns
+    assert sess.params.firmware_edition == "DEFCON"
+    assert len(sess.capture.nodes) == 30 + 2  # --profile override beat the preset
+    assert sess.state.ended is False
+
+
+# ── mDNS/Bonjour advertisement ──────────────────────────────────────────────
+def test_mdns_argv_builders_match_firmware_service():
+    """The advertisement must match what apps browse for: `_meshtastic._tcp`
+    with `shortname`/`id` TXT records (the Apple app renders shortname_<id[-4:]>).
+    """
+    from meshtastic_mcp.replay import mdns
+
+    txt = mdns.txt_records("RPLY", "!42524331")
+    assert txt == {"shortname": "RPLY", "id": "!42524331"}
+    argv = mdns.dnssd_argv("Meshtastic Replay x", 4403, txt)
+    assert argv[:2] == ["dns-sd", "-R"]
+    assert "_meshtastic._tcp" in argv and "4403" in argv
+    assert "shortname=RPLY" in argv and "id=!42524331" in argv
+    argv = mdns.avahi_argv("Meshtastic Replay x", 4403, txt)
+    assert argv[0] == "avahi-publish-service"
+    assert "_meshtastic._tcp" in argv and "4403" in argv and "id=!42524331" in argv
+
+
+def test_mdns_no_backend_degrades_to_hint(monkeypatch):
+    """A missing backend must degrade to an actionable hint, never a failure."""
+    from meshtastic_mcp.replay import mdns
+
+    monkeypatch.setattr(mdns.Advertiser, "_try_zeroconf", lambda self: False)
+    monkeypatch.setattr(mdns.shutil, "which", lambda _cmd: None)
+    adv = mdns.Advertiser("Replay a.b", 4403, mdns.txt_records("RPLY", "!42524331")).start()
+    assert adv.instance == "Replay a-b"  # dots read as label separators
+    assert adv.backend is None
+    st = adv.status()
+    assert st["advertised"] is False
+    assert "zeroconf" in st["error"]  # the hint names an install path
+    adv.stop()  # must be safe when nothing started
+
+
+def test_session_mdns_gating_and_lifecycle(monkeypatch):
+    """Auto mode skips loopback-only binds; explicit mdns=True advertises after
+    bind (real port, firmware TXT identity) and withdraws on stop().
+    """
+    from meshtastic_mcp.replay import engine as _engine
+
+    events: list[tuple[str, object]] = []
+
+    class FakeAdvertiser:
+        def __init__(self, instance, port, txt):
+            self.instance, self.port, self.txt = instance, port, txt
+
+        def start(self):
+            events.append(("start", self))
+            return self
+
+        def stop(self):
+            events.append(("stop", self))
+
+        def status(self):
+            return {"advertised": True, "backend": "fake"}
+
+    monkeypatch.setattr(_engine._mdns, "Advertiser", FakeAdvertiser)
+    cap = sim.generate(nodes=5, days=1, seed=1, start=1_700_000_000)
+
+    # loopback bind + auto -> no advertisement
+    sess = ReplaySession("no-ad", cap, ReplayParams(host="127.0.0.1", port=0, node_delay=0))
+    sess.start()
+    try:
+        assert not events
+    finally:
+        sess.stop()
+
+    # loopback bind + explicit mdns=True -> advertised with the bound port
+    sess = ReplaySession("ad", cap, ReplayParams(host="127.0.0.1", port=0, node_delay=0, mdns=True))
+    sess.start()
+    try:
+        assert events and events[0][0] == "start"
+        adv = events[0][1]
+        assert adv.port == sess.params.port and sess.params.port != 0  # post-bind port
+        assert adv.txt == {"shortname": "RPLY", "id": "!42524331"}
+        assert cap.label in adv.instance
+        assert sess.state.id == "ad"
+        from meshtastic_mcp.replay.engine import _status_dict
+
+        assert _status_dict(sess)["mdns"] == {"advertised": True, "backend": "fake"}
+    finally:
+        sess.stop()
+    assert events[-1][0] == "stop"
+
+
 # ── Traceroute responder ──────────────────────────────────────────────────────
 
 
@@ -1059,11 +1517,20 @@ def test_traceroute_responder_replies_to_client_request():
             "no RouteDiscovery response from the replay traceroute responder"
         )
         assert response.decoded.request_id == 0x1234ABCD
+        assert getattr(response, "from") == dest_num & 0xFFFFFFFF  # responder = traced node
         rd_resp = mesh_pb2.RouteDiscovery()
         rd_resp.ParseFromString(response.decoded.payload)
-        # route must include at least the origin and destination
-        assert len(rd_resp.route) >= 2
-        assert len(rd_resp.snr_towards) >= 1
+        # Firmware RouteDiscovery semantics: route lists *intermediate* hops only
+        # — the requester and destination are implied by the packet from/to and
+        # must not appear (apps add the endpoints when rendering). SNR lists have
+        # one entry per receiving hop including the endpoint: len(route) + 1.
+        assert 0x42524331 not in rd_resp.route  # OBSERVER_NUM (requester)
+        assert dest_num & 0xFFFFFFFF not in rd_resp.route
+        assert len(rd_resp.snr_towards) == len(rd_resp.route) + 1
+        assert len(rd_resp.snr_back) == len(rd_resp.route_back) + 1
+        assert list(rd_resp.route_back) == list(reversed(rd_resp.route))
+        # apps gate the "route back" rendering on a nonzero hop_start
+        assert response.hop_start > 0
     finally:
         sess.stop()
 

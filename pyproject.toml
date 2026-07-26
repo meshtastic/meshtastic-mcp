@@ -132,6 +132,7 @@ packages = ["src/meshtastic_mcp"]
 testpaths = ["tests"]
 markers = [
   "firmware: needs a Meshtastic firmware checkout (variants/pio/userprefs); auto-skipped without MESHTASTIC_FIRMWARE_ROOT",
+  "timing: asserts on wall-clock rate/latency; may flake on a contended runner — deselect with -m 'not timing'",
 ]
 
 [tool.ruff]
