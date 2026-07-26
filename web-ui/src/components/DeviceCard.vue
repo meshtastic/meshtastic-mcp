@@ -74,6 +74,18 @@ async function saveName() {
   await devices.setFriendlyName(props.device.serial_number, nameDraft.value);
 }
 
+// Forget an offline (swapped-out / decommissioned) device. Guarded by the
+// backend to offline devices; the button only shows when offline anyway.
+async function forget() {
+  const label = props.device.friendly_name || props.device.serial_number;
+  if (
+    confirm(
+      `Forget "${label}"?\n\nRemoves it from the fleet along with its flash and test history. It will reappear if reconnected.`,
+    )
+  )
+    await devices.forget(props.device.serial_number);
+}
+
 async function onAssign(e: Event) {
   const val = (e.target as HTMLSelectElement).value;
   // find camera currently assigned and reassign; here we assign the picked
@@ -220,6 +232,27 @@ async function onAssign(e: Event) {
             <polyline points="1 20 1 14 7 14" />
             <path
               d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"
+            />
+          </svg>
+        </button>
+        <button
+          v-if="!device.online"
+          @click="forget"
+          class="p-1 rounded text-slate-500 hover:text-rose-400 transition hover:bg-slate-800"
+          title="forget this device — remove it from the fleet (offline only)"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            class="w-4 h-4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="3 6 5 6 21 6" />
+            <path
+              d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
             />
           </svg>
         </button>

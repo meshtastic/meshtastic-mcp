@@ -209,6 +209,37 @@ class BuildOrchestrator:
                 self._inflight[key] = asyncio.create_task(self._run_build(bid, env, sha, key))
         return results
 
+    async def wait(self, envs: list[str], *, sha: str, timeout_s: float = 3600.0) -> list[dict]:
+        """Block until every ``(env, sha)`` build has settled and return the
+        final ledger rows (status success/failed/cached). Builds started by
+        anyone count — the wait is on the ledger key, not on who enqueued.
+        On timeout the still-unsettled envs are returned as synthetic
+        ``{"status": "timeout"}`` rows; nothing is cancelled."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        # First, drain any inflight tasks we own for these keys.
+        for env in envs:
+            task = self._inflight.get(f"{env}@{sha}")
+            if task is not None and not task.done():
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=remaining)
+                except Exception:
+                    pass  # outcome (incl. failure) is read from the ledger below
+        out: list[dict] = []
+        for env in envs:
+            row = await rb.get(self.db, env, sha)
+            while row is not None and row["status"] in ("queued", "building"):
+                if loop.time() >= deadline:
+                    row = None
+                    break
+                await asyncio.sleep(2.0)
+                row = await rb.get(self.db, env, sha)
+            out.append(row or {"env": env, "fw_sha": sha, "status": "timeout"})
+        return out
+
     async def _run_build(self, build_id: int, env: str, sha: str, key: str) -> None:
         loop = asyncio.get_running_loop()
         row = await rb.set_status(self.db, build_id, status="building")

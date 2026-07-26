@@ -6,7 +6,9 @@
 A device is keyed by its USB serial number so its row (and everything attached
 to it — friendly name, camera, pinned env, flash/test history) *follows* it
 across ports and reboots. Discovery never deletes rows; it only flips ``online``
-so a unplugged device greys out instead of vanishing.
+so a unplugged device greys out instead of vanishing. The sole removal path is an
+operator-initiated ``delete`` (forget) — used to drop a decommissioned or
+swapped-out board and everything attached to it.
 """
 
 from __future__ import annotations
@@ -205,6 +207,28 @@ async def record_flashed(db: Database, serial: str, *, branch: str | None, sha: 
         "WHERE serial_number=?",
         (branch, sha, time.time(), serial),
     )
+
+
+async def delete(db: Database, serial: str) -> bool:
+    """Operator *forget*: drop a device row and everything attached to it. The
+    registry is otherwise append-only (discovery only greys rows), so this is
+    the one path that removes one — for a decommissioned or swapped-out board.
+
+    Flash + test history keyed on the serial is deleted (nothing enforces those
+    FKs, and a reused serial must not inherit a dead board's history); an
+    assigned camera is *unassigned*, not deleted — it's bench hardware that
+    outlives the node it pointed at. Returns True if a row was removed, False if
+    the serial was unknown. Idempotent."""
+    if await get(db, serial) is None:
+        return False
+    await db.execute("DELETE FROM flash_events WHERE device_serial=?", (serial,))
+    await db.execute("DELETE FROM results WHERE device_serial=?", (serial,))
+    await db.execute(
+        "UPDATE cameras SET device_serial=NULL, assigned_at=NULL WHERE device_serial=?",
+        (serial,),
+    )
+    await db.execute("DELETE FROM devices WHERE serial_number=?", (serial,))
+    return True
 
 
 async def mark_offline_except(db: Database, keep: set[str]) -> list[str]:

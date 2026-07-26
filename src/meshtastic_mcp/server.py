@@ -42,6 +42,9 @@ from . import (
 from . import (
     inject as inject_mod,
 )
+from . import (
+    pa_sweep as pa_sweep_mod,
+)
 from . import sdk_cli as sdk_cli_mod
 from . import userprefs as userprefs_mod
 from .recorder import get_recorder
@@ -1288,6 +1291,97 @@ def config_diff(name_a: str, name_b: str | None = None, port: str | None = None)
     return config_snapshot_mod.diff(name_a, name_b, port=port)
 
 
+def _confirm_tx(
+    packet_id: int | None,
+    port: str | None,
+    tx_timeout_s: float,
+) -> tuple[bool | None, float | None, str | None]:
+    """Poll for evidence that `packet_id` actually reached the air.
+
+    Returns `(confirmed, latency_s, reason)` where `confirmed` is:
+      * `True`  — positive evidence of transmission,
+      * `False` — an evidence channel was working and showed no transmission,
+      * `None`  — no evidence channel available, so we genuinely cannot tell.
+
+    The `None` case matters. A node cannot observe its own transmission through
+    the receive path. The firmware *does* echo the packet back, but it omits the
+    now-redundant `from` field on that echo, and
+    `MeshInterface._handlePacketFromRadio` treats a missing `from` as "Device
+    returned a packet we sent, ignoring" and returns before publishing any pubsub
+    event (`mesh_interface.py`). So it never reaches `meshtastic.receive`, and so
+    never reaches the recorder's packet stream. Reporting that absence as `False`
+    claimed failure for messages that were verifiably delivered.
+
+    `rf_oracle.confirm_tx` documents the same constraint from the RF side, and
+    its `firmware_self_reported_tx` field carries the identical caveat — it is a
+    known, documented limitation there, not a bug.
+
+    Two things do constitute evidence:
+
+    1. The firmware's own log line ``Started Tx (id=0x…)``, captured when
+       `set_debug_log_api(True)` is on (or a `serial_session` is tapping the
+       port). Deliberately NOT ``enqueue for send`` — a packet can be enqueued
+       and then killed before airtime, which is exactly the bug PR #18 fixed,
+       so matching the enqueue line would restore a false positive.
+    2. A neighbour rebroadcasting our packet, which arrives back on the receive
+       path carrying the same id. Real proof it reached the air, and it works
+       even with no log capture.
+    """
+    if packet_id is None:
+        return None, None, "no packet id was returned for this send, so nothing to match against"
+
+    # Firmware prints the id as lowercase, zero-padded 32-bit hex. Push this at
+    # `logs_window` as its `grep` rather than filtering the results ourselves:
+    # grep is applied *before* the max_lines cap, so the one line we need can
+    # never be truncated away by an unrelated burst of firmware chatter. That is
+    # not hypothetical — an unfiltered 2 min window on real hardware measured
+    # total_matched=455 / dropped=395.
+    tx_pattern = rf"Started Tx \(id=0x{packet_id:08x}\b"
+    t0 = time.monotonic()
+    deadline = t0 + tx_timeout_s
+    saw_any_log = False
+    packets_truncated = False
+
+    while True:
+        hits = log_query.logs_window(start="-2m", port=port, grep=tx_pattern, max_lines=20)
+        if hits.get("lines"):
+            return True, round(time.monotonic() - t0, 2), None
+
+        # Separate existence probe: "is any log flowing for this port at all?"
+        # Only ever asks for one line, so the cap is irrelevant here too.
+        if not saw_any_log:
+            probe = log_query.logs_window(start="-2m", port=port, max_lines=1)
+            if probe.get("lines") or probe.get("total_matched"):
+                saw_any_log = True
+
+        # A neighbour's rebroadcast comes back with our id. `packets_window` has
+        # no grep, so honour `dropped` instead of silently trusting a capped list.
+        packets = log_query.packets_window(start="-2m", max=200)
+        for pkt in packets.get("packets", []):
+            if pkt.get("id") == packet_id:
+                return True, round(time.monotonic() - t0, 2), None
+        if packets.get("dropped", 0) > 0:
+            packets_truncated = True
+
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
+
+    if not saw_any_log:
+        reason = (
+            "no firmware log lines were captured for this port, so transmission "
+            "could not be observed — enable set_debug_log_api(True) (or hold a "
+            "serial_session) to make tx_confirmed meaningful"
+        )
+        if packets_truncated:
+            reason += (
+                "; the packet window was also truncated (dropped>0), so a "
+                "rebroadcast may have been missed — narrow the window and retry"
+            )
+        return None, None, reason
+    return False, None, "firmware logs were captured but showed no 'Started Tx' for this packet"
+
+
 @app.tool()
 def send_text(
     text: str,
@@ -1297,6 +1391,7 @@ def send_text(
     port: str | None = None,
     wait_for_tx: bool = False,
     tx_timeout_s: float = 30.0,
+    tx_linger_s: float = 8.0,
 ) -> dict[str, Any]:
     """Send a text message over the mesh.
 
@@ -1304,43 +1399,45 @@ def send_text(
     "!abcdef01") or node number (int) to direct-message a specific node.
     channel_index picks which configured channel to send on.
 
+    `tx_linger_s` delays the connection close after sendText() returns, allowing
+    the firmware's channel-politeness TX delay (~4s) and RF airtime to complete
+    before the serial port resets. Prevents loss of queued broadcasts.
+
     Delivery is async and best-effort. By default this returns as soon as the
-    packet is queued. Set `wait_for_tx=True` to additionally poll the recorder
-    (up to `tx_timeout_s`) for the matching TEXT_MESSAGE_APP packet on the wire
-    — collapsing the usual send + `packets_window` confirmation dance into one
-    call.
+    packet is queued. Set `wait_for_tx=True` to additionally poll (up to
+    `tx_timeout_s`) for evidence the radio actually transmitted: the firmware's
+    `Started Tx (id=…)` log line, or a neighbour rebroadcasting the packet.
+
+    `tx_confirmed` is three-valued. `true` means transmission was observed;
+    `false` means logs were flowing and showed no transmission; **`null` means
+    it could not be observed at all** — most often because firmware logs are not
+    being captured. Call `set_debug_log_api(True)` on the port (or hold a
+    `serial_session`) to make confirmation meaningful; without it, `null` is the
+    expected answer and does NOT mean the message failed. `tx_unconfirmed_reason`
+    explains which case you got.
 
     Returns:
         {ok: true, packet_id: int | null, destination: str}
         plus when wait_for_tx=True:
-        {tx_confirmed: bool, tx_latency_s: float | null}
+        {tx_confirmed: bool | null, tx_latency_s: float | null,
+         tx_unconfirmed_reason?: str}
     """
     result = admin.send_text(
-        text=text, to=to, channel_index=channel_index, want_ack=want_ack, port=port
+        text=text,
+        to=to,
+        channel_index=channel_index,
+        want_ack=want_ack,
+        port=port,
+        tx_linger_s=tx_linger_s,
     )
     if not wait_for_tx:
         return result
 
-    packet_id = result.get("packet_id")
-    t0 = time.monotonic()
-    deadline = t0 + tx_timeout_s
-    confirmed = False
-    while time.monotonic() < deadline:
-        window = log_query.packets_window(start="-1m", portnum="TEXT_MESSAGE_APP", max=50)
-        for pkt in window.get("packets", []):
-            # Match by packet id when we have one; else fall back to any recent TX.
-            if packet_id is not None and pkt.get("id") == packet_id:
-                confirmed = True
-                break
-            if packet_id is None and pkt.get("portnum") == "TEXT_MESSAGE_APP":
-                confirmed = True
-                break
-        if confirmed:
-            break
-        time.sleep(1.0)
-
+    confirmed, latency_s, reason = _confirm_tx(result.get("packet_id"), port, tx_timeout_s)
     result["tx_confirmed"] = confirmed
-    result["tx_latency_s"] = round(time.monotonic() - t0, 2) if confirmed else None
+    result["tx_latency_s"] = latency_s
+    if reason is not None:
+        result["tx_unconfirmed_reason"] = reason
     return result
 
 
@@ -1523,6 +1620,138 @@ def rf_confirm_tx(
         gain=gain,
         device_index=device_index,
         tx_confirm_lookback_s=tx_confirm_lookback_s,
+    )
+
+
+# ---------- PA calibration bench (ImmersionRC RF Power Meter v2) ------------
+
+
+@app.tool()
+def pa_meter_status(meter_port: str | None = None) -> dict[str, Any]:
+    """Detect the ImmersionRC RF Power Meter and report a live reading — the
+    bench-instrument equivalent of `recorder_status`. Read-only; no Meshtastic
+    device involved.
+
+    Use it to confirm the meter is connected and awake before a `pa_sweep`
+    (it auto-powers-off on a battery timeout and vanishes from USB), and to see
+    the current noise floor / any signal it's presently reading.
+
+    Returns:
+        {present: bool, port, version, stored_freq_mhz, current_avg_dbm,
+         current_peak_dbm}  — or {present: false, detail} when none is attached.
+    """
+    return pa_sweep_mod.status(meter_port=meter_port)
+
+
+@app.tool()
+def pa_measure(
+    band: str,
+    samples: int = 20,
+    interval_s: float = 0.05,
+    attenuator_db: float = 0.0,
+    meter_port: str | None = None,
+    peak: bool = False,
+) -> dict[str, Any]:
+    """Passively read the power the meter currently sees at `band` — no Meshtastic
+    device driven. Activates the band's calibration curve, takes `samples`
+    readings, returns min/mean/max in dBm (corrected for `attenuator_db`, the pad
+    between the source and the meter).
+
+    `band` accepts a Meshtastic region name (`"US"`, `"EU_868"`, `"EU_433"`,
+    `"JP"`, ...) or a bare MHz value (`"868"`); it snaps to the meter's nearest
+    stored calibration point. Use it to read the noise floor, verify a signal
+    generator, or spot-check a TX something else is keying. Note `attenuator_db`
+    is added to every reading, so it inflates a noise-floor read by the pad value
+    — pass `attenuator_db=0` for the meter's raw floor. For a closed-loop node PA
+    sweep use `pa_sweep`.
+
+    Returns:
+        {band, requested_center_mhz, meter_cal_mhz, kind, attenuator_db, samples,
+         min_dbm, mean_dbm, max_dbm}
+    """
+    return pa_sweep_mod.measure(
+        band,
+        samples=samples,
+        interval_s=interval_s,
+        attenuator_db=attenuator_db,
+        meter_port=meter_port,
+        peak=peak,
+    )
+
+
+@app.tool()
+def pa_sweep(
+    powers: list[int],
+    band: str | None = None,
+    port: str | None = None,
+    meter_port: str | None = None,
+    channel_index: int = 0,
+    attenuator_db: float = 0.0,
+    burst_repeat: int = 3,
+    tx_linger_s: float | None = None,
+    settle_s: float = 1.5,
+    reboot_between_steps: bool = False,
+    override_duty_cycle: bool = True,
+    restore_config: bool = True,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Closed-loop PA calibration: step `lora.tx_power` through `powers` and
+    measure the actual power off the node's PA with the ImmersionRC meter,
+    producing a configured-vs-measured table and a compression/saturation
+    analysis. Requires confirm=True.
+
+    Destructive: for each step it writes `lora.tx_power` on the node, keys real
+    ~200 B broadcast bursts onto the mesh (an idle node rarely transmits), and
+    optionally reboots between steps (`reboot_between_steps=True` for pre-2.8.0
+    firmware that doesn't apply LoRa config live). It captures the meter's noise
+    floor first, then keeps only TX-active samples (floor + margin) per step.
+
+    `tx_linger_s` is how long each broadcast holds the port open so the firmware's
+    ~4 s politeness delay + airtime finish before close drops the TX; it is paid
+    per burst per step and dominates wall-clock. Leave it `None` (default) to
+    **auto-derive** it from the node's live preset time-on-air — a fast preset
+    gets a short linger, LONG_SLOW gets a long enough one, no clipping and no
+    tuning. Pass a number to override. The value used is echoed as `tx_linger_s`
+    in the result.
+
+    Instrument safety: pick `attenuator_db` so the highest configured power minus
+    the pad stays under the meter's +31 dBm absolute max — the sweep refuses to
+    run otherwise. `band` defaults to the node's configured region (a Meshtastic
+    region name like `"US"` / `"EU_868"`, or a bare MHz value). On EU_868 the
+    duty-cycle limit is overridden for the run and restored after (with
+    `override_duty_cycle=True`, the default). The original `tx_power` and
+    duty-cycle override are restored on exit unless `restore_config=False`; each
+    restore is independent, and any that fails (e.g. the port was busy) is
+    reported in `restore_errors` instead of silently leaving state changed.
+
+    A step with no TX-active sample (see `silent_steps_dbm`) can be a dead PA —
+    but under airtime pressure a queued packet can also transmit after the
+    sampling window closes, so re-run spaced out before concluding a step is
+    truly silent. Uncalibrated bench check (~±0.5 dB + hand-entered pad), not a
+    certified measurement.
+
+    Returns:
+        {band, region, requested_center_mhz, meter_cal_mhz, attenuator_db,
+         tx_linger_s, floor_dbm, floor_margin_db, table: [{configured_dbm, measured_avg_dbm,
+         measured_peak_dbm, delta_db, active_samples, total_samples, rf_observed}],
+         curve: {points, saturation_dbm, max_measured_dbm,
+         max_measured_at_configured_dbm, offset_at_min_db, monotonic},
+         silent_steps_dbm, config_restored, restore_errors, caveat}
+    """
+    return pa_sweep_mod.sweep(
+        powers,
+        band=band,
+        port=port,
+        meter_port=meter_port,
+        channel_index=channel_index,
+        attenuator_db=attenuator_db,
+        burst_repeat=burst_repeat,
+        tx_linger_s=tx_linger_s,
+        settle_s=settle_s,
+        reboot_between_steps=reboot_between_steps,
+        override_duty_cycle=override_duty_cycle,
+        restore_config=restore_config,
+        confirm=confirm,
     )
 
 
@@ -2544,6 +2773,7 @@ _READ_ONLY = {
     "triage_window",  # reads device window (+optional screenshot); no mutation
     "local_model_status",  # reports backend/reachability; no mutation
     "rf_scan",  # passive SDR capture; no device/host mutation
+    "pa_meter_status",  # reads the power meter (version/stored freq/live dBm); no state change
     "sdk_status",  # reports SDK-CLI bridge availability; no mutation
     "sdk_device_info",  # reads device snapshot via the Kotlin SDK CLI; no mutation
     "sdk_list_nodes",  # reads the device node DB via the Kotlin SDK CLI; no mutation
@@ -2565,6 +2795,11 @@ _DESTRUCTIVE = {
     "send_text",  # injects a mesh packet; cannot be recalled
     "inject_frame",  # injects a forged frame into the RX pipeline; cannot be recalled
     "rf_confirm_tx",  # calls send_text internally; injects a mesh packet
+    # Selects the meter's active calibration curve (set_freq_mhz) — a transient,
+    # non-persisted instrument state change, so not read-only. Idempotent (same
+    # band -> same curve) and harmless to any DUT; the set_config-style pattern.
+    "pa_measure",
+    "pa_sweep",  # writes lora.tx_power, keys TX, may reboot the node
     "send_input_event",  # drives device button/GPIO; side-effect on hardware
     "reboot",
     "shutdown",
@@ -2610,6 +2845,7 @@ _IDEMPOTENT_WRITES = {
     "set_owner",
     "set_channel_url",
     "userprefs_set",
+    "pa_measure",  # re-selecting the same band leaves the meter in the same state
 }
 # Open-world: interacts with an external device, radio mesh, or host hardware.
 # Also includes tools whose OUTPUT may contain untrusted content sourced from
@@ -2656,6 +2892,11 @@ _OPEN_WORLD = {
     "picotool_load",
     "picotool_raw",
     "push_fake_nodedb",
+    # Talk to the external ImmersionRC power meter over USB; pa_sweep also drives
+    # the node's TX onto the mesh.
+    "pa_meter_status",
+    "pa_measure",
+    "pa_sweep",
     # Return user-authored content from remote mesh nodes — untrusted input
     # that can carry prompt-injection payloads (lethal-trifecta leg 2).
     "logs_window",
@@ -2685,6 +2926,9 @@ _TITLE_OVERRIDES: dict[str, str] = {
     "uhubctl_cycle": "USB Hub Port Cycle",
     "get_environment_doctor_report": "Environment Doctor Report",
     "get_active_capabilities": "Active Capabilities",
+    "pa_meter_status": "PA Meter Status",
+    "pa_measure": "PA Meter Measure",
+    "pa_sweep": "PA Power Sweep (Closed-Loop)",
 }
 
 

@@ -105,7 +105,13 @@ class ReceiveCollector:
 
         # pubsub uses weak refs by default — we stash a strong ref so the
         # handler doesn't disappear between subscribe and wait_for.
-        def handler(packet: dict, interface: Any) -> None:
+        #
+        # `interface` MUST be optional: pypubsub rejects a listener whose
+        # required arg is optional in the topic's message-data spec
+        # (ListenerMismatchError — hit on meshtastic.receive.telemetry, whose
+        # MDS carries `interface` as optional; every telemetry-tier test died
+        # at subscribe time on the bench).
+        def handler(packet: dict, interface: Any = None) -> None:
             with self._lock:
                 self._packets.append(packet)
 
@@ -118,7 +124,7 @@ class ReceiveCollector:
         # separate pio monitor session that would fight our port lock.
         if self._capture_logs:
 
-            def log_handler(line: str, interface: Any) -> None:
+            def log_handler(line: str, interface: Any = None) -> None:
                 with self._lock:
                     self._log_lines.append(line)
 

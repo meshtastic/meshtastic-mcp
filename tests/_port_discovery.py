@@ -75,12 +75,34 @@ def _role_location(role: str) -> str | None:
     return _bench.role_location(role)
 
 
+def _settled_openable(port: str, open_timeout_s: float) -> bool:
+    """True iff ``port`` opens EXCLUSIVELY twice across a short gap.
+
+    The signal that an nRF52 native-USB CDC has stopped re-enumerating. After a
+    VBUS cut the device can re-appear on a ``/dev/cu.*`` path that
+    ``list_devices`` reports but that immediately vanishes — a caller who opens
+    it a moment later gets ``could not open port ... No such file`` (the exact
+    run-32 ``esp32s3->t_echo`` failure). A bare presence check can't tell a
+    flapping path from a settled one; a successful exclusive open can, and
+    requiring two across a gap rejects a path that opens once then drops."""
+    from meshtastic_mcp import port_recovery
+
+    ok, _ = port_recovery.port_openable(port, exclusive=True, timeout=open_timeout_s)
+    if not ok:
+        return False
+    time.sleep(0.4)
+    ok, _ = port_recovery.port_openable(port, exclusive=True, timeout=open_timeout_s)
+    return ok
+
+
 def resolve_port_by_role(
     role: str,
     *,
     timeout_s: float = 30.0,
     poll_start: float = 0.5,
     poll_max: float = 5.0,
+    require_openable: bool = False,
+    open_timeout_s: float = 1.0,
 ) -> str:
     """Return the current ``/dev/cu.*`` path for ``role`` once one appears.
 
@@ -101,9 +123,17 @@ def resolve_port_by_role(
             2-12 s on a healthy lab hub.
         poll_start: initial poll interval in seconds. Default 0.5 s.
         poll_max: cap on poll interval after backoff. Default 5 s.
+        require_openable: when True, a matched path is only returned once it
+            opens exclusively (see :func:`_settled_openable`). A still-flapping
+            nRF52 re-enumeration is skipped and polling continues, so callers
+            that immediately open the port (``connect`` / ``SerialInterface``)
+            never receive a path that vanishes on open. Default False (bare
+            presence, back-compatible).
+        open_timeout_s: per-open timeout for the ``require_openable`` probe.
 
     Raises:
-        AssertionError: if no matching device appears within ``timeout_s``.
+        AssertionError: if no matching device appears (and, when
+            ``require_openable``, settles openable) within ``timeout_s``.
         ValueError: if ``role`` is neither in ``_ROLE_VIDS`` nor pinned to a
             hub slot via env vars.
 
@@ -138,12 +168,18 @@ def resolve_port_by_role(
                 # app↔bootloader USB PID flip and unambiguous when several
                 # boards share a VID. Do NOT fall back to VID here: we want
                 # THIS board, not any same-VID sibling.
-                if _bench.device_location(port) == location:
-                    return port
+                if _bench.device_location(port) != location:
+                    continue
+            else:
+                vid = _coerce_vid(dev.get("vid"))
+                if vid is None or vid not in wanted_vids:
+                    continue
+            # Matched the role. When the caller will immediately open the port,
+            # gate on the CDC having actually settled — a flapping nRF52
+            # re-enumeration lists here but vanishes on open.
+            if require_openable and not _settled_openable(port, open_timeout_s):
                 continue
-            vid = _coerce_vid(dev.get("vid"))
-            if vid is not None and vid in wanted_vids:
-                return port
+            return port
         time.sleep(delay)
         delay = min(delay * 1.5, poll_max)
 

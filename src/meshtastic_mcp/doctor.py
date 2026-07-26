@@ -241,6 +241,38 @@ def _sdr_check() -> Check:
     )
 
 
+def _power_meter_check() -> Check:
+    """PA-calibration bench (`pa_meter_status`/`pa_measure`/`pa_sweep`): needs an
+    ImmersionRC RF Power Meter v2 (USB CDC, VID 0x04D8/PID 0x000A) attached and
+    powered on. No pip extra — the driver is pure `pyserial` (a core dep).
+    """
+    from . import power_meter
+
+    needed = "PA-calibration bench (pa_meter_status / pa_measure / pa_sweep)"
+    meters = power_meter.list_meters()
+    if meters:
+        return Check(
+            "rf-power-meter",
+            "power_meter",
+            STATUS_OK,
+            needed,
+            detail=f"{len(meters)} meter(s): {', '.join(meters)}",
+        )
+    return Check(
+        "rf-power-meter",
+        "power_meter",
+        STATUS_MISSING,
+        needed,
+        detail="no ImmersionRC meter (VID 0x04D8/PID 0x000A) found",
+        fix=_pkg(
+            "plug in an ImmersionRC RF Power Meter v2 and power it on "
+            "(it auto-powers-off on a battery timeout and drops off USB)",
+            "plug in an ImmersionRC RF Power Meter v2 and power it on; on Linux you may "
+            "need dialout-group / udev access to the CDC port",
+        ),
+    )
+
+
 def _tak_check() -> Check:
     """TAKPacketV2 wire compression (replay sim `profile tak.wire="v2"`): needs the
     meshtastic-tak SDK (the `tak` extra). Optional — the sim emits legacy
@@ -508,6 +540,54 @@ def _android_sdk_check() -> Check:
     )
 
 
+def _gh_auth_check() -> Check:
+    """gh presence AND a live login — the FleetSuite nightly posts its bake
+    report as a GitHub issue via the operator's gh keyring auth."""
+    needed = "FleetSuite nightly report delivery (gh issue create)"
+    path = _which("gh")
+    if not path:
+        return Check(
+            "gh-auth",
+            "nightly-report",
+            STATUS_MISSING,
+            needed,
+            fix=_pkg("brew install gh", "apt install gh  # or: https://cli.github.com"),
+        )
+    # Distinguish a genuine "not logged in" (→ gh auth login) from a timeout or
+    # exec failure (→ different remediation), so the operator isn't sent to an
+    # ineffective command.
+    try:
+        res = subprocess.run([path, "auth", "status"], capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        return Check(
+            "gh-auth",
+            "nightly-report",
+            STATUS_DEGRADED,
+            needed,
+            detail="`gh auth status` timed out — check network / gh config",
+            fix="gh auth status  # investigate the hang",
+        )
+    except OSError as exc:
+        return Check(
+            "gh-auth",
+            "nightly-report",
+            STATUS_DEGRADED,
+            needed,
+            detail=f"could not run gh: {exc}",
+            fix="gh auth status  # verify the gh install",
+        )
+    if res.returncode != 0:
+        return Check(
+            "gh-auth",
+            "nightly-report",
+            STATUS_DEGRADED,
+            needed,
+            detail=(res.stderr or res.stdout or "gh is installed but not logged in").strip()[:200],
+            fix="gh auth login",
+        )
+    return Check("gh-auth", "nightly-report", STATUS_OK, needed, detail=path)
+
+
 def _uhubctl_check() -> Check:
     """Check uhubctl presence *and* whether it works without root (udev rules)."""
     path = _which("uhubctl") or os.environ.get("MESHTASTIC_UHUBCTL_BIN")
@@ -652,8 +732,12 @@ def run() -> DoctorReport:
             "meshtastic-org-knowledge skill — repo/issue/PR/release queries via gh CLI",
             _pkg("brew install gh", "apt install gh  # or: https://cli.github.com"),
         ),
+        # nightly-report (FleetSuite nightly bake → GitHub issue delivery)
+        _gh_auth_check(),
         # sdr capability (RF compliance oracle)
         _sdr_check(),
+        # power_meter capability (ImmersionRC PA-calibration bench)
+        _power_meter_check(),
         # tak capability (TAKPacketV2 wire compression for the replay sim)
         _tak_check(),
         # sdk capability (experimental Kotlin-SDK device-IO bridge)

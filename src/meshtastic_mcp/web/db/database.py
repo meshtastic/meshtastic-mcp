@@ -116,6 +116,49 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS nightly_runs (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    scheduled_for  REAL NOT NULL,
+    started_at     REAL NOT NULL DEFAULT 0,
+    finished_at    REAL,
+    status         TEXT NOT NULL DEFAULT 'running',
+        -- 'running' | 'awaiting_restart' | 'passed' | 'failed' | 'error' | 'canceled'
+    step           TEXT,
+    trigger        TEXT NOT NULL DEFAULT 'schedule',   -- 'schedule' | 'manual'
+    run_id         INTEGER,
+    suite_attempts INTEGER NOT NULL DEFAULT 0,
+    soak_started_at REAL,
+    mcp_sha_before TEXT,
+    mcp_sha_after  TEXT,
+    fw_sha_before  TEXT,
+    fw_sha_after   TEXT,
+    summary        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS nightly_observations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    nightly_id INTEGER NOT NULL,
+    step       TEXT NOT NULL,
+    severity   TEXT NOT NULL,       -- 'info' | 'warn' | 'error'
+    kind       TEXT NOT NULL,       -- machine key, e.g. 'git.fetch_failed'
+    message    TEXT NOT NULL,
+    data       TEXT,
+    ts         REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_nightly_obs ON nightly_observations(nightly_id);
+
+CREATE TABLE IF NOT EXISTS nightly_reports (
+    nightly_run_id INTEGER PRIMARY KEY,
+    created_at   REAL NOT NULL DEFAULT 0,
+    status       TEXT NOT NULL,
+    issue_url    TEXT,
+    error        TEXT,
+    title        TEXT,
+    body_md      TEXT,
+    failures     INTEGER NOT NULL DEFAULT 0,
+    observations INTEGER NOT NULL DEFAULT 0
+);
 """
 
 

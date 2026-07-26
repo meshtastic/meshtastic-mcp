@@ -210,6 +210,38 @@ def find_port_for_vid(
     return matches
 
 
+def device_on_port(location: str, port: int) -> bool:
+    """True iff a device is attached to ``(location, port)`` per the HUB's own
+    connect status.
+
+    This is the authoritative, immediate signal for whether a device is
+    powered/present. Prefer it over OS USB enumeration: on macOS a device
+    RETAINS a zombie entry in ``ioreg`` / ``system_profiler`` / ``/dev`` for an
+    unbounded time after a VBUS cut, so those sources report a powered-off
+    device as still present. The hub reports the disconnect immediately.
+
+    Raises `UhubctlError` when the slot itself can't be seen (hub missing from
+    the listing, or no such port on it). That case must NOT be reported as
+    "no device attached": a caller polling for absence would take a hub that
+    vanished — unplugged, re-lettered, or a permission failure — as proof that
+    power was cut, and pass a test that never actually observed a disconnect.
+    """
+    for hub in list_hubs():
+        if hub["location"] != location:
+            continue
+        for p in hub["ports"]:
+            if p["port"] == port:
+                return p.get("device_vid") is not None
+        raise UhubctlError(
+            f"hub {location} has no port {port} — cannot read its connect flag "
+            f"(ports: {[p['port'] for p in hub['ports']]})"
+        )
+    raise UhubctlError(
+        f"hub {location} is not in the uhubctl listing — cannot read the connect "
+        f"flag for port {port}. Absence is UNKNOWN, not confirmed."
+    )
+
+
 def resolve_target(role: str) -> tuple[str, int]:
     """Resolve a Meshtastic role to (hub_location, port_number).
 

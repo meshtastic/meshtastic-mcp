@@ -17,6 +17,8 @@ respawns the worker for a live stream). Invoked as::
 
 Modes:
   stream <index>      write framed JPEGs to stdout forever (binary)
+  still  <index> [rotation] [mirror]
+                      write ONE framed JPEG (warmed up, oriented); exit
   probe  <index>      write one JSON object {ok,width,height,error}; exit
   probe-many <csv>    write one JSON object {cv2,results:{idx:{...}}}; exit
                       (an empty <csv> just reports cv2 availability)
@@ -96,6 +98,40 @@ def _stream(cv2, index: int) -> int:
         cap.release()
 
 
+def _still(cv2, index: int, rotation: int = 0, mirror: bool = False) -> int:
+    """One warmed-up frame, oriented for OCR/vision, framed like the stream."""
+    try:
+        cap = cv2.VideoCapture(index)
+    except Exception:
+        return 3
+    if not cap.isOpened():
+        return 3
+    try:
+        frame = None
+        for _ in range(3):  # a few reads so auto-exposure settles
+            ok, frame = cap.read()
+            if not ok:
+                return 3
+        turns = (rotation // 90) % 4
+        if turns == 1:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        elif turns == 2:
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+        elif turns == 3:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        if mirror:
+            frame = cv2.flip(frame, 1)
+        enc_ok, buf = cv2.imencode(".jpg", frame)
+        if not enc_ok:
+            return 3
+        jpg = buf.tobytes()
+        sys.stdout.buffer.write(MAGIC + struct.pack(">I", len(jpg)) + jpg)
+        sys.stdout.buffer.flush()
+        return 0
+    finally:
+        cap.release()
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 3:
         sys.stderr.write("usage: camera_worker <stream|probe|probe-many> <arg>\n")
@@ -109,6 +145,10 @@ def main(argv: list[str]) -> int:
         return 4
     if mode == "stream":
         return _stream(cv2, int(arg))
+    if mode == "still":
+        rotation = int(argv[3]) if len(argv) > 3 else 0
+        mirror = len(argv) > 4 and argv[4] not in ("0", "", "false")
+        return _still(cv2, int(arg), rotation, mirror)
     if mode == "probe":
         sys.stdout.write(json.dumps(_probe(cv2, int(arg))))
         return 0

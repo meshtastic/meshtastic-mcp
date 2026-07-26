@@ -101,3 +101,60 @@ def test_no_monitor_is_a_noop_guard():
             pass  # must not raise when there's no monitor to suspend
 
     asyncio.run(go())
+
+
+class _WedgedMonitor(_FakeMonitor):
+    """Reports a wedged (abandoned-alive) reader for the first N polls."""
+
+    def __init__(self, wedged_polls: int) -> None:
+        super().__init__()
+        self._left = wedged_polls
+
+    def is_wedged(self, serial: str) -> bool:
+        if self._left > 0:
+            self._left -= 1
+            return True
+        return False
+
+
+def test_guard_refuses_a_wedged_port(monkeypatch):
+    """A reader that survives suspend means the port is NOT free — guard must
+    fail fast with PortWedgedError instead of letting the caller open a second
+    reader and corrupt the stream. The monitor is still resumed."""
+    from meshtastic_mcp.web.services import portlock as pl_mod
+    from meshtastic_mcp.web.services.portlock import PortWedgedError
+
+    monkeypatch.setattr(pl_mod, "WEDGE_WAIT_S", 0.05)
+    monkeypatch.setattr(pl_mod, "_WEDGE_POLL_S", 0.01)
+
+    async def go():
+        mon = _WedgedMonitor(wedged_polls=10_000)  # never clears
+        pl = PortLocks(serialmon=mon)
+        entered = False
+        with pytest.raises(PortWedgedError):
+            async with pl.guard("DEV"):
+                entered = True
+        assert not entered  # the body must never run against a held port
+        assert mon.events == [("suspend", "DEV"), ("resume", "DEV")]
+
+    asyncio.run(go())
+
+
+def test_guard_proceeds_once_the_wedged_reader_dies(monkeypatch):
+    """A transiently-wedged reader (dies during the wait window) must not fail
+    the guard — it proceeds as soon as the port is genuinely free."""
+    from meshtastic_mcp.web.services import portlock as pl_mod
+
+    monkeypatch.setattr(pl_mod, "WEDGE_WAIT_S", 1.0)
+    monkeypatch.setattr(pl_mod, "_WEDGE_POLL_S", 0.01)
+
+    async def go():
+        mon = _WedgedMonitor(wedged_polls=3)  # clears on the 4th poll
+        pl = PortLocks(serialmon=mon)
+        entered = False
+        async with pl.guard("DEV"):
+            entered = True
+        assert entered
+        assert mon.events == [("suspend", "DEV"), ("resume", "DEV")]
+
+    asyncio.run(go())

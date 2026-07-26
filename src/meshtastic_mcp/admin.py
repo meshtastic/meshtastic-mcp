@@ -59,9 +59,13 @@ def set_owner(
     short_name: str | None = None,
     port: str | None = None,
 ) -> dict[str, Any]:
+    """Set the owner (long and short name).
+
+    Flash write must complete before close/DTR reset, so linger before exit.
+    """
     if short_name is not None and len(short_name) > 4:
         raise AdminError("short_name must be 4 characters or fewer")
-    with connect(port=port) as iface:
+    with connect(port=port, linger_s=2.5) as iface:
         iface.localNode.setOwner(long_name=long_name, short_name=short_name)
     return {
         "ok": True,
@@ -203,13 +207,14 @@ def set_config(path: str, value: Any, port: str | None = None) -> dict[str, Any]
         set_config("mqtt.enabled", True)
         set_config("mqtt.address", "mqtt.example.com")
 
+    Flash write must complete before close/DTR reset, so linger before exit.
     """
     segments = [s for s in path.split(".") if s]
     if not segments:
         raise AdminError("path cannot be empty")
     section = segments[0]
 
-    with connect(port=port) as iface:
+    with connect(port=port, linger_s=2.5) as iface:
         node = iface.localNode
         container, parent_name = _section_container(node, section)
 
@@ -265,7 +270,11 @@ def get_channel_url(include_all: bool = False, port: str | None = None) -> dict[
 
 
 def set_channel_url(url: str, port: str | None = None) -> dict[str, Any]:
-    with connect(port=port) as iface:
+    """Set channels from a URL.
+
+    Flash write must complete before close/DTR reset, so linger before exit.
+    """
+    with connect(port=port, linger_s=2.5) as iface:
         # setURL replaces the channel set from the URL's contents. It does not
         # return a count; we infer by counting non-DISABLED channels after.
         iface.localNode.setURL(url)
@@ -283,9 +292,17 @@ def send_text(
     channel_index: int = 0,
     want_ack: bool = False,
     port: str | None = None,
+    tx_linger_s: float = 8.0,
 ) -> dict[str, Any]:
+    """Send a text message over the mesh.
+
+    `tx_linger_s` delays close after sendText() returns, allowing the firmware's
+    channel-politeness TX delay (~4s for broadcasts) and RF airtime to complete
+    before the connection closes and triggers a DTR reset. Without this, queued
+    broadcasts are lost (verified: 3/3 silent losses with immediate close).
+    """
     destination = to if to is not None else "^all"
-    with connect(port=port) as iface:
+    with connect(port=port, linger_s=tx_linger_s) as iface:
         packet = iface.sendText(
             text,
             destinationId=destination,

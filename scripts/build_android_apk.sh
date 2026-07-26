@@ -51,9 +51,26 @@ echo ">> building Meshtastic-Android ($VARIANT) at $SHA"
 chmod +x ./gradlew
 ./gradlew --no-daemon "$VARIANT"
 
-# Locate the produced APK.  Prefer the authoritative path from `android describe`
-# (build-target metadata incl. output artifacts); fall back to globbing, preferring a
-# universal artifact so we never install an arch-specific split on the x86_64 emulator.
+# Build type is the trailing PascalCase word of the variant (assembleFdroidDebug
+# -> debug, assembleRelease -> release). Gradle always writes the APK under a
+# .../<buildType>/ dir, so we scope the search to it — matching a release APK
+# when we built debug (or vice-versa) would silently install the wrong thing.
+BUILD_TYPE="$(printf '%s' "$VARIANT" | sed -E 's/.*([A-Z][a-z]+)$/\1/' | tr '[:upper:]' '[:lower:]')"
+
+# Locate the produced APK. Prefer the authoritative path from `android describe`
+# (build-target metadata incl. output artifacts) when that CLI is present and
+# reports one; otherwise search the tree. Do NOT hardcode the module dir: the app
+# module has moved between Meshtastic-Android layouts (`app/` -> `androidApp/`),
+# which silently broke this script's old `app/build/outputs/apk` glob. Instead
+# glob every `*/build/outputs/apk/**` (library modules emit .aar, not .apk, so an
+# .apk match is the app), scoped to this build type, preferring a universal
+# artifact so we never install an arch-specific split on the x86_64 emulator.
+# androidTest / unsigned artifacts are never installable, so exclude them.
+_find_apk() {  # $1 = -name pattern
+  find . -type f -path '*/build/outputs/apk/*' -path "*/${BUILD_TYPE}/*" \
+    -name "$1" ! -name '*unsigned*' ! -path '*androidTest*' 2>/dev/null | sort | head -1
+}
+
 APK=""
 if command -v android >/dev/null 2>&1; then
   APK="$(android describe --project_dir . 2>/dev/null \
@@ -67,10 +84,13 @@ for p in (univ or cands):
     if os.path.isfile(p): print(p); break' 2>/dev/null)"
 fi
 if [ -z "$APK" ]; then
-  APK="$(find app/build/outputs/apk -name '*universal*.apk' ! -name '*unsigned*' 2>/dev/null | sort | head -1)"
-  [ -n "$APK" ] || APK="$(find app/build/outputs/apk -name '*.apk' ! -name '*unsigned*' 2>/dev/null | sort | head -1)"
+  APK="$(_find_apk '*universal*.apk')"
+  [ -n "$APK" ] || APK="$(_find_apk '*.apk')"
 fi
-[ -n "$APK" ] && [ -f "$APK" ] || { echo "no APK produced under app/build/outputs/apk" >&2; exit 1; }
+[ -n "$APK" ] && [ -f "$APK" ] || {
+  echo "no installable ${BUILD_TYPE} APK found under any */build/outputs/apk (variant $VARIANT)" >&2
+  exit 1
+}
 
 if [ -n "$DEST" ]; then
   cp "$APK" "$DEST"

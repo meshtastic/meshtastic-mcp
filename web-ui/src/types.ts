@@ -71,3 +71,96 @@ export interface TestRun {
   failed: number;
   skipped: number;
 }
+
+export interface NightlyConfig {
+  enabled: boolean;
+  hour: number;
+  minute: number;
+  self_update: boolean;
+  prebuild: boolean;
+  force_bake: boolean;
+  suite_args: string[];
+  catchup_window_h: number;
+  suite_timeout_h: number;
+  firmware_branch: string;
+  firmware_url: string;
+  soak_hours: number;
+  soak_traffic_interval_min: number;
+  soak_snapshot_interval_min: number;
+  soak_keepalive: boolean;
+  llm_autostart: boolean;
+  recovery_allow_reflash: boolean;
+  pipeline_timeout_h: number;
+  keep_nights: number;
+}
+
+export interface NightlyState {
+  active: boolean;
+  step: string | null;
+  nightly_id: number | null;
+  next_run_at: string | null;
+  last: NightlyRun | null;
+}
+
+export interface NightlyStatus {
+  config: NightlyConfig;
+  state: NightlyState;
+}
+
+export interface NightlyReportConfig {
+  enabled: boolean;
+  repo: string;
+  auto_create_repo: boolean;
+  max_body_kb: number;
+}
+
+export interface NightlyReportMeta {
+  nightly_run_id: number;
+  created_at: number;
+  status: string; // posted | disabled | gh_* | repo_missing | ... | reporter_error
+  issue_url: string | null;
+  error: string | null;
+  title: string | null;
+  failures: number;
+  observations: number;
+  body_md?: string | null;
+}
+
+export interface NightlyRun {
+  id: number;
+  scheduled_for: number;
+  started_at: number;
+  finished_at: number | null;
+  status: string; // running | awaiting_restart | passed | failed | error | canceled
+  step: string | null;
+  trigger: string;
+  run_id: number | null;
+  suite_attempts: number;
+  soak_started_at: number | null;
+  mcp_sha_before: string | null;
+  mcp_sha_after: string | null;
+  fw_sha_before: string | null;
+  fw_sha_after: string | null;
+  summary: {
+    passed: number;
+    failed: number;
+    skipped: number;
+    exit_code: number | null;
+  } | null;
+  report?: NightlyReportMeta | null;
+}
+
+export interface NightlyObservation {
+  id: number;
+  step: string;
+  severity: string; // info | warn | error
+  kind: string;
+  message: string;
+  data: Record<string, unknown> | null;
+  ts: number;
+}
+
+export interface NightlyRunDetail extends NightlyRun {
+  observations: NightlyObservation[];
+  run?: TestRun | null;
+}

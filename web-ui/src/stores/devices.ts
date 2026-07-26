@@ -49,6 +49,14 @@ export const useDevicesStore = defineStore("devices", () => {
     bySerial[serial] = res.device;
   }
 
+  // Forget an offline device: drop its registry row + attached history. The
+  // backend also broadcasts device.update {deleted}, but we remove it locally
+  // too so the card vanishes instantly (deleting a missing key is a no-op).
+  async function forget(serial: string) {
+    await api.del(`/api/devices/${serial}`);
+    delete bySerial[serial];
+  }
+
   // Pin a pio env (manual override) or release to auto-detect (env=null).
   async function setEnv(serial: string, env: string | null) {
     const updated = await api.put<Device>(`/api/devices/${serial}/env`, {
@@ -130,6 +138,7 @@ export const useDevicesStore = defineStore("devices", () => {
     init,
     setFriendlyName,
     refresh,
+    forget,
     setEnv,
     setHubPort,
     locate,

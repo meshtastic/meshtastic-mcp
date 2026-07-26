@@ -480,7 +480,48 @@ def _match_role_port(spec: dict[str, Any], found: list[dict]) -> str | None:
 
 
 @pytest.fixture(scope="session")
-def hub_devices(hub_profile: dict[str, dict[str, Any]]) -> dict[str, str]:
+def bench_wake(hub_profile: dict[str, dict[str, Any]]) -> None:
+    """Recover wedged/off boards BEFORE `hub_devices` snapshots the bench.
+
+    nRF52 native-USB boards can drop off the bus after a prior tier's
+    `power_off` and stay absent (a wedged CDC needs a VBUS cycle to
+    re-enumerate). Without this, such a board is simply missing from
+    `hub_devices` for the whole session and every tier parametrized on it SKIPS
+    with "not present on the hub" — masking real coverage (the run-32
+    heltec_t114 skips). For each profile role pinned to a hub slot that
+    currently has nothing enumerated on it, power-cycle the slot once and wait
+    briefly for the board to appear.
+
+    No-op without uhubctl (CI, non-PPPS benches) or when
+    `MESHTASTIC_MCP_NO_BENCH_WAKE` is set. Only touches EMPTY-looking pinned
+    slots, so present boards are never disturbed. Never raises — a wake failure
+    leaves the board absent, exactly as before.
+    """
+    from tests import _power
+
+    if os.environ.get("MESHTASTIC_MCP_NO_BENCH_WAKE") or not _power.is_uhubctl_available():
+        return
+    try:
+        found = devices_module.list_devices(include_unknown=True)
+        present = {_bench.device_location(p) for d in found if (p := d.get("port"))}
+        for role, spec in hub_profile.items():
+            canonical = role.split("_alt", 1)[0]
+            location = spec.get("location")
+            if not location or location in present:
+                continue
+            new_port = _power.recover_absent_role(canonical)
+            if new_port:
+                print(
+                    f"[bench-wake] recovered {canonical!r} at {new_port} "
+                    f"(slot {location} was empty at session start)",
+                    file=sys.stderr,
+                )
+    except Exception as exc:  # bench-prep must never fail the whole session
+        print(f"[bench-wake] skipped ({exc!r})", file=sys.stderr)
+
+
+@pytest.fixture(scope="session")
+def hub_devices(hub_profile: dict[str, dict[str, Any]], bench_wake: None) -> dict[str, str]:
     """Map of `role → port` for boards detected on the hub.
 
     Each role is matched to a SPECIFIC physical board by hub-slot location

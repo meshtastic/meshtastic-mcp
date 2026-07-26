@@ -12,6 +12,7 @@ artifacts to exist, so these tools build first if needed.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
@@ -283,6 +284,13 @@ def _check_esp32_env(env: str) -> str:
 
 def _run_install_script(script: Path, port: str, binary: Path) -> dict[str, Any]:
     """Invoke bin/device-install.sh or bin/device-update.sh."""
+    # The scripts invoke `esptool` from PATH, which may not carry the venv /
+    # PlatformIO location our resolver finds — prepend it so they agree.
+    esptool_dir = str(config.esptool_bin().parent)
+    env = os.environ.copy()
+    existing_path = env.get("PATH", "")
+    env["PATH"] = os.pathsep.join(part for part in (esptool_dir, existing_path) if part)
+
     t0 = time.monotonic()
     proc = subprocess.run(
         [str(script), "-p", port, "-f", str(binary)],
@@ -290,6 +298,7 @@ def _run_install_script(script: Path, port: str, binary: Path) -> dict[str, Any]
         capture_output=True,
         text=True,
         timeout=pio.TIMEOUT_UPLOAD,
+        env=env,
     )
     duration = time.monotonic() - t0
     return {

@@ -48,6 +48,10 @@ class SerialMonitor:
         self.db = db
         self.hub = hub
         self.forwarder = None  # set by app wiring; receives captured log lines
+        # Extra line consumers (e.g. the nightly soak recorder). Each is called
+        # with the same parsed record dict as the forwarder — FROM THE READER
+        # THREAD, so sinks must be thread-safe and quick.
+        self.sinks: list = []
         self._mons: dict[str, _Monitor] = {}
         # Per-serial lock serialising acquire/release/suspend/resume/open/close,
         # so overlapping callers (discovery sync, enrichment, control, UI, the
@@ -159,6 +163,13 @@ class SerialMonitor:
         if thread is not None:
             await asyncio.to_thread(thread.join, 2.0)
             if thread.is_alive():
+                # Second chance: a reader blocked in a kernel read on a flapping
+                # CDC device often needs a few more seconds to error out. One
+                # longer join here avoids abandoning a thread that was about to
+                # die — the abandoned-alive state poisons every guard() on this
+                # port until the device re-enumerates.
+                await asyncio.to_thread(thread.join, 4.0)
+            if thread.is_alive():
                 # Abandon it but keep mon.thread set: the fd is still held, so a
                 # second reader must not open the port. _open()/is_wedged() treat
                 # a dead abandoned thread as closed, so recovery (power-cycle →
@@ -219,21 +230,30 @@ class SerialMonitor:
                     if bad and bad > len(text) * 0.2:
                         continue
                     self.hub.publish_threadsafe(topic, {"line": text})
-                    # FleetLog: forward every captured line to Datadog when on.
+                    # FleetLog: forward every captured line to Datadog when on,
+                    # and tee to any registered sinks (nightly soak capture).
                     fwd = self.forwarder
-                    if fwd is not None and fwd.active():
+                    fwd_on = fwd is not None and fwd.active()
+                    sinks = self.sinks
+                    if fwd_on or sinks:
                         parsed = parse_log_line(text)
-                        fwd.submit(
-                            {
-                                "ts": time.time(),
-                                "port": port,
-                                "line": text,
-                                "level": parsed.get("level"),
-                                "tag": parsed.get("tag"),
-                                "heap_free": parsed.get("heap_free"),
-                                "uptime_s": parsed.get("uptime_s"),
-                            }
-                        )
+                        rec = {
+                            "ts": time.time(),
+                            "serial": serial,
+                            "port": port,
+                            "line": text,
+                            "level": parsed.get("level"),
+                            "tag": parsed.get("tag"),
+                            "heap_free": parsed.get("heap_free"),
+                            "uptime_s": parsed.get("uptime_s"),
+                        }
+                        if fwd_on and fwd is not None:
+                            fwd.submit(rec)
+                        for sink in list(sinks):
+                            try:
+                                sink(rec)
+                            except Exception:
+                                log.debug("serial sink failed", exc_info=True)
                 if len(buf) > MAX_PARTIAL:
                     buf = b""  # drop runaway newline-free data; resync at next newline
         finally:

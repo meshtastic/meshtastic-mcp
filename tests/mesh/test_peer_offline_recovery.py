@@ -32,6 +32,7 @@ from typing import Any
 
 import pytest
 
+from meshtastic_mcp import uhubctl
 from meshtastic_mcp.connection import connect
 from tests import _power
 from tests._port_discovery import resolve_port_by_role
@@ -39,11 +40,72 @@ from tests._port_discovery import resolve_port_by_role
 from ._receive import ReceiveCollector, nudge_nodeinfo
 
 
+def _reconnect_after_power_on(rx_role: str, rx_slot: tuple[str, int]) -> str:
+    """Power the RX back on and return an OPENABLE ``/dev`` path, kicking a
+    wedged nRF52 CDC with a power-cycle if the first re-enumeration doesn't
+    settle.
+
+    nRF52 native USB is fragile across a VBUS cut: the board may re-enumerate on
+    a path that ``list_devices`` reports but that vanishes on open (the run-32
+    ``esp32s3->t_echo`` ``could not open port`` failure), or not come back at
+    all. ``require_openable`` makes ``resolve_port_by_role`` wait for a path that
+    actually opens; if none settles in time, one VBUS cycle kicks a wedged CDC
+    and we retry with a longer window. Raises AssertionError if the board never
+    returns openable — a genuine recovery failure, not a flake.
+    """
+    _power.power_on(rx_role, resolved=rx_slot)
+    time.sleep(0.5)
+    try:
+        return resolve_port_by_role(rx_role, timeout_s=30.0, require_openable=True)
+    except AssertionError:
+        loc, port = rx_slot
+        uhubctl.cycle(loc, port, delay_s=2)
+        time.sleep(0.5)
+        return resolve_port_by_role(rx_role, timeout_s=45.0, require_openable=True)
+
+
+@pytest.fixture(scope="module")
+def hub_actually_cuts_power(hub_devices: dict[str, str]) -> None:
+    """Skip the whole tier only when the hub genuinely can't switch power.
+
+    Probe once per module: cut a power-controllable device's port, confirm via
+    the hub's own connect flag that the device dropped, restore. A hub that
+    still reports the device attached after an off can't run this tier, so we
+    skip with an actionable reason rather than emit impossible failures.
+
+    Absence is read from the hub flag, NOT OS enumeration — macOS keeps a zombie
+    of a powered-off device in ioreg/system_profiler/`/dev` for an unbounded
+    time, which would make a working hub look broken.
+
+    Not every role is power-controllable (roles that share a USB VID can't be
+    uhubctl-resolved without env pins), so try devices until one resolves; only
+    if NONE do is the hub un-probeable.
+    """
+    last_exc: Exception | None = None
+    for role in hub_devices:
+        try:
+            cuts = _power.hub_cuts_power(role)
+        except Exception as exc:  # this role isn't power-controllable — try another
+            last_exc = exc
+            continue
+        # Power is restored by the probe; re-pin the port in case it moved.
+        hub_devices[role] = resolve_port_by_role(role, timeout_s=30.0)
+        if not cuts:
+            pytest.skip(
+                "hub does not actually cut VBUS (it still reports the device "
+                "attached after power_off) — the peer-offline tier needs a hub "
+                "with true per-port power switching (see uhubctl's supported list)"
+            )
+        return  # hub genuinely cuts power → run the tier
+    pytest.skip(f"no power-controllable device to probe the hub with: {last_exc}")
+
+
 @pytest.mark.timeout(360)
 def test_peer_offline_then_recovers(
     mesh_pair: dict[str, Any],
     power_cycle,
     hub_devices: dict[str, str],
+    hub_actually_cuts_power: None,
 ) -> None:
     tx_port = mesh_pair["tx"]["port"]
     rx_node_num = mesh_pair["rx"]["my_node_num"]
@@ -81,22 +143,33 @@ def test_peer_offline_then_recovers(
                 lambda pkt: pkt.get("decoded", {}).get("text") == unique_pre,
                 timeout=30,
             )
-            assert got is not None, (
-                f"baseline directed send ({tx_role}→{rx_role}) didn't land — "
-                "skipping offline test to avoid false positive"
-            )
+            # Report WHAT the RX actually saw. Whether the collector was dead
+            # (saw nothing at all) or the peer refused just our directed frame
+            # (saw other traffic) picks the fix, and the bare "didn't land"
+            # message could not tell those apart — so don't guess, capture it.
+            if got is None:
+                seen = [p.get("decoded", {}).get("text") for p in rx.snapshot()]
+                pytest.fail(
+                    f"baseline directed send ({tx_role}→{rx_role}) didn't land — "
+                    f"skipping offline test to avoid a false positive. RX observed "
+                    f"{len(seen)} text packet(s): {seen!r}"
+                )
 
-    # Step 3: power off RX. uhubctl skips the test with a clear message if
-    # the RX role isn't on a controllable hub.
+    # Step 3: power off RX. Resolve its hub slot NOW, while it's still up — a
+    # powered-off device can't be VID-resolved, and keying power on/off + the
+    # absence check off the fixed (location, port) means absence reads the hub's
+    # own connect flag (reliable) instead of macOS enumeration (which retains a
+    # zombie of a powered-off device and would falsely time out).
     try:
-        _power.power_off(rx_role)
+        rx_slot = uhubctl.resolve_target(rx_role)
     except Exception as exc:
         pytest.skip(f"can't power-control {rx_role!r}: {exc}")
+    _power.power_off(rx_role, resolved=rx_slot)
 
     try:
-        _power.wait_for_absence(rx_role, timeout_s=10.0)
+        _power.wait_for_absence(rx_role, timeout_s=10.0, resolved=rx_slot)
     except TimeoutError:
-        _power.power_on(rx_role)  # restore hub state before failing
+        _power.power_on(rx_role, resolved=rx_slot)  # restore hub state before failing
         resolve_port_by_role(rx_role, timeout_s=30.0)
         pytest.fail(f"{rx_role!r} didn't disappear after power_off")
 
@@ -115,19 +188,30 @@ def test_peer_offline_then_recovers(
             time.sleep(5.0)
     except Exception as exc:
         # Restore RX before reraising so the bench state is sane.
-        _power.power_on(rx_role)
+        _power.power_on(rx_role, resolved=rx_slot)
         resolve_port_by_role(rx_role, timeout_s=30.0)
         raise AssertionError(f"TX crashed when sending to offline peer: {exc}") from exc
 
-    # Step 5: power RX back on + rediscover.
-    _power.power_on(rx_role)
-    time.sleep(0.5)
-    new_rx_port = resolve_port_by_role(rx_role, timeout_s=30.0)
+    # Step 5: power RX back on + rediscover an OPENABLE path. nRF52 native USB
+    # can re-enumerate on a path that lists but vanishes on open, so gate on the
+    # CDC having settled (and power-cycle-kick a wedged one) before handing the
+    # port to ReceiveCollector — otherwise the reconnect fails with
+    # `could not open port` (the run-32 esp32s3->t_echo failure).
+    new_rx_port = _reconnect_after_power_on(rx_role, rx_slot)
     hub_devices[rx_role] = new_rx_port
 
-    # Step 6 + 7: bilateral re-warmup + directed send that should now work.
-    with ReceiveCollector(new_rx_port, topic="meshtastic.receive.text") as rx:
-        # RX rebooted → its PKI cache is gone. Re-warm.
+    # NB: do NOT enable security.debug_log_api_enabled on the RX here — flooding
+    # the firmware log stream over an nRF52's fragile CDC makes the collector
+    # drop the very text packet under test (observed: every nRF52-RX pair then
+    # fails post-recovery while the radio logs show it receiving fine). The
+    # packet-count diagnostic below is enough to localise a failure without it.
+
+    # Step 6 + 7: bilateral re-nudge + directed send that should now work.
+    with ReceiveCollector(new_rx_port, topic="meshtastic.receive.text", capture_logs=True) as rx:
+        # Peer pubkeys PERSIST to flash (NodeDB), so they survive the RX reboot —
+        # the re-nudge is cheap insurance for a stale in-RAM cache, not a
+        # correctness requirement. If delivery still fails here the likely cause
+        # is RF/radio re-init after the VBUS cut, not PKI (see the assertion).
         rx.broadcast_nodeinfo_ping()
         with connect(port=tx_port) as tx_iface:
             nudge_nodeinfo(tx_iface)
@@ -151,7 +235,18 @@ def test_peer_offline_then_recovers(
                 nudge_nodeinfo(tx_iface)
                 time.sleep(5.0)
 
+        # Capture what the RX observed while the collector is still open, so a
+        # failure localises the cause instead of guessing "recovery path may be
+        # broken": RX saw NOTHING → radio never came back after the VBUS cut
+        # (hardware/firmware); RX saw OTHER text but not ours → delivery/PKI.
+        # (rx_logs is populated only if the profile enabled the firmware log API;
+        # we deliberately do NOT enable it here — see the note above.)
+        rx_texts = [p.get("decoded", {}).get("text") for p in rx.snapshot()]
+        rx_logs = rx.log_snapshot()
+
+    detail = f"RX observed {len(rx_texts)} text packet(s): {rx_texts!r}."
+    if rx_logs:
+        detail += "\nRX firmware log tail:\n" + "\n".join(rx_logs[-40:])
     assert got is not None, (
-        f"post-recovery directed send {unique_post!r} ({tx_role}→{rx_role}) "
-        "never landed — recovery path may be broken"
+        f"post-recovery directed send {unique_post!r} ({tx_role}→{rx_role}) never landed. {detail}"
     )
