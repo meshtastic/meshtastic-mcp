@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import contextlib
 import queue
+import random
 import socket
 import struct
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -236,13 +237,20 @@ class ReplaySession:
     """One TCP listener serving a capture to a single connected client."""
 
     def __init__(self, sid: str, capture: Capture, params: ReplayParams):
+        # Own a private copy: the session mutates rate (below) and port (in
+        # start(), for port=0 auto-pick), and a caller's ReplayParams must not
+        # change as a side effect of handing it in.
+        params = replace(params)
         window = capture.window(params.start, params.end)
         # `duration` compresses the whole windowed capture into a fixed wall-clock
         # span: derive the steady rate from the packet count so "replay the whole
         # of X in T seconds" is exact regardless of how many packets X holds. It
         # overrides `rate` (the more specific intent wins).
-        if params.duration and params.duration > 0 and window:
-            params.rate = len(window) / params.duration
+        if params.duration is not None:
+            if params.duration <= 0:
+                raise ValueError(f"duration must be > 0 seconds (got {params.duration})")
+            if window:
+                params.rate = len(window) / params.duration
         self.capture = capture
         self.params = params
         self.window = window
@@ -318,9 +326,11 @@ class ReplaySession:
         t.start()
         self._log_event("listening", host=self.params.host, port=self.params.port)
         # mDNS/Bonjour: advertise like real firmware so apps list the session.
-        # Auto mode skips loopback-only binds (nothing off-host could connect).
+        # Auto mode skips loopback-only binds (nothing off-host could connect) —
+        # in any of its spellings: 127.0.0.0/8, `localhost`, or IPv6 `::1`.
         p = self.params
-        enabled = p.mdns if p.mdns is not None else not p.host.startswith("127.")
+        loopback = p.host.startswith("127.") or p.host.lower() in ("localhost", "::1")
+        enabled = p.mdns if p.mdns is not None else not loopback
         if enabled:
             self._advertiser = _mdns.Advertiser(
                 f"Meshtastic Replay {self.capture.label}",
@@ -606,29 +616,31 @@ class ReplaySession:
         *receiving* hop including the endpoint, so len == len(route) + 1, in
         firmware's SNR×4 int encoding.
         """
-        import random as _random
-
         dest = pkt.to & 0xFFFFFFFF
         requester = getattr(pkt, "from", 0) or OBSERVER_NUM
 
-        # Plausible intermediate relay from the capture node DB (or direct).
+        # Plausible intermediate relay from the capture node DB (or direct). A
+        # NodeRow.role of None (file-backed captures with no role column) counts
+        # as "unknown" and stays eligible — `or ""` guards against None never
+        # matching the "" arm, which would leave `routers` empty and force every
+        # traceroute hop-less.
         routers = [
             n.num
             for n in self.capture.nodes
             if n.num not in (dest, requester, OBSERVER_NUM)
-            and getattr(n, "role", "") in ("ROUTER", "ROUTER_LATE", "")
+            and (getattr(n, "role", None) or "") in ("ROUTER", "ROUTER_LATE", "")
         ]
-        relays = [_random.choice(routers)] if routers else []
+        relays = [random.choice(routers)] if routers else []
 
         rd = mesh_pb2.RouteDiscovery()
         for nn in relays:
             rd.route.append(nn & 0xFFFFFFFF)
         for _ in range(len(relays) + 1):  # one per receiving hop incl. dest
-            rd.snr_towards.append(_random.randint(-40, 48))  # -10..+12 dB × 4
+            rd.snr_towards.append(random.randint(-40, 48))  # -10..+12 dB × 4
         for nn in reversed(relays):
             rd.route_back.append(nn & 0xFFFFFFFF)
         for _ in range(len(relays) + 1):  # one per receiving hop incl. requester
-            rd.snr_back.append(_random.randint(-40, 48))
+            rd.snr_back.append(random.randint(-40, 48))
 
         fr = mesh_pb2.FromRadio()
         mp = fr.packet

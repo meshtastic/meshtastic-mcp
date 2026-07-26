@@ -518,7 +518,10 @@ _BOT_IDENTITIES = [
     ("HamTest Elmer", "HAM", "T_ECHO"),
     ("LastHeard Lurker", "LHRD", "HELTEC_V3"),
 ]
-_BOT_BASE_NUM = 0xB0700001
+# Above the attendee draw range (`_build_nodes` uses 0x10000000..0xEFFFFFFF) and
+# below broadcast (0xFFFFFFFF), so bot nums never collide with a generated
+# attendee and merge in the node DB. Room for tens of thousands of bots.
+_BOT_BASE_NUM = 0xF0000001
 
 # attendee trigger -> ((min, max) bots that pile on, reply templates)
 _BOT_TRIGGERS: dict[str, tuple[tuple[int, int], list[str]]] = {
@@ -840,7 +843,13 @@ def _emit_bots(
     for _ in range(int(float(cfg.get("storms_per_day", 200)) * days)):
         day = rng.randrange(max(1, int(days)))
         hour = rng.choice([*range(10, 24), 0, 1])  # con hours: 10:00..02:00
-        t = min(start_epoch + day * 86400 + hour * 3600 + rng.randrange(3600), end_epoch - 3600)
+        # clamp into [start_epoch, end_epoch): a sub-hour span (tiny test caps)
+        # would otherwise push `end_epoch - 3600` below start and emit
+        # out-of-window / negative-offset packets.
+        t = max(
+            start_epoch,
+            min(start_epoch + day * 86400 + hour * 3600 + rng.randrange(3600), end_epoch - 1),
+        )
         ch = rng.choice(scene_chans)
         trig = rng.choice(trig_names)
         say(rng.choice(attendees), t, trig, ch, fame=0.15 if trig == "ping" else 0.05)

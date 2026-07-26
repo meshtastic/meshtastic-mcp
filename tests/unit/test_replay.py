@@ -520,6 +520,7 @@ def test_replay_clock_and_observer_position_and_preset():
         sess.stop()
 
 
+@pytest.mark.timing
 def test_rate_is_accurately_paced():
     """A requested steady `rate` must actually be delivered.
 
@@ -661,6 +662,25 @@ def test_duration_derives_steady_rate():
     st = _status_dict(sess)
     assert st["target_rate"] == pytest.approx(round(n / 30.0, 2))
     assert "duration 30.0s" in st["mode"]
+
+
+def test_duration_nonpositive_is_rejected():
+    """`duration <= 0` is a boundary error, not a silent fall-through to 1x."""
+    cap = sim.generate(nodes=10, days=1, seed=1, start=1_700_000_000)
+    for bad in (0, -5.0):
+        with pytest.raises(ValueError, match="duration"):
+            ReplaySession("bad", cap, ReplayParams(host="127.0.0.1", port=0, duration=bad))
+
+
+def test_session_does_not_mutate_caller_params():
+    """Constructing a session must not mutate the caller's ReplayParams (it owns
+    a private copy — it derives rate from duration and rewrites port on bind).
+    """
+    cap = sim.generate(nodes=10, days=1, seed=1, start=1_700_000_000)
+    params = ReplayParams(host="127.0.0.1", port=0, duration=30.0, node_delay=0)
+    ReplaySession("copy", cap, params)
+    assert params.rate is None  # derivation happened on the session's copy
+    assert params.duration == 30.0
 
 
 def test_status_includes_connect_hint():
@@ -1155,6 +1175,21 @@ def test_sim_bots_off_by_default():
         mp.Clear()
         mp.ParseFromString(raw)
         assert not (mp.decoded.portnum == 1 and mp.decoded.emoji)
+
+
+def test_sim_bot_nums_never_collide_with_attendees():
+    """Bot node nums must sit outside the attendee draw range (0x10000000..
+    0xEFFFFFFF) so a bot never merges with a generated attendee in the node DB.
+    """
+    prof = {"bots": {"count": 17, "storms_per_day": 5, "tapback_storm": 5}}
+    cap = sim.generate(nodes=200, days=1, seed=4, start=1_700_000_000, profile=prof)
+    bot_names = {ln for ln, _sn, _hw in sim._BOT_IDENTITIES}
+    bot_nums = {n.num for n in cap.nodes if n.long_name in bot_names}
+    attendee_nums = {n.num for n in cap.nodes if n.long_name not in bot_names}
+    assert len(bot_nums) == 17
+    assert bot_nums.isdisjoint(attendee_nums)
+    assert all(n > 0xEFFFFFFF for n in bot_nums)  # above the attendee range
+    assert all(n < 0xFFFFFFFF for n in bot_nums)  # below broadcast
 
 
 def test_sim_bots_scene():

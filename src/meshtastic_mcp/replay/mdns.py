@@ -106,6 +106,12 @@ class Advertiser:
         # The registration lives as long as the process; stop() terminates it,
         # which also sends the mDNS goodbye so browsers drop the row promptly.
         self._proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # These helpers stay resident while registered; an immediate exit means a
+        # name conflict or no running daemon — don't claim we advertised.
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            self._proc.wait(timeout=0.3)
+            self._proc = None
+            return False
         self.backend = argv[0]
         return True
 

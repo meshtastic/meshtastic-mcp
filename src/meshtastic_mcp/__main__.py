@@ -568,7 +568,11 @@ def _cmd_replay(args) -> int:
 
     from meshtastic_mcp.replay.engine import _status_dict
 
-    sess = _build_replay_session(args)
+    try:
+        sess = _build_replay_session(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     sess.start()
     st = _status_dict(sess)
     print(f"serving {st['capture']}: {st['packets_total']} packets, {st['nodes']} nodes")

@@ -2390,7 +2390,7 @@ def replay_start(
     )
     try:
         return get_replay_manager().start(cap, params)
-    except replay_engine.PortInUseError as exc:
+    except (replay_engine.PortInUseError, ValueError) as exc:
         return {"error": str(exc)}
 
 
