@@ -332,6 +332,57 @@ def _sdk_cli_check() -> Check:
     )
 
 
+# Headers the Portduino `native` / `native-macos` meshtasticd build needs. The env's build_flags in
+#   variants/native/portduino/platformio.ini already point at the Homebrew prefixes, so the only
+#   failure mode is the package not being installed — which surfaces as a bare `fatal error: 'x.h'
+#   file not found` several minutes into a build. Probe up front instead.
+# Each entry: (brew formula, a header that proves it is installed).
+_MESHTASTICD_DEPS_MAC: tuple[tuple[str, str], ...] = (
+    ("argp-standalone", "/opt/homebrew/opt/argp-standalone/include/argp.h"),
+    ("yaml-cpp", "/opt/homebrew/opt/yaml-cpp/include/yaml-cpp/yaml.h"),
+    ("libuv", "/opt/homebrew/include/uv.h"),
+    ("openssl@3", "/opt/homebrew/opt/openssl@3/include/openssl/ssl.h"),
+)
+
+# Debian equivalents for the `native` (Linux) env.
+_MESHTASTICD_DEPS_DEBIAN = "libargp-dev libyaml-cpp-dev libuv1-dev libssl-dev"
+
+
+def _meshtasticd_build_check() -> Check:
+    """Native `meshtasticd` build prerequisites (the hardware-free virtual-radio path).
+
+    `scripts/build_meshtasticd.sh` compiles real firmware for the host so tests can drive a real
+    AdminModule over TCP with no radio attached. On macOS that needs four Homebrew formulae
+    supplying glibc-isms and libraries Apple does not ship; missing any one fails the build
+    partway through with an unexplained missing-header error.
+    """
+    if not _IS_MAC:
+        return Check(
+            "meshtasticd-build-deps",
+            "firmware",
+            STATUS_OK,
+            "build native meshtasticd (hardware-free virtual radio)",
+            detail=f"install on Debian with: apt install {_MESHTASTICD_DEPS_DEBIAN}",
+        )
+    missing = [formula for formula, header in _MESHTASTICD_DEPS_MAC if not Path(header).exists()]
+    if not missing:
+        return Check(
+            "meshtasticd-build-deps",
+            "firmware",
+            STATUS_OK,
+            "build native meshtasticd (hardware-free virtual radio)",
+        )
+    return Check(
+        "meshtasticd-build-deps",
+        "firmware",
+        STATUS_MISSING,
+        "build native meshtasticd (hardware-free virtual radio)",
+        detail=f"missing Homebrew formulae: {', '.join(missing)}. "
+        "Without these `pio run -e native-macos` fails with a missing-header error.",
+        fix=f"brew install {' '.join(missing)}",
+    )
+
+
 def _pio_check() -> Check:
     try:
         path = config.pio_bin()
@@ -667,6 +718,7 @@ def run() -> DoctorReport:
         # firmware capability
         _firmware_check(),
         _pio_check(),
+        _meshtasticd_build_check(),
         # android capability
         _repo_root_check(
             "android-source",
