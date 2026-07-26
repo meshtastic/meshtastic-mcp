@@ -2038,6 +2038,7 @@ def replay_start(
     sim_profile: str | dict[str, Any] | None = None,
     fuzz: str | dict[str, Any] | None = None,
     fuzz_seed: int = 0,
+    mdns: bool | None = None,
 ) -> dict[str, Any]:
     """Start a simulated Meshtastic TCP device that streams a capture to an app.
 
@@ -2108,6 +2109,13 @@ def replay_start(
     (counts + recent events) is reported under `fuzz` in `replay_status`. List
     presets with `replay_fuzz_presets`.
 
+    `mdns` advertises the session over mDNS/Bonjour as `_meshtastic._tcp` with
+    the `shortname`/`id` TXT records real firmware publishes, so apps list it
+    in network discovery (shown as `RPLY_4331`) — no manual IP entry. Default
+    `None` = auto: on unless bound loopback-only; best-effort (prefers the
+    `zeroconf` package, falls back to `dns-sd`/`avahi-publish-service`, else
+    reports a hint under `mdns` in `replay_status`).
+
     Returns the session status (id, listen address, totals). Poll with
     `replay_status`, tear down with `replay_stop`.
     """
@@ -2149,6 +2157,7 @@ def replay_start(
         observer_lat=observer_lat,
         observer_lon=observer_lon,
         fuzz=replay_fuzz.from_spec(fuzz, seed=fuzz_seed),
+        mdns=mdns,
     )
     try:
         return get_replay_manager().start(cap, params)

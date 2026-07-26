@@ -1236,6 +1236,90 @@ def test_from_kind_traceroute_request_id_builds_response():
     assert mp2.decoded.request_id == 0
 
 
+# ── mDNS/Bonjour advertisement ──────────────────────────────────────────────
+def test_mdns_argv_builders_match_firmware_service():
+    """The advertisement must match what apps browse for: `_meshtastic._tcp`
+    with `shortname`/`id` TXT records (the Apple app renders shortname_<id[-4:]>).
+    """
+    from meshtastic_mcp.replay import mdns
+
+    txt = mdns.txt_records("RPLY", "!42524331")
+    assert txt == {"shortname": "RPLY", "id": "!42524331"}
+    argv = mdns.dnssd_argv("Meshtastic Replay x", 4403, txt)
+    assert argv[:2] == ["dns-sd", "-R"]
+    assert "_meshtastic._tcp" in argv and "4403" in argv
+    assert "shortname=RPLY" in argv and "id=!42524331" in argv
+    argv = mdns.avahi_argv("Meshtastic Replay x", 4403, txt)
+    assert argv[0] == "avahi-publish-service"
+    assert "_meshtastic._tcp" in argv and "4403" in argv and "id=!42524331" in argv
+
+
+def test_mdns_no_backend_degrades_to_hint(monkeypatch):
+    """A missing backend must degrade to an actionable hint, never a failure."""
+    from meshtastic_mcp.replay import mdns
+
+    monkeypatch.setattr(mdns.Advertiser, "_try_zeroconf", lambda self: False)
+    monkeypatch.setattr(mdns.shutil, "which", lambda _cmd: None)
+    adv = mdns.Advertiser("Replay a.b", 4403, mdns.txt_records("RPLY", "!42524331")).start()
+    assert adv.instance == "Replay a-b"  # dots read as label separators
+    assert adv.backend is None
+    st = adv.status()
+    assert st["advertised"] is False
+    assert "zeroconf" in st["error"]  # the hint names an install path
+    adv.stop()  # must be safe when nothing started
+
+
+def test_session_mdns_gating_and_lifecycle(monkeypatch):
+    """Auto mode skips loopback-only binds; explicit mdns=True advertises after
+    bind (real port, firmware TXT identity) and withdraws on stop().
+    """
+    from meshtastic_mcp.replay import engine as _engine
+
+    events: list[tuple[str, object]] = []
+
+    class FakeAdvertiser:
+        def __init__(self, instance, port, txt):
+            self.instance, self.port, self.txt = instance, port, txt
+
+        def start(self):
+            events.append(("start", self))
+            return self
+
+        def stop(self):
+            events.append(("stop", self))
+
+        def status(self):
+            return {"advertised": True, "backend": "fake"}
+
+    monkeypatch.setattr(_engine._mdns, "Advertiser", FakeAdvertiser)
+    cap = sim.generate(nodes=5, days=1, seed=1, start=1_700_000_000)
+
+    # loopback bind + auto -> no advertisement
+    sess = ReplaySession("no-ad", cap, ReplayParams(host="127.0.0.1", port=0, node_delay=0))
+    sess.start()
+    try:
+        assert not events
+    finally:
+        sess.stop()
+
+    # loopback bind + explicit mdns=True -> advertised with the bound port
+    sess = ReplaySession("ad", cap, ReplayParams(host="127.0.0.1", port=0, node_delay=0, mdns=True))
+    sess.start()
+    try:
+        assert events and events[0][0] == "start"
+        adv = events[0][1]
+        assert adv.port == sess.params.port and sess.params.port != 0  # post-bind port
+        assert adv.txt == {"shortname": "RPLY", "id": "!42524331"}
+        assert cap.label in adv.instance
+        assert sess.state.id == "ad"
+        from meshtastic_mcp.replay.engine import _status_dict
+
+        assert _status_dict(sess)["mdns"] == {"advertised": True, "backend": "fake"}
+    finally:
+        sess.stop()
+    assert events[-1][0] == "stop"
+
+
 # ── Traceroute responder ──────────────────────────────────────────────────────
 
 

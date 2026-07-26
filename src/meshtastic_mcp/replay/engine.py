@@ -35,6 +35,7 @@ from meshtastic.protobuf import admin_pb2, channel_pb2, config_pb2, mesh_pb2, po
 
 from ..recorder.recorder import _default_dir as _recorder_default_dir
 from ..recorder.rotating import _RotatingJsonl
+from . import mdns as _mdns
 from .capture import Capture, node_to_nodeinfo
 from .fuzz import FuzzConfig, Fuzzer
 
@@ -201,6 +202,11 @@ class ReplayParams:
     announce_interval: float = 0.0
     # true SO_SNDTIMEO seconds; a stalled app can't hang our sends. 0 = none
     send_timeout: float = 10.0
+    # mDNS/Bonjour advertisement (`_meshtastic._tcp` like real firmware, so
+    # apps discover the session without manual IP entry). None = auto: on
+    # unless bound loopback-only; True/False force. Best-effort — a missing
+    # backend degrades to a hint in status, never a failure.
+    mdns: bool | None = None
 
 
 @dataclass
@@ -249,6 +255,7 @@ class ReplaySession:
         )
         self._srv: socket.socket | None = None
         self._client: socket.socket | None = None  # currently-connected client, if any
+        self._advertiser: _mdns.Advertiser | None = None  # mDNS/Bonjour, if enabled
         self._ch_index = {name: i for i, name in enumerate(capture.channels)}
         # live-injection queue: (MeshPacket, channel_name, fuzz) drained per client
         self._inject_q: queue.Queue[tuple[mesh_pb2.MeshPacket, str, bool]] = queue.Queue()
@@ -310,9 +317,23 @@ class ReplaySession:
         self.state.thread = t
         t.start()
         self._log_event("listening", host=self.params.host, port=self.params.port)
+        # mDNS/Bonjour: advertise like real firmware so apps list the session.
+        # Auto mode skips loopback-only binds (nothing off-host could connect).
+        p = self.params
+        enabled = p.mdns if p.mdns is not None else not p.host.startswith("127.")
+        if enabled:
+            self._advertiser = _mdns.Advertiser(
+                f"Meshtastic Replay {self.capture.label}",
+                self.params.port,
+                _mdns.txt_records("RPLY", f"!{OBSERVER_NUM:08x}"),
+            ).start()
+            self._log_event("mdns", **self._advertiser.status())
 
     def stop(self) -> None:
         self._log_event("stop_requested")
+        if self._advertiser is not None:
+            self._advertiser.stop()
+            self._advertiser = None
         self.state.stop.set()
         if self._srv is not None:
             try:
@@ -960,6 +981,7 @@ def _status_dict(sess: ReplaySession) -> dict[str, Any]:
         "capture_span": {"start": span[0], "end": span[1]},
         "uptime_s": round(time.time() - st.started_at, 1),
         "fuzz": sess.fuzzer.status() if sess.fuzzer is not None else None,
+        "mdns": sess._advertiser.status() if sess._advertiser is not None else None,
     }
 
 

@@ -6,6 +6,14 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Replay mDNS/Bonjour advertisement** (`replay_start(mdns=…)`, auto-on for non-loopback
+  binds) — the session advertises `_meshtastic._tcp` on `local.` with the `shortname`/`id`
+  TXT records real firmware publishes, so apps list it in network discovery (the Apple app
+  renders `RPLY_4331`) without manual IP entry. Best-effort backends in preference order:
+  the `zeroconf` package if installed, `dns-sd` (macOS), `avahi-publish-service` (Linux);
+  none present degrades to an actionable hint under `mdns` in `replay_status`, never a
+  session failure. Advertisement is registered after bind (so `port=0` auto-picks are
+  advertised correctly) and withdrawn on `replay_stop`.
 - **BBS/bot plane for the sim** (`sim_profile={"bots": {...}}`, off by default) — a
   meshing-around-style scene: `count` auto-reply bots (ping→pong pile-ons with bot-to-bot
   chain reactions, cmd/motd/wx/joke/games menus) egged on by attendee nodes, tapback
