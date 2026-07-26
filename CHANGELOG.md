@@ -6,6 +6,13 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **`meshtastic-mcp replay` CLI + `conference-stress` preset** — serve a simulated device
+  from the shell with no MCP session: `meshtastic-mcp replay conference-stress --nodes 1600
+  --rate 140 --loop` runs the dense-convention stress scenario (gateway-observed density +
+  the 17-bot BBS plane, tapback storms, traceroute pairs) in the foreground with periodic
+  target-vs-achieved status lines, mDNS-advertised so apps auto-discover it; Ctrl-C stops.
+  Accepts any sim preset or a `*.db`/`*.jsonl` capture, `--duration`/`--rate`/`--speed`
+  pacing, `--profile` inline-JSON overrides, `--fuzz`, and `--no-mdns`.
 - **Replay mDNS/Bonjour advertisement** (`replay_start(mdns=…)`, auto-on for non-loopback
   binds) — the session advertises `_meshtastic._tcp` on `local.` with the `shortname`/`id`
   TXT records real firmware publishes, so apps list it in network discovery (the Apple app

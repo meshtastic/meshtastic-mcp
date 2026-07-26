@@ -130,6 +130,8 @@ uv run meshtastic-mcp info /dev/ttyUSB0     # firmware/region/node info
 uv run meshtastic-mcp nodes /dev/ttyUSB0    # mesh peers visible to this node
 uv run meshtastic-mcp watch packets         # live-tail recorder stream (logs/packets/events)
 uv run meshtastic-mcp capture-stats defcon  # realism stats for a capture (*.db/*.jsonl) or sim preset
+uv run meshtastic-mcp replay conference-stress --nodes 1600 --rate 140 --loop
+                                            # serve a simulated device (foreground; mDNS-advertised)
 uv run meshtastic-mcp completion bash        # shell completion (eval "$(...)")
 # All read-only subcommands accept --json for machine-readable output.
 

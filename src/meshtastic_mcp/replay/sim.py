@@ -290,6 +290,39 @@ def _deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
+# "conference-stress": the dense-convention scenario tuned for app stress
+# replays — the defcon geometry/channels/RF model at *gateway-observed*
+# density (per-node cadences throttled so 1600 nodes ≈ the real capture's
+# ~18-20k packets, not the omniscient firehose) with the BBS/bot plane on:
+# ping storms, tapback threads (147-reaction legendary message), bot beacons,
+# and traceroute pairs. Pair with `rate`/`duration` pacing for a stress run,
+# e.g. `meshtastic-mcp replay conference-stress --nodes 1600 --rate 140 --loop`.
+PRESETS["conference-stress"] = _deep_merge(
+    PRESETS["defcon"],
+    {
+        "label_prefix": "conference-stress",
+        "pos_interval": {"mobile": 4800, "router": 28800, "default": 14400},
+        "telemetry_interval": 28800,
+        "nodeinfo_refresh": 86400,
+        "nodeinfo_exchange_pairs": (0, 0),
+        "nodeinfo_background_interval": 86400,
+        "ack_ratio": 0.2,
+        "ack_background_interval": 86400,
+        "beacon_interval": 28800,
+        "beacon_fraction": 0.2,
+        "env_interval": 86400,
+        "text_base_msgs_per_hour": 2,
+        "bots": {
+            "count": 17,
+            "storms_per_day": 200,
+            "tapback_storm": 147,
+            "traceroutes_per_day": 55,
+            "beacon_interval": 7200,
+        },
+    },
+)
+
+
 def _resolve_profile(profile: dict | str | None) -> dict:
     """Merge a profile override (dict / preset name / JSON path) over PROFILE."""
     if profile is None:

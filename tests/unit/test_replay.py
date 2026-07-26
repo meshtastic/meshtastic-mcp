@@ -1236,6 +1236,66 @@ def test_from_kind_traceroute_request_id_builds_response():
     assert mp2.decoded.request_id == 0
 
 
+# ── conference-stress preset + replay CLI ───────────────────────────────────
+PROFILE_DEFAULT_TELEMETRY = 1800  # firmware-default cadence in the base PROFILE
+
+
+def test_conference_stress_preset_bundles_the_scene():
+    """`conference-stress` = the dense-convention scenario at gateway-observed
+    density with the BBS/bot plane on by default — the one-preset stress run.
+    """
+    prof = sim.preset_profile("conference-stress")
+    assert prof["label_prefix"] == "conference-stress"
+    assert prof["bots"]["count"] == 17
+    assert prof["telemetry_interval"] > PROFILE_DEFAULT_TELEMETRY  # throttled cadences
+    cap = sim.generate(nodes=50, days=1, seed=3, start=1_700_000_000, profile=prof)
+    mp = mesh_pb2.MeshPacket()
+    tapbacks = 0
+    for _ts, raw, _ch in cap.packets:
+        mp.Clear()
+        mp.ParseFromString(raw)
+        if mp.decoded.portnum == 1 and mp.decoded.emoji:
+            tapbacks += 1
+    assert len(cap.nodes) == 50 + 17  # attendees + the bot herd
+    assert tapbacks > 0
+
+
+def test_cli_replay_builds_session_from_args():
+    """`meshtastic-mcp replay` resolves args into a ReplaySession without
+    touching the network until start(): preset source, pacing, mdns opt-out.
+    """
+    import argparse
+
+    from meshtastic_mcp.__main__ import _build_replay_session
+
+    args = argparse.Namespace(
+        source="conference-stress",
+        host="127.0.0.1",
+        port=0,
+        rate=140.0,
+        duration=None,
+        speed=1.0,
+        loop=True,
+        nodes=30,
+        days=1,
+        seed=3,
+        profile='{"bots": {"count": 2}}',
+        fuzz=None,
+        edition="DEFCON",
+        announce_interval=0.0,
+        node_delay=0.0,
+        no_mdns=True,
+        status_interval=30.0,
+    )
+    sess = _build_replay_session(args)
+    assert sess.params.rate == 140.0
+    assert sess.params.loop is True
+    assert sess.params.mdns is False  # --no-mdns
+    assert sess.params.firmware_edition == "DEFCON"
+    assert len(sess.capture.nodes) == 30 + 2  # --profile override beat the preset
+    assert sess.state.ended is False
+
+
 # ── mDNS/Bonjour advertisement ──────────────────────────────────────────────
 def test_mdns_argv_builders_match_firmware_service():
     """The advertisement must match what apps browse for: `_meshtastic._tcp`
