@@ -186,6 +186,7 @@ replay_start(source="event.db", channels=[             # split by OTA hash + dec
     {"name": "Primary", "psk": "AQ==", "primary": True},
     {"name": "Secret", "psk": "<base64-key>"},
     {"name": "Unknown", "catch_all": True}])
+replay_start(source="defcon", sim_profile={"bots": {"count": 17}})  # BBS bots + tapback storms
 replay_start(source="meshcon", fuzz="adversary")     # lace it with bad actors
 replay_start(source="capture.db", announce_interval=30)  # in-app "Replay Clock" progress
 replay_inject(sid, "waypoint", {"lat":37,"lon":-122,"geofence_radius":500,"notify_on_enter":True})
@@ -194,6 +195,14 @@ replay_status(); replay_stop()
 
 - **Sources** (`replay/capture.py`): SQLite captures (`*.db`/`.gz`, the Burning Man / DEF CON /
   MeshCon schema), the recorder's own `packets.jsonl`, or an in-memory synthetic mesh.
+- **Pacing & discovery**: `duration=N` streams the whole windowed capture in exactly N seconds
+  (whatever its packet count); else `rate` (steady pkts/sec); else `speed` (cadence multiplier).
+  Pacing is drift-free (deadline-anchored), and `replay_status` reports `target_rate` vs the live
+  `achieved_rate`, so a stress run is self-verifying. Sessions advertise over mDNS/Bonjour as
+  `_meshtastic._tcp` with firmware-style TXT records, so apps auto-discover them in network
+  discovery (no manual IP entry; `mdns=False` to opt out). `meshtastic-mcp replay` serves all of
+  this from the shell — the `conference-stress` preset is the batteries-included stress scenario
+  (gateway-observed density + the bot plane below).
 - **Multi-channel captures**: pass a `channels` list (name + PSK, optional explicit OTA hashes,
   optional `catch_all` bucket) to route packets into the real channels by their OTA channel hash
   and advertise the keys so a connecting app shows the true channels and live-decrypts the
@@ -207,7 +216,13 @@ replay_status(); replay_stop()
   short-message lengths, and a share of encrypted/foreign traffic) are informed by the aggregate
   statistics of real ~1,800-node captures (Burning Man + DEF CON 33) — proportions only; every
   identity, position, and message is generated. `sim.fit_profile(capture)` derives such a profile
-  from any capture.
+  from any capture. Traceroutes are emitted as request→response pairs with firmware `RouteDiscovery`
+  semantics so app traceroute logs populate.
+- **BBS/bot plane** (`sim_profile={"bots": {"count": N}}`, off by default) — a meshing-around-style
+  scene: auto-reply bots (ping→pong pile-ons, `cmd`/`motd`/`wx`/`joke`/games menus) egged on by
+  attendees, tapback (emoji-reaction) storms incl. one legendary 100+-reaction broadcast, per-bot
+  beacons, and attendee→bot traceroute pairs. Layered on after the RF-observer stage so the
+  app-facing exchanges arrive intact.
 - **Live injection** (`replay_inject`): push exact packets into a running session to drive app
   features on demand — a waypoint with a geofence, a node position crossing it, a text, a NodeInfo,
   or `raw`. Builders (`replay/build.py`) set proto fields the bundled lib predates (e.g. geofence)
