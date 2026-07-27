@@ -165,11 +165,14 @@ def _ensure_companion(udid: str, *, attempts: int = 3) -> None:
 
 def _app_documents(udid: str) -> pathlib.Path:
     """The app's on-disk Documents dir. The simulator container is just a host directory."""
+    # Bounded: a wedged simctl or CoreSimulator daemon would otherwise hang the whole CI job here
+    # rather than failing fast. Args are a list (no shell), so nothing is interpolated.
     out = subprocess.run(
         ["xcrun", "simctl", "get_app_container", udid, BUNDLE_ID, "data"],
         capture_output=True,
         text=True,
         check=True,
+        timeout=30,
     )
     docs = pathlib.Path(out.stdout.strip()) / "Documents"
     docs.mkdir(parents=True, exist_ok=True)

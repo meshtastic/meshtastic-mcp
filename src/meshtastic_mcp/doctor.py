@@ -348,8 +348,11 @@ _MESHTASTICD_DEPS_MAC: tuple[tuple[str, str], ...] = (
 )
 
 # Debian: (apt package, a header that proves it is installed).
+# argp is part of glibc on Debian, so argp.h comes from libc6-dev — there is no libargp-dev to
+# install, and naming one would make the fix line fail with "Unable to locate package". The
+# standalone formula only exists where the platform libc lacks argp, which is why macOS needs it.
 _MESHTASTICD_DEPS_DEBIAN: tuple[tuple[str, str], ...] = (
-    ("libargp-dev", "/usr/include/argp.h"),
+    ("libc6-dev", "/usr/include/argp.h"),
     ("libyaml-cpp-dev", "/usr/include/yaml-cpp/yaml.h"),
     ("libuv1-dev", "/usr/include/uv.h"),
     ("libssl-dev", "/usr/include/openssl/ssl.h"),

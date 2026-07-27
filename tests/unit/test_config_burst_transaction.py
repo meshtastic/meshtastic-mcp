@@ -78,6 +78,39 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
+def _start_node(tmp_path: Path, *, attempts: int = 3):
+    """A started node whose TCP API is answering, or a hard failure.
+
+    Retried because asking the kernel for a free port and then handing it to meshtasticd is not
+    atomic: the port is released when the probe socket closes, so another process can take it
+    before meshtasticd binds. Retrying with a fresh port is cheaper than plumbing an inherited
+    socket through the launcher, and the window is small.
+
+    Failure here is a real failure, not a skip. `_binary()` has already established that this tier
+    was asked for, so a daemon that will not start means the thing under test never ran — skipping
+    would turn a crashed or incompatible meshtasticd into a green CI run.
+    """
+    problems: list[str] = []
+    for attempt in range(attempts):
+        port = _free_port()
+        node = native_node.build_lab(
+            binary=_binary(), workdir=tmp_path / f"node-{port}", count=1, base_port=port
+        )[0]
+        try:
+            node.start(erase=True)
+        except Exception as exc:  # port taken between probe and bind, or a bad binary
+            problems.append(f"attempt {attempt + 1}: start failed: {exc}")
+            continue
+        if _wait_tcp(node.tcp_port):
+            return node
+        problems.append(
+            f"attempt {attempt + 1}: no TCP API on {node.tcp_port}; log {node.log_path}"
+        )
+        with contextlib.suppress(Exception):
+            node.stop()
+    pytest.fail("meshtasticd never came up:\n  " + "\n  ".join(problems))
+
+
 def _wait_tcp(port: int, timeout: float = 45.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -100,14 +133,8 @@ def _trial(tmp_path: Path, *, transacted: bool, pace: float) -> dict[str, int]:
     """Apply the burst to a freshly-erased node and return its log signature."""
     import meshtastic.tcp_interface
 
-    port = _free_port()
-    node = native_node.build_lab(
-        binary=_binary(), workdir=tmp_path / f"node-{port}", count=1, base_port=port
-    )[0]
-    node.start(erase=True)
+    node = _start_node(tmp_path)
     try:
-        if not _wait_tcp(node.tcp_port):
-            pytest.skip("meshtasticd did not open its TCP API in time")
         iface = meshtastic.tcp_interface.TCPInterface(
             hostname="127.0.0.1", portNumber=node.tcp_port
         )
@@ -130,14 +157,21 @@ def _trial(tmp_path: Path, *, transacted: bool, pace: float) -> dict[str, int]:
         time.sleep(9)  # outlast the 7s reboot timer so the log shows what happened
         with contextlib.suppress(Exception):
             iface.close()
-        return _counts(Path(node.log_path).read_text(errors="replace"))
-    finally:
+        counts = _counts(Path(node.log_path).read_text(errors="replace"))
+    except BaseException:
+        # The trial already failed. Cleanup problems are secondary here: surface them without
+        # replacing the real error, which is the one worth reading.
         try:
             node.stop()
         except Exception as exc:
-            # Do not swallow this. A node that will not stop keeps its port and its workdir, and
-            # the next run then talks to a stale process instead of a fresh one.
-            warnings.warn(f"meshtasticd on port {port} did not stop: {exc}", stacklevel=2)
+            warnings.warn(f"meshtasticd on {node.tcp_port} also did not stop: {exc}", stacklevel=2)
+        raise
+
+    # Trial succeeded, so a cleanup failure is the only problem and must not be downgraded to a
+    # warning: a node left running keeps its port and its workdir, and a later run would talk to
+    # that stale process while this test reported green.
+    node.stop()
+    return counts
 
 
 @pytest.mark.meshtasticd
@@ -181,5 +215,16 @@ def test_unpaced_transaction_can_lose_begin_and_silently_untransact(tmp_path: Pa
         assert counts["deferred"] == 0
         assert counts["save"] >= 1
     else:
-        # It got through this time; the transaction must then have behaved.
+        # begin landed, so writes must have been deferred rather than saved one by one.
         assert counts["deferred"] >= 1
+        if counts["commit"] == 0:
+            # The commit was dropped instead. Nothing is persisted and the node is left holding
+            # the transaction open, deferring every later write from any client until it reboots.
+            # A distinct failure mode from a lost begin, and not a success — assert it as itself
+            # rather than letting `deferred >= 1` alone stand in for a healthy run.
+            assert counts["save"] == 0
+            assert counts["reboot"] == 0
+        else:
+            # Full path: one deferred save flushed at the commit, one reboot.
+            assert counts["save"] == 1
+            assert counts["reboot"] == 1
