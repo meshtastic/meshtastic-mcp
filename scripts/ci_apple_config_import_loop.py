@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import pathlib
 import shutil
 import subprocess
@@ -64,12 +65,58 @@ _spec.loader.exec_module(_apple)
 # The sibling already loaded the device-plane helper; reuse its handle rather than exec'ing twice.
 _mesh = _apple._mesh
 
-BUNDLE_ID = "gvh.MeshtasticClient"
+# The org bundle id. Overridable, because a contributor signing with their own team builds under a
+# different one and every simctl call here is bundle-scoped: get_app_container would fail with a
+# bare "No such file or directory" that reads like a broken install rather than a wrong id.
+DEFAULT_BUNDLE_ID = "gvh.MeshtasticClient"
+BUNDLE_ID = os.environ.get("MESHTASTIC_APPLE_BUNDLE_ID", DEFAULT_BUNDLE_ID)
 
-# Tab-bar geometry, borrowed from the sibling loop: idb's flat accessibility tree exposes the tab
-# bar as one unlabeled Group, so its items are reachable only by coordinate. 5 tabs across 402pt.
-_TAB_BAR_Y = 832
-_TAB_XS = (40, 120, 201, 282, 362)
+# Tab-bar geometry: idb's flat accessibility tree exposes the tab bar as one unlabeled Group, so
+# its items are reachable only by coordinate. Derived from the booted device's own screen rather
+# than hard-coded, since the sibling loop's numbers are iPhone 17 Pro (402x874pt) and a smaller
+# sim would land these taps on the wrong control — or off-screen.
+_REFERENCE_SIZE = (402.0, 874.0)  # iPhone 17 Pro, the default --sim
+_REFERENCE_TAB_BAR_Y = 832.0
+_REFERENCE_TAB_XS = (40.0, 120.0, 201.0, 282.0, 362.0)
+
+
+def _screen_points(udid: str) -> tuple[float, float] | None:
+    """Screen size in POINTS, read from the accessibility tree.
+
+    The tree's frames are already in the same coordinate space `idb ui tap` expects, so this needs
+    no density conversion — unlike `idb describe`, which reports pixels.
+    """
+    try:
+        elements = apple_sim.ui_dump(udid=udid)
+    except Exception:
+        return None
+    w = h = 0.0
+    for el in elements:
+        frame = el.get("frame") or {}
+        try:
+            w = max(w, float(frame.get("x", 0)) + float(frame.get("width", 0)))
+            h = max(h, float(frame.get("y", 0)) + float(frame.get("height", 0)))
+        except (TypeError, ValueError):
+            continue
+    return (w, h) if w > 0 and h > 0 else None
+
+
+def _tab_geometry(udid: str) -> tuple[float, tuple[float, ...]]:
+    """(tab-bar y, tab centre xs) scaled to the booted simulator's screen.
+
+    Falls back to the reference numbers when the size cannot be read; they are correct for the
+    default sim, so the fallback is no worse than hard-coding was.
+    """
+    size = _screen_points(udid)
+    if size is None:
+        return _REFERENCE_TAB_BAR_Y, _REFERENCE_TAB_XS
+    w, h = size
+    ref_w, ref_h = _REFERENCE_SIZE
+    return (
+        _REFERENCE_TAB_BAR_Y * (h / ref_h),
+        tuple(x * (w / ref_w) for x in _REFERENCE_TAB_XS),
+    )
+
 
 # Labels lifted from Tools.swift / ImportDeviceProfileView.swift. Kept together so a UI rename
 # shows up as one obvious diff rather than a mystery timeout.
@@ -171,8 +218,9 @@ def _find_settings_tab(udid: str) -> bool:
     (`Tools` sits below the fold, so it is the wrong thing to probe for). Probing survives a
     tab-order change; a hard-coded index would not.
     """
-    for x in _TAB_XS:
-        apple_sim.tap(x, _TAB_BAR_Y, udid=udid)
+    bar_y, tab_xs = _tab_geometry(udid)
+    for x in tab_xs:
+        apple_sim.tap(int(x), int(bar_y), udid=udid)
         time.sleep(1.8)
         if apple_sim.find_text(L_SETTINGS_ANCHOR, udid=udid):
             return True
@@ -389,11 +437,20 @@ Each targets a branch that only exists on BLE.
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Declared up front: the --bundle-id default reads BUNDLE_ID below, and a `global` after a read
+    # in the same scope is a SyntaxError.
+    global BUNDLE_ID
     p = argparse.ArgumentParser(description="Apple app-plane e2e: device-profile import")
     p.add_argument("--binary", type=pathlib.Path, help="native-macos meshtasticd")
     p.add_argument("--app", type=pathlib.Path, help="built Meshtastic.app for the simulator")
     p.add_argument("--profile", type=pathlib.Path, help=".cfg device profile to import")
     p.add_argument("--sim", default="iPhone 17 Pro")
+    p.add_argument(
+        "--bundle-id",
+        default=BUNDLE_ID,
+        help=f"app bundle id (default: {BUNDLE_ID}; also $MESHTASTIC_APPLE_BUNDLE_ID). "
+        "Set this when building under your own signing team.",
+    )
     p.add_argument("--timeout", type=float, default=90.0)
     p.add_argument("--no-verify", action="store_true", help="skip the verification pass")
     p.add_argument(
@@ -409,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:
     missing = [n for n in ("binary", "app", "profile") if getattr(a, n) is None]
     if missing:
         p.error("required unless --print-manual-checklist: " + ", ".join("--" + m for m in missing))
+    BUNDLE_ID = a.bundle_id
     return run(a.binary, a.app, a.profile, sim=a.sim, timeout=a.timeout, verify=not a.no_verify)
 
 
