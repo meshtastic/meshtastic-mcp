@@ -18,10 +18,12 @@ Skipped unless a meshtasticd binary is available:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import socket
 import time
+import warnings
 from pathlib import Path
 
 import pytest
@@ -64,6 +66,18 @@ def _binary() -> Path:
     return path
 
 
+def _free_port() -> int:
+    """An unused TCP port, asked of the kernel.
+
+    Fixed ports meant a meshtasticd leaked by an earlier run kept the port, and the next run's
+    _wait_tcp then connected to that stale node and asserted against the wrong log — a confusing
+    failure that looks like a firmware regression. It also blocked ever running these in parallel.
+    """
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
 def _wait_tcp(port: int, timeout: float = 45.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -82,10 +96,11 @@ def _counts(log: str) -> dict[str, int]:
     }
 
 
-def _trial(tmp_path: Path, port: int, *, transacted: bool, pace: float) -> dict[str, int]:
+def _trial(tmp_path: Path, *, transacted: bool, pace: float) -> dict[str, int]:
     """Apply the burst to a freshly-erased node and return its log signature."""
     import meshtastic.tcp_interface
 
+    port = _free_port()
     node = native_node.build_lab(
         binary=_binary(), workdir=tmp_path / f"node-{port}", count=1, base_port=port
     )[0]
@@ -113,21 +128,22 @@ def _trial(tmp_path: Path, port: int, *, transacted: bool, pace: float) -> dict[
             local.commitSettingsTransaction()
 
         time.sleep(9)  # outlast the 7s reboot timer so the log shows what happened
-        try:
+        with contextlib.suppress(Exception):
             iface.close()
-        except Exception:
-            pass
         return _counts(Path(node.log_path).read_text(errors="replace"))
     finally:
         try:
             node.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            # Do not swallow this. A node that will not stop keeps its port and its workdir, and
+            # the next run then talks to a stale process instead of a fresh one.
+            warnings.warn(f"meshtasticd on port {port} did not stop: {exc}", stacklevel=2)
 
 
 @pytest.mark.meshtasticd
+@pytest.mark.timing
 def test_untransacted_burst_causes_a_reboot_per_write(tmp_path: Path) -> None:
-    counts = _trial(tmp_path, 4430, transacted=False, pace=0.0)
+    counts = _trial(tmp_path, transacted=False, pace=0.0)
     # Every accepted write saves to flash and schedules its own reboot.
     assert counts["save"] >= 2
     assert counts["reboot"] == counts["save"]
@@ -138,8 +154,9 @@ def test_untransacted_burst_causes_a_reboot_per_write(tmp_path: Path) -> None:
 
 
 @pytest.mark.meshtasticd
+@pytest.mark.timing
 def test_paced_transaction_collapses_to_one_save_and_one_reboot(tmp_path: Path) -> None:
-    counts = _trial(tmp_path, 4431, transacted=True, pace=0.15)
+    counts = _trial(tmp_path, transacted=True, pace=0.15)
     assert counts["begin"] == 1
     assert counts["commit"] == 1
     assert counts["set_module"] == len(_SECTIONS)  # nothing dropped
@@ -149,6 +166,7 @@ def test_paced_transaction_collapses_to_one_save_and_one_reboot(tmp_path: Path) 
 
 
 @pytest.mark.meshtasticd
+@pytest.mark.timing
 def test_unpaced_transaction_can_lose_begin_and_silently_untransact(tmp_path: Path) -> None:
     """Pacing is load-bearing, not cosmetic.
 
@@ -157,7 +175,7 @@ def test_unpaced_transaction_can_lose_begin_and_silently_untransact(tmp_path: Pa
     a reboot per write. That is strictly worse than not using a transaction, because the client
     reports success. Asserted as a property rather than an exact count because it is a race.
     """
-    counts = _trial(tmp_path, 4432, transacted=True, pace=0.0)
+    counts = _trial(tmp_path, transacted=True, pace=0.0)
     if counts["begin"] == 0:
         # The degraded path: saves were NOT deferred, so the reboot storm happened anyway.
         assert counts["deferred"] == 0
