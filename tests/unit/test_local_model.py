@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """Local-model offload (exploration). Client wiring + capability gating; the
-live-completion test skips when no local Ollama is reachable."""
+live tests skip unless the lane's model is actually pulled locally — a reachable
+Ollama alone is not enough, since it 404s on a model it does not have."""
 
 from __future__ import annotations
 
@@ -67,11 +68,24 @@ def test_unreachable_host_degrades(monkeypatch):
         local_model.complete("hi", timeout=0.5)
 
 
-def _has_vision() -> bool:
-    return local_model.available() and local_model.model("vision") in local_model.list_models()
+def _has_model(lane: str) -> bool:
+    """True only when the backend is up *and* this lane's model is pulled.
+
+    Reachability alone is insufficient: Ollama answers, then 404s on a model it
+    does not have, which surfaces as a test failure rather than a skip.
+
+    An untagged name is matched against ``:latest`` too, since Ollama resolves
+    ``phi4-mini`` to ``phi4-mini:latest`` while the tag list reports only the
+    fully-qualified form — comparing verbatim would skip a usable model.
+    """
+    if not local_model.available():
+        return False
+    want = local_model.model(lane)
+    names = local_model.list_models()
+    return want in names or (":" not in want and f"{want}:latest" in names)
 
 
-@pytest.mark.skipif(not local_model.available(), reason="no local Ollama reachable")
+@pytest.mark.skipif(not _has_model("fast"), reason="no local fast-lane model")
 def test_live_completion_offloads():
     out = local_model.complete(
         "Reply with exactly the word OK and nothing else.", lane="fast", num_predict=8
@@ -79,7 +93,7 @@ def test_live_completion_offloads():
     assert isinstance(out, str) and out  # got a non-empty response from the local GPU
 
 
-@pytest.mark.skipif(not _has_vision(), reason="no local vision model")
+@pytest.mark.skipif(not _has_model("vision"), reason="no local vision model")
 def test_vision_assert_parses_structured_answer(tmp_path):
     # a tiny synthetic image with known text; the VLM should read it
     pytest.importorskip("PIL")
