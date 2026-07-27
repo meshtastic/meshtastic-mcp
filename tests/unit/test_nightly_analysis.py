@@ -283,3 +283,83 @@ def test_device_rows_shape(tmp_path, monkeypatch):
         await db.close()
 
     asyncio.run(go())
+
+
+# --- contradiction guard -------------------------------------------------
+# BEHAVIOR_SYSTEM invites "nothing notable" on a clean window, and small models
+# take that opening even when the window is dirty. These cases are verbatim
+# model output from a granite4:tiny-h vs phi4-mini bench on raw soak logs.
+
+GRANITE_CONTRADICTION = """- SOAK window clean, no reboots or unexpected silence observed
+- Multiple brownout warnings at 14:10:50 and 14:10:51 due to low vbat (3.21V)
+- Reboot occurred at 14:11:10 after watchdog timeout on node !a4c1382b
+- Several retransmission storms involving node !7f2e9910 with TEXT_MESSAGE_APP"""
+
+
+def test_flag_contradictory_all_clear_catches_leading_false_all_clear():
+    out, flagged = na.flag_contradictory_all_clear(GRANITE_CONTRADICTION)
+    assert flagged
+    assert out.startswith(na.CONTRADICTION_NOTE)
+    assert GRANITE_CONTRADICTION in out  # original text preserved below the note
+
+
+def test_flag_contradictory_all_clear_allows_an_honest_all_clear():
+    # a genuinely clean window says so and lists nothing; "no reboots" is the
+    # accurate claim here and must not trip the guard on its own wording
+    for text in ("nothing notable", "- nothing notable in this window", "- no reboots observed"):
+        out, flagged = na.flag_contradictory_all_clear(text)
+        assert not flagged, text
+        assert out == text
+
+
+def test_flag_contradictory_all_clear_ignores_plain_anomaly_report():
+    text = "- Reboot at 14:11:10 after watchdog timeout on !a4c1382b\n- CRC mismatch x5"
+    out, flagged = na.flag_contradictory_all_clear(text)
+    assert not flagged
+    assert out == text
+
+
+def test_flag_contradictory_all_clear_handles_empty():
+    assert na.flag_contradictory_all_clear("") == ("", False)
+    assert na.flag_contradictory_all_clear("   ") == ("   ", False)
+
+
+def test_flag_contradictory_all_clear_ignores_negated_clean_claim():
+    # an honest dirty report phrased as a denial must not read as an all-clear
+    for text in (
+        "- SOAK window is not clean; watchdog reboot at 02:14",
+        "- the night was far from clean: brownout vbat=3.21V then a reboot",
+    ):
+        out, flagged = na.flag_contradictory_all_clear(text)
+        assert not flagged, text
+        assert out == text
+
+
+def test_flag_contradictory_all_clear_allows_multi_item_honest_denial():
+    # "no reboots or unexpected silence" denies both; `silence` must not be
+    # harvested from that clause as if it were anomaly evidence
+    text = "- nothing notable\n- no reboots or unexpected silence observed"
+    out, flagged = na.flag_contradictory_all_clear(text)
+    assert not flagged
+    assert out == text
+
+
+def test_flag_contradictory_all_clear_counts_absence_findings_as_anomalies():
+    # a denial that IS the finding still contradicts an all-clear
+    text = "- nothing notable this window\n- no packets from !c81d44a0 for 3600s"
+    _, flagged = na.flag_contradictory_all_clear(text)
+    assert flagged
+
+
+def test_flag_contradictory_all_clear_catches_scoped_self_contradiction():
+    # verbatim phi4-mini output on a CLEAN window: it hallucinated anomalies and
+    # then declared the same topic unremarkable. The claim is scoped ("regarding
+    # unexpected silence") rather than global, and still contradicts the bullets.
+    text = (
+        "- Repeated packets with varying RSSI and SNR, indicating potential "
+        "retransmission storm.\n"
+        "- Nothing notable regarding unexpected silence, as all expected device "
+        "transmissions are logged."
+    )
+    _, flagged = na.flag_contradictory_all_clear(text)
+    assert flagged
