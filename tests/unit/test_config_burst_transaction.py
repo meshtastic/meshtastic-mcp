@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Meshtastic MCP contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Config-burst behaviour against a real firmware AdminModule, with no radio attached.
 
 Runs `meshtasticd` (real firmware compiled for the host) as a virtual radio over TCP and replays what
