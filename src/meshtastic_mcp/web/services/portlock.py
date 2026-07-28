@@ -36,10 +36,38 @@ class PortWedgedError(RuntimeError):
     power-cycle/unwedge (device re-enumeration) frees the port."""
 
 
+class PortClaimedError(RuntimeError):
+    """The device is claimed for an extended window by a long-running owner
+    (e.g. the nightly soak's persistent API observer). Fail fast — matching
+    the port-arbitration philosophy — instead of queueing behind a claim
+    that can last hours."""
+
+
 class PortLocks:
     def __init__(self, serialmon=None) -> None:
         self.serialmon = serialmon
         self._locks: dict[str, asyncio.Lock] = {}
+        self._claims: dict[str, str] = {}  # serial -> owner label
+
+    def claim(self, serial: str, owner: str) -> None:
+        """Reserve a device for a long-lived owner. guard() refuses the serial
+        until release_claim(). Raises PortClaimedError if already claimed by a
+        different owner. Claiming does NOT free the port — the claimant must
+        suspend the serial monitor itself before opening anything."""
+        current = self._claims.get(serial)
+        if current is not None and current != owner:
+            raise PortClaimedError(f"{serial}: already claimed by {current}")
+        self._claims[serial] = owner
+
+    def release_claim(self, serial: str, owner: str) -> None:
+        """Release a claim. Only the claiming owner may release; a mismatched
+        release is ignored (the claim stays) so a stale caller can't strip an
+        active owner's reservation."""
+        if self._claims.get(serial) == owner:
+            self._claims.pop(serial, None)
+
+    def claimed_by(self, serial: str) -> str | None:
+        return self._claims.get(serial)
 
     def _lock(self, serial: str) -> asyncio.Lock:
         lk = self._locks.get(serial)
@@ -60,6 +88,9 @@ class PortLocks:
         port" symptoms (observed as soak-preflight config-read timeouts). Wait
         briefly for the reader to die, then refuse with PortWedgedError rather
         than proceed and corrupt."""
+        owner = self._claims.get(serial)
+        if owner is not None:
+            raise PortClaimedError(f"{serial}: device is held by {owner} — retry after it ends")
         async with self._lock(serial):
             if self.serialmon is not None:
                 await self.serialmon.suspend(serial)

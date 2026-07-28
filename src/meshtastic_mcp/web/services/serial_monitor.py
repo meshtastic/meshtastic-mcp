@@ -19,6 +19,7 @@ import asyncio
 import logging
 import threading
 import time
+from typing import Any
 
 import serial as pyserial
 
@@ -48,6 +49,11 @@ class SerialMonitor:
         self.db = db
         self.hub = hub
         self.forwarder = None  # set by app wiring; receives captured log lines
+        # Set by app wiring: PortLocks, consulted so a monitor never opens a
+        # port a long-lived owner (the nightly soak observer) has claimed —
+        # POSIX ttys allow double-opens, and a second reader would steal bytes
+        # from the held protobuf stream.
+        self.portlocks: Any = None
         # Extra line consumers (e.g. the nightly soak recorder). Each is called
         # with the same parsed record dict as the forwarder — FROM THE READER
         # THREAD, so sinks must be thread-safe and quick.
@@ -128,6 +134,16 @@ class SerialMonitor:
         from . import test_runner
 
         if test_runner.is_running():
+            return
+        # A claimed device is port-owned by a long-lived holder (nightly soak
+        # observer); it tees its records to this device's serial.* topic, so a
+        # UI tab still sees live data — just not from a second raw reader.
+        claimed_by = getattr(self.portlocks, "claimed_by", None)
+        if claimed_by is not None and claimed_by(serial):
+            self.hub.publish_threadsafe(
+                self._topic(serial),
+                {"line": f"— port held by {claimed_by(serial)}; live records relayed —"},
+            )
             return
         # Self-heal an abandoned close: if a previous _close() timed out, the
         # wedged reader kept mon.thread set so nothing could double-open the

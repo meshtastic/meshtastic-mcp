@@ -127,3 +127,45 @@ def test_abandoned_close_self_heals_once_the_reader_dies(monkeypatch):
         await mon.shutdown()
 
     asyncio.run(go())
+
+
+def test_monitor_refuses_to_open_a_claimed_port(monkeypatch):
+    """While the nightly soak's API observer claims a device, the monitor must
+    not open a raw reader against it (POSIX ttys allow double-opens; a second
+    reader would steal bytes from the held protobuf stream). After the claim is
+    released, resume re-establishes the monitor."""
+    monkeypatch.setattr(sm.SerialMonitor, "_read_loop", lambda *a, **k: None)
+
+    async def fake_get(_db, serial):
+        return {"serial_number": serial, "kind": "usb", "current_port": "/dev/fake0"}
+
+    monkeypatch.setattr(sm.rd, "get", fake_get)
+
+    published: list[tuple[str, dict]] = []
+
+    class _Hub:
+        def publish_threadsafe(self, topic, data):
+            published.append((topic, data))
+
+        async def publish(self, *a, **k):
+            pass
+
+    from meshtastic_mcp.web.services.portlock import PortLocks
+
+    mon = sm.SerialMonitor(db=object(), hub=_Hub())
+    locks = PortLocks(serialmon=mon)
+    mon.portlocks = locks
+
+    async def go():
+        locks.claim("S1", "nightly soak")
+        await mon.acquire("S1")
+        assert mon._mons["S1"].thread is None, "opened a raw reader on a claimed port!"
+        # The UI tab is told why its monitor shows no reader of its own.
+        assert any("nightly soak" in d.get("line", "") for _t, d in published)
+
+        locks.release_claim("S1", "nightly soak")
+        await mon.resume("S1")
+        assert mon._mons["S1"].thread is not None, "did not re-open after claim release"
+        await mon.shutdown()
+
+    asyncio.run(go())

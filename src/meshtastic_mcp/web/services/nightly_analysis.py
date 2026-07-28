@@ -457,12 +457,14 @@ class Analyzer:
                     Observation(
                         severity="info",
                         category="log_silence",
-                        summary=f"{_device_label(d)} produced no soak log lines — "
-                        "serial capture may have failed",
+                        summary=f"{_device_label(d)} produced no soak records "
+                        "(no packets, log lines, or status events) — "
+                        "its API observer never captured anything",
                         device=serial,
                     )
                 )
                 continue
+            self._observer_drop_obs(serial, d, recs)
             panic_lines = [
                 _clean(r.get("line", ""), self.scrubber)
                 for r in recs
@@ -532,6 +534,35 @@ class Analyzer:
                         data={"slope_per_min": round(slope, 1), "samples": len(points)},
                     )
                 )
+
+    def _observer_drop_obs(self, serial: str, d: dict, recs: list[dict]) -> None:
+        """A device whose soak API session was lost and never recovered most
+        likely crashed, wedged, or dropped off the bus — the loss itself is the
+        signal (an API-observed device emits no text logs to panic-scan)."""
+        lost_at: float | None = None
+        gave_up = False
+        for r in recs:
+            if r.get("kind") != "status":
+                continue
+            line = r.get("line") or ""
+            if "connection lost" in line:
+                lost_at = float(r.get("ts") or 0)
+            elif "reconnected" in line:
+                lost_at = None
+            elif "giving up" in line:
+                gave_up = True
+        if lost_at is None and not gave_up:
+            return
+        self.out.observations.append(
+            Observation(
+                severity="warn",
+                category="observer_drop",
+                summary=f"{_device_label(d)} lost its soak API session and never "
+                "recovered — possible crash, CDC wedge, or drop off the bus",
+                device=serial,
+                data={"gave_up": gave_up},
+            )
+        )
 
     def _traffic_loss(self) -> None:
         if not self.soak_sends:

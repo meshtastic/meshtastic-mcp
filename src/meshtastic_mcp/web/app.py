@@ -91,6 +91,9 @@ def create_app() -> FastAPI:
         # Per-device port arbitration shared by every port-bound operation
         # (control actions, enrichment, keep-alive) so no two open one device.
         app.state.portlocks = portlock.PortLocks(serialmon=app.state.serialmon)
+        # Back-ref so the monitor can refuse to open a port that a long-lived
+        # owner (the nightly soak's API observer) has claimed.
+        app.state.serialmon.portlocks = app.state.portlocks
         # Escalating troubleshooting ladder (reboot → power-cycle → reflash).
         app.state.recovery = recovery.RecoveryService(
             db, hub, serialmon=app.state.serialmon, portlocks=app.state.portlocks
@@ -178,6 +181,12 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(ControlBusy)
     async def _busy(_req: Request, exc: ControlBusy):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(portlock.PortClaimedError)
+    async def _claimed(_req: Request, exc: portlock.PortClaimedError):
+        # A long-lived owner (the nightly soak observer) holds the device —
+        # a clear 409, not a 500 traceback.
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     @app.exception_handler(ConfigError)
@@ -963,6 +972,31 @@ def _mount_nightly(api: APIRouter) -> None:
     @api.post("/nightly/cancel", status_code=204)
     async def nightly_cancel(request: Request):
         await request.app.state.nightly.cancel()
+
+    @api.post("/nightly/soak-now")
+    async def nightly_soak_now(request: Request, body: dict = Body(default={})):
+        try:
+            minutes = float(body.get("minutes", 10))
+            interval = body.get("traffic_interval_min")
+            interval = float(interval) if interval is not None else None
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="minutes and traffic_interval_min must be numbers"
+            )
+        try:
+            return await request.app.state.nightly.soak_now(minutes, traffic_interval_min=interval)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @api.get("/nightly/soak-now")
+    async def nightly_soak_status(request: Request):
+        return request.app.state.nightly.soak_status()
+
+    @api.post("/nightly/soak-now/cancel", status_code=204)
+    async def nightly_soak_cancel(request: Request):
+        await request.app.state.nightly.soak_cancel()
 
     @api.post("/nightly/runs/{nightly_id}/repost")
     async def nightly_repost(request: Request, nightly_id: int):

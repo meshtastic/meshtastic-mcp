@@ -30,7 +30,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -510,6 +510,10 @@ class NightlyOrchestrator:
         # and a manual run_now (each of which awaits mid-sequence) can't both
         # pass the is_pipeline_active() check and launch two pipelines.
         self._launch_lock = asyncio.Lock()
+        # Ad-hoc soak (soak_now) bookkeeping.
+        self._adhoc_soak_task: asyncio.Task | None = None
+        self._adhoc_soak_cancel: asyncio.Event | None = None
+        self._adhoc_soak_summary: dict | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -558,6 +562,75 @@ class NightlyOrchestrator:
             nid = await rn.create(self.db, scheduled_for=time.time(), trigger="manual")
             self._launch(nid, None)
         return {"nightly_id": nid}
+
+    # -- ad-hoc soak ---------------------------------------------------------
+    #
+    # A short standalone soak against the live bench — the fast way to verify
+    # capture health (records from every device, delivery of test sends)
+    # without a 3+ hour full pipeline. Same code path as the nightly's soak
+    # step, writing to nightly/adhoc-soak/; observations go to the WS hub only.
+
+    def soak_status(self) -> dict:
+        task = self._adhoc_soak_task
+        return {
+            "running": task is not None and not task.done(),
+            "summary": self._adhoc_soak_summary,
+        }
+
+    async def soak_now(self, minutes: float, traffic_interval_min: float | None = None) -> dict:
+        from .nightly_soak import NightlySoak  # local import — avoids a module cycle
+
+        if not 1.0 <= minutes <= 180.0:
+            raise ValueError("minutes must be between 1 and 180")
+        if self.is_pipeline_active():
+            raise RuntimeError("a nightly pipeline is running")
+        if tr_mod.is_running():
+            raise RuntimeError("a test run holds the bench")
+        if self._adhoc_soak_task is not None and not self._adhoc_soak_task.done():
+            raise RuntimeError("an ad-hoc soak is already running")
+
+        cfg = self.cfg
+        if traffic_interval_min is not None:
+            # A short validation soak wants sends sooner than the nightly's
+            # 10-minute cadence; the MIN_ACTION_PERIOD_S floor still applies.
+            if not 0.0 < traffic_interval_min <= 60.0:
+                raise ValueError("traffic_interval_min must be in (0, 60]")
+            cfg = replace(cfg, soak_traffic_interval_min=traffic_interval_min)
+
+        async def observe(severity: str, kind: str, message: str, data: dict | None) -> None:
+            await self.hub.publish(
+                "nightly.update",
+                {"type": "soak_observation", "severity": severity, "kind": kind, "msg": message},
+            )
+
+        soak = NightlySoak(
+            self.db,
+            self.serialmon,
+            self.portlocks,
+            cfg=cfg,
+            nightly_id=0,
+            data_dir=nightly_base_dir() / "adhoc-soak",
+            observe=observe,
+            keepalive=self.keepalive,
+            hub=self.hub,
+        )
+        self._adhoc_soak_cancel = asyncio.Event()
+
+        async def _run() -> None:
+            try:
+                summary = await soak.run(minutes * 60.0, cancel=self._adhoc_soak_cancel)
+                self._adhoc_soak_summary = summary.as_dict()
+            except Exception as exc:
+                log.warning("ad-hoc soak failed: %s", exc, exc_info=True)
+                self._adhoc_soak_summary = {"error": str(exc)}
+
+        self._adhoc_soak_summary = None
+        self._adhoc_soak_task = asyncio.create_task(_run())
+        return {"started": True, "minutes": minutes}
+
+    async def soak_cancel(self) -> None:
+        if self._adhoc_soak_cancel is not None:
+            self._adhoc_soak_cancel.set()
 
     async def cancel(self) -> None:
         """Graceful: the pipeline notices, marks the night canceled, and still
@@ -712,6 +785,15 @@ class NightlyOrchestrator:
     async def _run_pipeline(self, nightly_id: int, resume_from: str | None) -> None:
         outcome = "error"
         cancelled = False
+        # An ad-hoc soak holds port claims and live API interfaces on the whole
+        # bench — drain it before any pipeline step touches a device.
+        if self._adhoc_soak_task is not None and not self._adhoc_soak_task.done():
+            if self._adhoc_soak_cancel is not None:
+                self._adhoc_soak_cancel.set()
+            try:
+                await asyncio.wait_for(asyncio.shield(self._adhoc_soak_task), timeout=60.0)
+            except Exception:
+                log.warning("ad-hoc soak did not drain cleanly before the pipeline")
         try:
             try:
                 outcome = await asyncio.wait_for(
@@ -1259,6 +1341,7 @@ class NightlyOrchestrator:
             data_dir=nightly_data_dir(nightly_id),
             observe=observe,
             keepalive=self.keepalive,
+            hub=self.hub,
         )
         summary = await soak.run(remaining, cancel=self._cancel)
         await self._observe(
@@ -1266,7 +1349,7 @@ class NightlyOrchestrator:
             "soak",
             "info",
             "soak.summary",
-            f"soak captured {sum(summary.lines.values())} lines from "
+            f"soak captured {sum(summary.lines.values())} records from "
             f"{len(summary.lines)} device(s)",
             summary.as_dict(),
         )

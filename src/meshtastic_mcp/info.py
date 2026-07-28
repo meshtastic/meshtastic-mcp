@@ -10,7 +10,11 @@ from typing import Any
 from .connection import connect
 
 
-def _primary_channel_name(iface) -> str | None:
+def primary_channel_name(iface) -> str | None:
+    """Primary-channel name from an already-connected interface.
+
+    Public so long-held interfaces (the nightly soak's API observers) can run
+    the same check as `device_info` without a fresh connect."""
     try:
         channels = iface.localNode.channels or []
     except AttributeError:
@@ -24,12 +28,24 @@ def _primary_channel_name(iface) -> str | None:
     return None
 
 
+def region_name(iface) -> str | None:
+    """LoRa region enum name from an already-connected interface."""
+    local = getattr(iface, "localNode", None)
+    if local is None or local.localConfig is None:
+        return None
+    try:
+        lora = local.localConfig.lora
+        # region is an enum; get its string name
+        return lora.DESCRIPTOR.fields_by_name["region"].enum_type.values_by_number[lora.region].name
+    except Exception:
+        return None
+
+
 def device_info(port: str | None = None, timeout_s: float = 8.0) -> dict[str, Any]:
     """Return summary info for the connected device."""
     with connect(port=port, timeout_s=timeout_s) as iface:
         my = iface.myInfo
         meta = iface.metadata
-        local = iface.localNode
 
         # Owner (long/short name) is on the local node's user record
         long_name: str | None = None
@@ -42,18 +58,7 @@ def device_info(port: str | None = None, timeout_s: float = 8.0) -> dict[str, An
             short_name = user.get("shortName")
             hw_model = user.get("hwModel")
 
-        region = None
-        if local is not None and local.localConfig is not None:
-            try:
-                lora = local.localConfig.lora
-                # region is an enum; get its string name
-                region = (
-                    lora.DESCRIPTOR.fields_by_name["region"]
-                    .enum_type.values_by_number[lora.region]
-                    .name
-                )
-            except Exception:
-                region = None
+        region = region_name(iface)
 
         return {
             "port": iface.devPath if hasattr(iface, "devPath") else port,
@@ -64,7 +69,7 @@ def device_info(port: str | None = None, timeout_s: float = 8.0) -> dict[str, An
             "hw_model": hw_model,
             "region": region,
             "num_nodes": len(iface.nodesByNum) if iface.nodesByNum else 0,
-            "primary_channel": _primary_channel_name(iface),
+            "primary_channel": primary_channel_name(iface),
         }
 
 

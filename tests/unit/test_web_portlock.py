@@ -158,3 +158,42 @@ def test_guard_proceeds_once_the_wedged_reader_dies(monkeypatch):
         assert mon.events == [("suspend", "DEV"), ("resume", "DEV")]
 
     asyncio.run(go())
+
+
+def test_claim_makes_guard_fail_fast():
+    from meshtastic_mcp.web.services.portlock import PortClaimedError
+
+    async def go():
+        mon = _FakeMonitor()
+        pl = PortLocks(serialmon=mon)
+        pl.claim("DEV", "nightly soak")
+        assert pl.claimed_by("DEV") == "nightly soak"
+        with pytest.raises(PortClaimedError, match="nightly soak"):
+            async with pl.guard("DEV"):
+                pass
+        # The refusal happens BEFORE any suspend — the claimant owns the
+        # monitor lifecycle, guard must not touch it.
+        assert mon.events == []
+        # Other serials are unaffected.
+        async with pl.guard("OTHER"):
+            pass
+        pl.release_claim("DEV", "nightly soak")
+        async with pl.guard("DEV"):
+            pass
+
+    asyncio.run(go())
+
+
+def test_claim_ownership_rules():
+    from meshtastic_mcp.web.services.portlock import PortClaimedError
+
+    pl = PortLocks()
+    pl.claim("DEV", "owner-a")
+    pl.claim("DEV", "owner-a")  # re-claim by the same owner is idempotent
+    with pytest.raises(PortClaimedError):
+        pl.claim("DEV", "owner-b")
+    # A mismatched release is ignored — the claim survives.
+    pl.release_claim("DEV", "owner-b")
+    assert pl.claimed_by("DEV") == "owner-a"
+    pl.release_claim("DEV", "owner-a")
+    assert pl.claimed_by("DEV") is None

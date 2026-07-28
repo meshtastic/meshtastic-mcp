@@ -283,3 +283,78 @@ def test_device_rows_shape(tmp_path, monkeypatch):
         await db.close()
 
     asyncio.run(go())
+
+
+def test_observer_drop_detection(tmp_path, monkeypatch):
+    monkeypatch.setattr(na, "has_local_model", lambda: False)
+
+    async def go():
+        db = await Database(tmp_path / "db").connect()
+        await _seed_device(db, "DROPPED")
+        await _seed_device(db, "RECOVERED")
+        await _seed_device(db, "HEALTHY")
+        rows = [
+            # DROPPED: session lost and never recovered — the crash/wedge signal.
+            {"ts": 2100, "serial": "DROPPED", "kind": "packet", "line": "RX NODEINFO_APP from !1"},
+            {"ts": 2500, "serial": "DROPPED", "kind": "status", "line": "— API connection lost —"},
+            {
+                "ts": 2600,
+                "serial": "DROPPED",
+                "kind": "status",
+                "line": "— giving up after 3 reconnect attempts —",
+            },
+            # RECOVERED: lost then reconnected — no observation.
+            {
+                "ts": 2100,
+                "serial": "RECOVERED",
+                "kind": "status",
+                "line": "— API connection lost —",
+            },
+            {
+                "ts": 2200,
+                "serial": "RECOVERED",
+                "kind": "status",
+                "line": "— API observer reconnected —",
+            },
+            # HEALTHY: plain packet traffic.
+            {"ts": 2100, "serial": "HEALTHY", "kind": "packet", "line": "RX TELEMETRY_APP from !2"},
+        ]
+        _write_jsonl(tmp_path / "night" / nightly_soak.LOGS_FILE, rows)
+        res = await _analyze(db, tmp_path)
+        drops = [o for o in res.observations if o.category == "observer_drop"]
+        assert len(drops) == 1 and drops[0].device == "DROPPED"
+        await db.close()
+
+    asyncio.run(go())
+
+
+def test_traffic_confirmed_via_packet_records(tmp_path, monkeypatch):
+    """The traffic-loss check must see a message delivered when a PEER's
+    observer recorded the RX packet — the API-based capture path."""
+    monkeypatch.setattr(na, "has_local_model", lambda: False)
+
+    async def go():
+        db = await Database(tmp_path / "db").connect()
+        await _seed_device(db, "SENDER")
+        await _seed_device(db, "PEER")
+        _write_jsonl(
+            tmp_path / "night" / nightly_soak.SENDS_FILE,
+            [{"ts": 2100, "seq": 0, "serial": "SENDER", "text": "nightly-1-0", "ok": True}],
+        )
+        _write_jsonl(
+            tmp_path / "night" / nightly_soak.LOGS_FILE,
+            [
+                {
+                    "ts": 2105,
+                    "serial": "PEER",
+                    "kind": "packet",
+                    "line": "RX text from !aabbccdd ch0: nightly-1-0",
+                    "text": "nightly-1-0",
+                }
+            ],
+        )
+        res = await _analyze(db, tmp_path)
+        assert "traffic_loss" not in _cats(res)
+        await db.close()
+
+    asyncio.run(go())
