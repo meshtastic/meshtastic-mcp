@@ -55,6 +55,9 @@ class FakePortLocks:
     def claimed_by(self, serial: str) -> str | None:
         return self.claims.get(serial)
 
+    async def wait_clear(self, serial: str) -> None:
+        pass
+
 
 class FakeObserver:
     """Stands in for SoakObserver: devices open unless listed in fail_open;

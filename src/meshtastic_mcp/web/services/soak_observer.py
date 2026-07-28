@@ -53,6 +53,10 @@ log = logging.getLogger("meshtastic_mcp.web.soak_observer")
 RECONNECT_MAX_ATTEMPTS = 3
 RECONNECT_SPACING_S = 60.0
 CONNECT_TIMEOUT_S = 30.0
+# A busy port at open time is usually a cross-process reader finishing up —
+# retry briefly before treating it as a failed observer.
+OPEN_BUSY_ATTEMPTS = 3
+OPEN_BUSY_SPACING_S = 2.0
 
 # Record shape matches the serial-monitor sink records the soak always wrote
 # (ts/serial/port/line/level/tag/heap_free/uptime_s) plus:
@@ -146,8 +150,15 @@ class SoakObserver:
                 f"port {held.port} is held by serial session {active.id}"
             )
         lock = registry.port_lock(held.port)
-        if not lock.acquire(blocking=False):
-            raise connection.ConnectionError(f"port {held.port} is busy")
+        # The caller already drained in-process guard() users via
+        # PortLocks.wait_clear; this bounded retry covers stragglers that take
+        # the registry lock directly (and cross-thread release timing).
+        for attempt in range(OPEN_BUSY_ATTEMPTS):
+            if lock.acquire(blocking=False):
+                break
+            if attempt == OPEN_BUSY_ATTEMPTS - 1:
+                raise connection.ConnectionError(f"port {held.port} is busy")
+            time.sleep(OPEN_BUSY_SPACING_S)
         try:
             held.iface = SerialInterface(
                 devPath=held.port,

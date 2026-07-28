@@ -69,6 +69,16 @@ class PortLocks:
     def claimed_by(self, serial: str) -> str | None:
         return self._claims.get(serial)
 
+    async def wait_clear(self, serial: str) -> None:
+        """Wait for any in-flight guard() on this serial to finish.
+
+        claim() stops NEW guards immediately, but a guard already inside its
+        body (e.g. enrichment mid-device_info) still holds the port; a claimant
+        that opens without waiting loses the race with a busy error. Taking and
+        releasing the per-serial lock is exactly 'the in-flight guard is done'."""
+        async with self._lock(serial):
+            pass
+
     def _lock(self, serial: str) -> asyncio.Lock:
         lk = self._locks.get(serial)
         if lk is None:

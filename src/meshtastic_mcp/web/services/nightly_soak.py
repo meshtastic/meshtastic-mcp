@@ -347,6 +347,10 @@ class NightlySoak:
                     self.summary.observers_failed[serial] = str(exc)
                     continue
                 claimed.append(serial)
+                # The claim stops new port users, but one may be mid-flight
+                # (enrichment/keep-alive inside guard()) — wait it out so the
+                # observer's non-blocking open doesn't lose the race.
+                await self.portlocks.wait_clear(serial)
                 try:
                     await self.serialmon.suspend(serial)
                     suspended.append(serial)
