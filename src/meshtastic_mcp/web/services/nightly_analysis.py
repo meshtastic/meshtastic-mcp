@@ -86,6 +86,85 @@ VISION_QUESTION = (
     "Does this device screen show an error, crash, garbled rendering, or a blank/frozen display?"
 )
 
+# BEHAVIOR_SYSTEM tells the model to say "nothing notable" when a window is
+# clean, and small models take that opening even when the window is not clean:
+# in a 3-run bench on raw soak logs, granite4:tiny-h led every single reply with
+# "SOAK window clean, no reboots" and then listed a watchdog reboot underneath.
+# An operator skimming the first line reads the opposite of the truth. Detect
+# that shape and label it rather than depending on which model is configured.
+_ALL_CLEAR_RE = re.compile(
+    r"nothing notable"
+    r"|(?:window|log|soak|night)\b[^.\n]{0,24}\bclean\b"
+    r"|\bno (?:reboots?|issues|anomalies|errors|problems|failures)\b",
+    re.IGNORECASE,
+)
+# "window is not clean" / "far from clean" is an honest dirty report, not a claim.
+_NEGATED_CLEAN_RE = re.compile(
+    r"\b(?:not|isn't|wasn't|never|hardly|far from|other than)\b[^.\n]{0,24}\bclean\b",
+    re.IGNORECASE,
+)
+_ANOMALY_RE = re.compile(
+    # reboot\w* so the verb form counts too — "!a4c1 rebooted twice" is the
+    # same finding as "a reboot on !a4c1", and \breboot\b misses it.
+    r"\b(?:reboot\w*|watchdog|wdt|brownout|crc|retransmi\w*|panic|crash|"
+    r"stack overflow|corrupt|silence|silent|timeout|storm)\b",
+    re.IGNORECASE,
+)
+# A clause that denies something uses anomaly words innocently ("no reboots or
+# unexpected silence observed"), so it must not count as anomaly evidence.
+_NEGATED_CLAUSE_RE = re.compile(r"\b(?:no|not|never|without|n't)\b", re.IGNORECASE)
+# A contrast flips the sentence back to reporting: whatever follows is its own
+# clause, outside the scope of the denial that preceded it.
+_CONTRAST_RE = re.compile(r"\b(?:but|however|although|though|yet|except that)\b", re.IGNORECASE)
+# ...except when the denial IS the finding ("no packets from !abc for 3600s").
+_ABSENCE_ANOMALY_RE = re.compile(
+    r"\bno (?:packets?|traffic|response|data|telemetry|contact|beacons?|heartbeats?)\b",
+    re.IGNORECASE,
+)
+CONTRADICTION_NOTE = (
+    "[guard] model claimed an all-clear but also listed anomalies below; "
+    "trust the bullets, not the claim"
+)
+
+
+def _clauses(text: str) -> list[str]:
+    """Split into clauses so a denial's scope stays local to its own sentence.
+
+    Contrast conjunctions split too: "no reboots, but !a4c1 rebooted twice"
+    is a denial followed by the real finding, and without the split the whole
+    sentence reads as negated — hiding the very evidence the guard looks for.
+    """
+    out: list[str] = []
+    for line in text.splitlines():
+        for sentence in re.split(r"[;.]", line):
+            out.extend(c for c in _CONTRAST_RE.split(sentence) if c.strip())
+    return out
+
+
+def flag_contradictory_all_clear(text: str) -> tuple[str, bool]:
+    """Prefix a warning when model output claims all-clear *and* lists anomalies.
+
+    Returns ``(text, flagged)``. Works clause by clause: a negated clause cannot
+    supply anomaly evidence, so an honest "no reboots or unexpected silence"
+    on a clean window does not trip the check on its own wording, and a negated
+    claim ("window is not clean") is not read as an all-clear. Absence findings
+    ("no packets from X") still count as anomalies.
+    """
+    if not text.strip():
+        return text, False
+    clauses = _clauses(text)
+    claimed = any(_ALL_CLEAR_RE.search(c) and not _NEGATED_CLEAN_RE.search(c) for c in clauses)
+    if not claimed:
+        return text, False
+    for c in clauses:
+        if _ABSENCE_ANOMALY_RE.search(c):
+            return f"{CONTRADICTION_NOTE}\n{text}", True
+        if _NEGATED_CLAUSE_RE.search(c):
+            continue
+        if _ANOMALY_RE.search(c):
+            return f"{CONTRADICTION_NOTE}\n{text}", True
+    return text, False
+
 
 @dataclass
 class Observation:
@@ -677,6 +756,7 @@ class Analyzer:
     async def _behavioral_logs(self) -> None:
         by_serial = self._soak_lines_by_serial()
         device_summaries: dict[str, str] = {}
+        flagged_devices: set[str] = set()
         for serial, recs in by_serial.items():
             chunks = self._chunks_for(recs)
             if not chunks:
@@ -701,7 +781,12 @@ class Analyzer:
                 if part.strip():
                     parts.append(part.strip())
             if parts:
-                device_summaries[serial] = "\n".join(parts)
+                # Record the flag but feed the model its own raw text: the note
+                # is operator-directed and must not steer the reduce prompt.
+                summary = "\n".join(parts)
+                if flag_contradictory_all_clear(summary)[1]:
+                    flagged_devices.add(serial)
+                device_summaries[serial] = summary
         if not device_summaries:
             return
         det = "\n".join(
@@ -726,13 +811,24 @@ class Analyzer:
         except local_model.LocalModelError as exc:
             log.info("behavioral fleet reduce failed: %s", exc)
             return
+        fleet, fleet_flagged = flag_contradictory_all_clear(fleet)
+        # A device-level contradiction still matters even if the reduce
+        # paraphrased it away, so carry those flags into the severity.
+        flagged = fleet_flagged or bool(flagged_devices)
         self.out.observations.append(
             Observation(
-                severity="info",
+                severity="warn" if flagged else "info",
                 category="behavior",
-                summary="local-model behavioral summary (draft — verify before acting)",
+                summary=(
+                    "local-model behavioral summary contradicted itself (draft — verify)"
+                    if flagged
+                    else "local-model behavioral summary (draft — verify before acting)"
+                ),
                 evidence=[ln for ln in fleet.splitlines() if ln.strip()][:30],
-                data={"devices": sorted(device_summaries)},
+                data={
+                    "devices": sorted(device_summaries),
+                    "contradictory": sorted(flagged_devices),
+                },
             )
         )
 
