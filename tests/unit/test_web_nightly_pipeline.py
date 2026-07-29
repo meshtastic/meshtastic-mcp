@@ -557,3 +557,35 @@ def test_retention_prune(tmp_path, monkeypatch, quick):
         await db.close()
 
     asyncio.run(go())
+
+
+def test_stop_drains_an_in_flight_adhoc_soak(tmp_path: Path, monkeypatch):
+    """Shutdown calls stop() before the db and serial monitors are torn down.
+    An ad-hoc soak is a separate task, so without an explicit drain it keeps
+    running against a closing db and its finally (claim release, monitor
+    resume) never gets to run."""
+
+    async def go():
+        db = await Database(tmp_path / "db").connect()
+        orch, _hub = await _make(db, tmp_path, monkeypatch)
+
+        unwound = asyncio.Event()
+
+        async def _soak_body() -> None:
+            try:
+                while not orch._adhoc_soak_cancel.is_set():
+                    await asyncio.sleep(0.01)
+            finally:
+                unwound.set()  # stands in for release_claim + monitor resume
+
+        orch._adhoc_soak_cancel = asyncio.Event()
+        orch._adhoc_soak_task = asyncio.create_task(_soak_body())
+        await asyncio.sleep(0)  # let it reach the loop
+
+        await orch.stop()
+
+        assert unwound.is_set(), "stop() returned before the soak unwound"
+        assert orch._adhoc_soak_task is None
+        await db.close()
+
+    asyncio.run(go())

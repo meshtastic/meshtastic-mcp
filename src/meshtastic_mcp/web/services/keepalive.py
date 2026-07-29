@@ -60,6 +60,11 @@ class ScreenKeepAlive:
         }
         self._task: asyncio.Task | None = None
         self._provisioned: set[str] = set()  # serials whose screen we've pinned
+        # Optional input-event relay (the nightly soak's API observer). While
+        # set, devices it holds get their keep-alive event over the already-open
+        # interface instead of a fresh connect — a fresh connect would fail fast
+        # against the soak's port claim anyway.
+        self.relay: Any = None
 
     def status(self) -> dict:
         return {"config": dict(self.cfg), "stats": dict(self.stats)}
@@ -115,6 +120,20 @@ class ScreenKeepAlive:
         port = device.get("current_port")
         if not port:
             return
+        relay = self.relay
+        if relay is not None:
+            try:
+                if await relay.send_input_event(serial, self.cfg["event"]):
+                    # Delivered over the relay's held interface. Provisioning
+                    # (screen_on_secs) is skipped while relayed — it is a
+                    # one-time config write that normal cycles handle.
+                    self.stats["events_sent"] += 1
+                    self.stats["last_error"] = None
+                    return
+            except Exception as exc:
+                self.stats["last_error"] = f"{serial[:8]}: {exc}"
+                log.debug("keepalive relay %s failed: %s", serial, exc)
+                return
         async with self.portlocks.guard(serial):  # exclusive device access
             if test_runner.is_running():
                 return

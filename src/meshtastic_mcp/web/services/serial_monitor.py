@@ -19,10 +19,14 @@ import asyncio
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING
 
 import serial as pyserial
 
 from meshtastic_mcp import connection
+
+if TYPE_CHECKING:
+    from .portlock import PortClaimLookup
 from meshtastic_mcp.recorder.parsers import parse_log_line
 
 from ..db import repo_devices as rd
@@ -48,6 +52,11 @@ class SerialMonitor:
         self.db = db
         self.hub = hub
         self.forwarder = None  # set by app wiring; receives captured log lines
+        # Set by app wiring: PortLocks, consulted so a monitor never opens a
+        # port a long-lived owner (the nightly soak observer) has claimed —
+        # POSIX ttys allow double-opens, and a second reader would steal bytes
+        # from the held protobuf stream.
+        self.portlocks: PortClaimLookup | None = None
         # Extra line consumers (e.g. the nightly soak recorder). Each is called
         # with the same parsed record dict as the forwarder — FROM THE READER
         # THREAD, so sinks must be thread-safe and quick.
@@ -129,6 +138,16 @@ class SerialMonitor:
 
         if test_runner.is_running():
             return
+        # A claimed device is port-owned by a long-lived holder (nightly soak
+        # observer); it tees its records to this device's serial.* topic, so a
+        # UI tab still sees live data — just not from a second raw reader.
+        owner = self.portlocks.claimed_by(serial) if self.portlocks is not None else None
+        if owner:
+            self.hub.publish_threadsafe(
+                self._topic(serial),
+                {"line": f"— port held by {owner}; live records relayed —"},
+            )
+            return
         # Self-heal an abandoned close: if a previous _close() timed out, the
         # wedged reader kept mon.thread set so nothing could double-open the
         # port. Once that thread has died (device re-enumerated after a
@@ -146,6 +165,14 @@ class SerialMonitor:
             return  # native nodes are TCP — nothing to monitor on the USB bus
         port = row.get("current_port")
         if not port or connection.is_tcp_port(port):
+            return
+        # Everything above was decided before `rd.get` yielded. The per-serial
+        # lock means a claim+suspend cannot actually complete inside that gap
+        # (suspend() blocks on the lock this call holds), but re-test rather
+        # than rely on that: a future caller reaching _open without the lock
+        # would otherwise put a raw reader on a port the soak's API observer
+        # holds, and byte-stealing there is silent — it looks like capture loss.
+        if mon.suspended or (self.portlocks is not None and self.portlocks.claimed_by(serial)):
             return
         mon.stop = threading.Event()
         mon.thread = threading.Thread(

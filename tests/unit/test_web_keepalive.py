@@ -158,3 +158,48 @@ def test_config_round_trips_through_settings(tmp_path):
             await db.close()
 
     asyncio.run(go())
+
+
+def test_relay_bypasses_port_and_falls_back(tmp_path, monkeypatch):
+    """While a relay (the soak's API observer) is registered, touches for the
+    devices it holds ride the relay — no guard, no admin connect. Devices the
+    relay does not hold fall back to the normal guarded path."""
+
+    async def go():
+        db = await _fresh_db(tmp_path).connect()
+        await _add_esp(db, "HELD", "/dev/a")
+        await _add_esp(db, "FREE", "/dev/b")
+
+        relayed: list[tuple[str, object]] = []
+        admin_calls: list[str] = []
+
+        class Relay:
+            async def send_input_event(self, serial, event):
+                if serial == "HELD":
+                    relayed.append((serial, event))
+                    return True
+                return False
+
+        def fake_set_config(key, value, port):
+            admin_calls.append(f"set_config:{port}")
+
+        def fake_send_input_event(event, kb, x, y, port):
+            admin_calls.append(f"input:{port}")
+
+        import meshtastic_mcp.admin as admin_mod
+
+        monkeypatch.setattr(admin_mod, "set_config", fake_set_config)
+        monkeypatch.setattr(admin_mod, "send_input_event", fake_send_input_event)
+
+        ka = ScreenKeepAlive(db, _Hub())
+        ka.cfg["enabled"] = True
+        ka.relay = Relay()
+        await ka._cycle()
+
+        # HELD went over the relay only; FREE used the admin path.
+        assert relayed == [("HELD", ka.cfg["event"])]
+        assert all("/dev/b" in c for c in admin_calls) and admin_calls
+        assert ka.stats["events_sent"] == 2
+        await db.close()
+
+    asyncio.run(go())

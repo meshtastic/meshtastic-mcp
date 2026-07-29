@@ -52,6 +52,13 @@ _MAX_LINGER_S = 60.0
 _CLOSE_TIMEOUT_S = 5.0
 
 
+def close_bounded(iface) -> None:
+    """Close a meshtastic interface without letting a wedged close hang the
+    caller. Public for long-held interfaces (the nightly soak's API observers)
+    that manage their own open/close lifecycle."""
+    _close_bounded(iface)
+
+
 def _close_bounded(iface) -> None:
     done = threading.Event()
 

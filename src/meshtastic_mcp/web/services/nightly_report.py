@@ -164,14 +164,23 @@ def _soak_section(pipeline_obs: list[dict]) -> str | None:
         return None
     d = summary["data"]
     lines = ", ".join(f"{k}: {v}" for k, v in sorted((d.get("lines") or {}).items())) or "none"
-    return (
+    out = (
         f"- duration: {d.get('duration_s', 0):.0f}s\n"
-        f"- lines captured — {lines}\n"
+        f"- records captured — {lines}\n"
         f"- test messages: {d.get('sends_attempted', 0)} sent, "
         f"{d.get('sends_failed', 0)} send failures\n"
         f"- snapshots: {d.get('snapshots', 0)}\n"
         f"- preflight failures: {d.get('preflight_failures', 0)}"
     )
+    failed = d.get("observers_failed") or {}
+    if failed:
+        out += "\n- observers failed to open — " + ", ".join(
+            f"{k}: {v}" for k, v in sorted(failed.items())
+        )
+    dropped = d.get("observers_dropped") or []
+    if dropped:
+        out += "\n- observers dropped mid-soak — " + ", ".join(sorted(dropped))
+    return out
 
 
 def _failure_block(f: Failure, full: bool) -> str:

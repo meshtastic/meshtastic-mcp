@@ -16,11 +16,20 @@ The nightly bake is FleetSuite's unattended overnight pipeline. Every night it:
 5. **Runs the full suite** via the bench test runner: the bake tier flashes every board with
    the private test profile (channel `McpTest`, slot 88, seeded PSK, region US — never
    LongFast defaults), then all hardware tiers run.
-6. **Soaks the mesh for 2 h** (configurable): serial logs from every board tee into
-   per-night JSONL files, a sequenced test message is injected on an interval (so mesh
-   delivery is measurable), and assigned cameras grab periodic screen snapshots. A soak
-   preflight reads each board's live config and raises a loud `channel.default_profile`
-   error if any board sits on the default channel.
+6. **Soaks the mesh for 2 h** (configurable): every board is held on a persistent
+   meshtastic API connection for the whole window and its received packets, telemetry,
+   `LogRecord` lines, and connection drops tee into per-night JSONL files. (Capture is
+   API-based because firmware permanently silences plain-text serial logging on the
+   first protobuf touch of a port — a raw serial reader records nothing on a bench
+   that is API-touched by the preflight/sends/keep-alive.) A sequenced test message is
+   injected on an interval **through the held connections** — peer boards record the RX
+   packet, so mesh delivery is measured end-to-end — and assigned cameras grab periodic
+   screen snapshots (keep-alive input events also ride the held connections). A soak
+   preflight reads each board's live config off its connection and raises a loud
+   `channel.default_profile` error if any board sits on the default channel. During the
+   window each device is claimed: other port users fail fast with a clear "held by
+   nightly soak" error. `POST /api/nightly/soak-now {"minutes": 10}` runs a short
+   standalone soak to sanity-check capture health without a full pipeline.
 7. **Recovers the bench** — anything offline or wedged at the end of the night gets the full
    ladder including a DFU reflash (config-gated), so the bench is healthy by morning.
 8. **Analyzes + reports** — deterministic heuristics (panics, error bursts, reboot churn,
