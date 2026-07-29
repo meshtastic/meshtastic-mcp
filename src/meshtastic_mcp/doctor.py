@@ -332,6 +332,98 @@ def _sdk_cli_check() -> Check:
     )
 
 
+# Headers the Portduino `native` / `native-macos` meshtasticd build needs. The env's build_flags in
+#   variants/native/portduino/platformio.ini already point at the Homebrew prefixes, so the only
+#   failure mode is the package not being installed — which surfaces as a bare `fatal error: 'x.h'
+#   file not found` several minutes into a build. Probe up front instead.
+# Each entry: (brew formula, header path relative to the Homebrew prefix).
+# Prefix-relative, not absolute: Homebrew is /opt/homebrew on Apple silicon and /usr/local on
+# Intel, so a hard-coded prefix reports every formula missing on an Intel Mac even when all of
+# them are installed — telling the user to install what they already have.
+_MESHTASTICD_DEPS_MAC: tuple[tuple[str, str], ...] = (
+    ("argp-standalone", "opt/argp-standalone/include/argp.h"),
+    ("yaml-cpp", "opt/yaml-cpp/include/yaml-cpp/yaml.h"),
+    ("libuv", "include/uv.h"),
+    ("openssl@3", "opt/openssl@3/include/openssl/ssl.h"),
+)
+
+# Debian: (apt package, a header that proves it is installed).
+# argp is part of glibc on Debian, so argp.h comes from libc6-dev — there is no libargp-dev to
+# install, and naming one would make the fix line fail with "Unable to locate package". The
+# standalone formula only exists where the platform libc lacks argp, which is why macOS needs it.
+_MESHTASTICD_DEPS_DEBIAN: tuple[tuple[str, str], ...] = (
+    ("libc6-dev", "/usr/include/argp.h"),
+    ("libyaml-cpp-dev", "/usr/include/yaml-cpp/yaml.h"),
+    ("libuv1-dev", "/usr/include/uv.h"),
+    ("libssl-dev", "/usr/include/openssl/ssl.h"),
+)
+
+
+def _brew_prefix() -> Path | None:
+    """Homebrew's install prefix, or None when brew is not on PATH.
+
+    /opt/homebrew on Apple silicon, /usr/local on Intel. Asking brew is the only reliable way,
+    and this module already shells out to `brew --prefix` elsewhere for the same reason.
+    """
+    brew = _which("brew")
+    if not brew:
+        return None
+    try:
+        out = subprocess.run(
+            [brew, "--prefix"], capture_output=True, text=True, timeout=10, check=True
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    prefix = out.stdout.strip()
+    return Path(prefix) if prefix else None
+
+
+def _meshtasticd_build_check() -> Check:
+    """Native `meshtasticd` build prerequisites (the hardware-free virtual-radio path).
+
+    `scripts/build_meshtasticd.sh` compiles real firmware for the host so tests can drive a real
+    AdminModule over TCP with no radio attached. On macOS that needs four Homebrew formulae
+    supplying glibc-isms and libraries Apple does not ship; missing any one fails the build
+    partway through with an unexplained missing-header error.
+    """
+    name, group = "meshtasticd-build-deps", "firmware"
+    needed = "build native meshtasticd (hardware-free virtual radio)"
+
+    if _IS_MAC:
+        prefix = _brew_prefix()
+        if prefix is None:
+            return Check(
+                name,
+                group,
+                STATUS_MISSING,
+                needed,
+                detail="Homebrew is not installed, so the build prerequisites cannot be probed "
+                "or acquired.",
+                fix='/bin/bash -c "$(curl -fsSL '
+                'https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+            )
+        missing = [f for f, rel in _MESHTASTICD_DEPS_MAC if not (prefix / rel).exists()]
+        installer, env = "brew install", "native-macos"
+    else:
+        # Probe on Linux too. Returning ok unconditionally made this a check in name only: a
+        # Debian user missing a package got a green tick and then the exact missing-header build
+        # failure this exists to pre-empt.
+        missing = [pkg for pkg, header in _MESHTASTICD_DEPS_DEBIAN if not Path(header).exists()]
+        installer, env = "sudo apt install", "native"
+
+    if not missing:
+        return Check(name, group, STATUS_OK, needed)
+    return Check(
+        name,
+        group,
+        STATUS_MISSING,
+        needed,
+        detail=f"missing: {', '.join(missing)}. "
+        f"Without these `pio run -e {env}` fails with a missing-header error.",
+        fix=f"{installer} {' '.join(missing)}",
+    )
+
+
 def _pio_check() -> Check:
     try:
         path = config.pio_bin()
@@ -667,6 +759,7 @@ def run() -> DoctorReport:
         # firmware capability
         _firmware_check(),
         _pio_check(),
+        _meshtasticd_build_check(),
         # android capability
         _repo_root_check(
             "android-source",
