@@ -456,6 +456,12 @@ SUITE_POLL_S = 5.0
 BUILD_WAIT_TIMEOUT_S = 3600.0
 RESTART_EXIT_WAIT_S = 60.0
 RECOVERY_SETTLE_S = 10.0
+# How long to wait for an ad-hoc soak to unwind before proceeding anyway. The
+# pipeline can afford the full teardown; shutdown cannot — the launchd
+# supervisor SIGKILLs the process ~15s after SIGTERM, so a long wait there would
+# be cut off mid-teardown and lose the tail of the log instead of saving it.
+PIPELINE_DRAIN_S = 60.0
+SHUTDOWN_DRAIN_S = 8.0
 
 # Pipeline step order; resume re-enters at the persisted step.
 STEPS = (
@@ -525,6 +531,11 @@ class NightlyOrchestrator:
             self._loop_task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
+        # An ad-hoc soak is its own task, so cancelling the loop/pipeline below
+        # leaves it running against a db and serial monitors that shutdown is
+        # about to tear down — and its finally (claim release, monitor resume)
+        # may never run. Drain it first, bounded so shutdown stays prompt.
+        await self._drain_adhoc_soak(SHUTDOWN_DRAIN_S, "shutdown")
         # Await the cancellations so pipeline cleanup (DB writes, monitor
         # release) finishes BEFORE shutdown tears down the db/serial monitors.
         tasks = [t for t in (self._loop_task, self._pipeline_task) if t is not None]
@@ -629,8 +640,30 @@ class NightlyOrchestrator:
         return {"started": True, "minutes": minutes}
 
     async def soak_cancel(self) -> None:
+        # Signal only — the endpoint returns immediately and the soak unwinds on
+        # its own tick. Callers that need the ports back before doing something
+        # else (the pipeline, shutdown) use _drain_adhoc_soak.
         if self._adhoc_soak_cancel is not None:
             self._adhoc_soak_cancel.set()
+
+    async def _drain_adhoc_soak(self, timeout_s: float, context: str) -> None:
+        """Cancel an in-flight ad-hoc soak and wait for it to unwind.
+
+        The soak's finally releases port claims and resumes serial monitors, so
+        anything that needs the bench back must let it finish rather than just
+        signalling. Shielded: the wait may time out, but the soak keeps
+        unwinding rather than being torn out mid-teardown."""
+        task = self._adhoc_soak_task
+        if task is None or task.done():
+            return
+        if self._adhoc_soak_cancel is not None:
+            self._adhoc_soak_cancel.set()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout_s)
+        except Exception:
+            log.warning("ad-hoc soak did not drain cleanly before %s", context)
+        else:
+            self._adhoc_soak_task = None
 
     async def cancel(self) -> None:
         """Graceful: the pipeline notices, marks the night canceled, and still
@@ -787,13 +820,7 @@ class NightlyOrchestrator:
         cancelled = False
         # An ad-hoc soak holds port claims and live API interfaces on the whole
         # bench — drain it before any pipeline step touches a device.
-        if self._adhoc_soak_task is not None and not self._adhoc_soak_task.done():
-            if self._adhoc_soak_cancel is not None:
-                self._adhoc_soak_cancel.set()
-            try:
-                await asyncio.wait_for(asyncio.shield(self._adhoc_soak_task), timeout=60.0)
-            except Exception:
-                log.warning("ad-hoc soak did not drain cleanly before the pipeline")
+        await self._drain_adhoc_soak(PIPELINE_DRAIN_S, "the pipeline")
         try:
             try:
                 outcome = await asyncio.wait_for(

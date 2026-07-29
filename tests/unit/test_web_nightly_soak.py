@@ -40,6 +40,8 @@ class FakePortLocks:
         self.claims: dict[str, str] = {}
         self.claim_log: list[tuple[str, str]] = []
         self.release_log: list[tuple[str, str]] = []
+        # False simulates an in-flight guard that never releases the port.
+        self.wait_clear_result = True
 
     def claim(self, serial: str, owner: str) -> None:
         current = self.claims.get(serial)
@@ -55,8 +57,8 @@ class FakePortLocks:
     def claimed_by(self, serial: str) -> str | None:
         return self.claims.get(serial)
 
-    async def wait_clear(self, serial: str) -> None:
-        pass
+    async def wait_clear(self, serial: str, timeout_s: float | None = None) -> bool:
+        return self.wait_clear_result
 
 
 class FakeObserver:
@@ -66,6 +68,7 @@ class FakeObserver:
     instances: list[FakeObserver] = []
     config: dict[str, tuple[str | None, str | None]] = {}
     fail_open: set[str] = set()
+    fail_close = False
 
     def __init__(self, *, on_record, on_telemetry, hub=None, node_map=None) -> None:
         self.on_record = on_record
@@ -108,6 +111,8 @@ class FakeObserver:
 
     async def close_all(self) -> None:
         self.closed = True
+        if FakeObserver.fail_close:
+            raise RuntimeError("interface teardown blew up")
 
 
 @pytest.fixture(autouse=True)
@@ -115,6 +120,7 @@ def _fake_observer(monkeypatch):
     FakeObserver.instances = []
     FakeObserver.config = {}
     FakeObserver.fail_open = set()
+    FakeObserver.fail_close = False
     monkeypatch.setattr(nightly_soak, "SoakObserver", FakeObserver)
     yield
 
@@ -236,6 +242,50 @@ def test_observer_open_failure_is_preflight_failure(tmp_path: Path):
         assert soak.portlocks.claims == {}
         assert ("DEAD", nightly_soak.CLAIM_OWNER) in soak.portlocks.release_log
         assert soak.serialmon.resumed.count("DEAD") == 1
+        await db.close()
+
+    asyncio.run(go())
+
+
+def test_teardown_releases_claims_even_when_close_all_raises(tmp_path: Path):
+    """A throwing close_all() must not strand port claims. An unreleased claim
+    outlives the soak and fails keep-alive/control/discovery with
+    PortClaimedError (HTTP 409) until the process restarts."""
+
+    async def go():
+        db = await Database(tmp_path / "db").connect()
+        await _seed_device(db, "S1", "/dev/a")
+        FakeObserver.config = {"S1": ("McpTest", "US")}
+        FakeObserver.fail_close = True
+        soak = _soak(db, tmp_path, Observations())
+
+        await soak.run(duration_s=0.0)  # must not propagate the teardown error
+
+        assert soak.portlocks.claims == {}, "claim leaked past a failed teardown"
+        assert ("S1", nightly_soak.CLAIM_OWNER) in soak.portlocks.release_log
+        assert soak.serialmon.resumed == ["S1"], "monitor never resumed"
+        await db.close()
+
+    asyncio.run(go())
+
+
+def test_port_still_busy_skips_the_device_instead_of_stalling(tmp_path: Path):
+    """wait_clear() is bounded: a guard that never releases marks that board
+    unavailable and moves on, rather than blocking the whole fleet sweep."""
+
+    async def go():
+        db = await Database(tmp_path / "db").connect()
+        await _seed_device(db, "BUSY", "/dev/a")
+        FakeObserver.config = {"BUSY": ("McpTest", "US")}
+        soak = _soak(db, tmp_path, Observations())
+        soak.portlocks.wait_clear_result = False
+
+        summary = await soak.run(duration_s=0.0)
+
+        assert "BUSY" in summary.observers_failed
+        assert summary.observers_opened == []
+        assert soak.portlocks.claims == {}, "claim held on a device we skipped"
+        assert soak.serialmon.suspended == [], "suspended a port we never opened"
         await db.close()
 
     asyncio.run(go())

@@ -174,7 +174,12 @@ class SoakObserver:
     async def close_all(self) -> None:
         self._unwire_pubsub()
         for held in list(self._held.values()):
-            await asyncio.to_thread(self._close_blocking, held)
+            # One device that won't close must not strand the others still
+            # holding their ports — close every one, report the failures.
+            try:
+                await asyncio.to_thread(self._close_blocking, held)
+            except Exception:
+                log.warning("soak observer could not close %s", held.serial, exc_info=True)
             if held.gave_up or held.lost:
                 self.summary.dropped.append(held.serial)
         self._held.clear()

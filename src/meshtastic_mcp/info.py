@@ -30,10 +30,10 @@ def primary_channel_name(iface) -> str | None:
 
 def region_name(iface) -> str | None:
     """LoRa region enum name from an already-connected interface."""
-    local = getattr(iface, "localNode", None)
-    if local is None or local.localConfig is None:
-        return None
     try:
+        local = getattr(iface, "localNode", None)
+        if local is None or getattr(local, "localConfig", None) is None:
+            return None
         lora = local.localConfig.lora
         # region is an enum; get its string name
         return lora.DESCRIPTOR.fields_by_name["region"].enum_type.values_by_number[lora.region].name

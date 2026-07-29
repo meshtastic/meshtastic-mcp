@@ -21,11 +21,17 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Protocol
 
 # How long guard() waits for an abandoned (wedged) reader thread to die after
 # suspend, before refusing the port. Module constant so tests can shrink it.
 WEDGE_WAIT_S = 8.0
 _WEDGE_POLL_S = 0.25
+# Upper bound on wait_clear(): how long a claimant waits for an in-flight guard
+# to release the port before treating the device as unavailable. Generous enough
+# to cover a normal port operation (enrichment/keep-alive, a few seconds), short
+# enough that one stuck guard can't stall a fleet-wide claim sweep.
+WAIT_CLEAR_S = 30.0
 
 
 class PortWedgedError(RuntimeError):
@@ -41,6 +47,14 @@ class PortClaimedError(RuntimeError):
     (e.g. the nightly soak's persistent API observer). Fail fast — matching
     the port-arbitration philosophy — instead of queueing behind a claim
     that can last hours."""
+
+
+class PortClaimLookup(Protocol):
+    """The slice of PortLocks a claim-aware consumer needs: 'who holds this
+    device, if anyone'. Consumers depend on this instead of the whole class so
+    the contract is type-checked (and test doubles stay trivial)."""
+
+    def claimed_by(self, serial: str) -> str | None: ...
 
 
 class PortLocks:
@@ -69,15 +83,26 @@ class PortLocks:
     def claimed_by(self, serial: str) -> str | None:
         return self._claims.get(serial)
 
-    async def wait_clear(self, serial: str) -> None:
-        """Wait for any in-flight guard() on this serial to finish.
+    async def wait_clear(self, serial: str, timeout_s: float = WAIT_CLEAR_S) -> bool:
+        """Wait (bounded) for any in-flight guard() on this serial to finish.
+        Returns True when the port is clear, False on timeout.
 
         claim() stops NEW guards immediately, but a guard already inside its
         body (e.g. enrichment mid-device_info) still holds the port; a claimant
         that opens without waiting loses the race with a busy error. Taking and
-        releasing the per-serial lock is exactly 'the in-flight guard is done'."""
-        async with self._lock(serial):
-            pass
+        releasing the per-serial lock is exactly 'the in-flight guard is done'.
+
+        Bounded on purpose: a guard body can be arbitrarily long (a flash, a
+        recovery reflash) or leaked outright, and blocking here would stall the
+        caller — the soak claims every board before opening any observer, so one
+        stuck guard would hold up the whole fleet's startup. Contention resolves
+        to a retryable 'unavailable', matching the fail-fast port philosophy."""
+        try:
+            async with asyncio.timeout(timeout_s):
+                async with self._lock(serial):
+                    return True
+        except TimeoutError:
+            return False
 
     def _lock(self, serial: str) -> asyncio.Lock:
         lk = self._locks.get(serial)

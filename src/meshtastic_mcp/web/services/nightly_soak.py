@@ -349,8 +349,16 @@ class NightlySoak:
                 claimed.append(serial)
                 # The claim stops new port users, but one may be mid-flight
                 # (enrichment/keep-alive inside guard()) — wait it out so the
-                # observer's non-blocking open doesn't lose the race.
-                await self.portlocks.wait_clear(serial)
+                # observer's non-blocking open doesn't lose the race. Bounded:
+                # a guard that never releases (a long flash, a leak) marks this
+                # board unavailable instead of stalling the whole fleet sweep.
+                if not await self.portlocks.wait_clear(serial):
+                    self.summary.observers_failed[serial] = (
+                        "port still held by an in-flight operation — skipped"
+                    )
+                    self.portlocks.release_claim(serial, CLAIM_OWNER)
+                    claimed.remove(serial)
+                    continue
                 try:
                     await self.serialmon.suspend(serial)
                     suspended.append(serial)
@@ -407,10 +415,19 @@ class NightlySoak:
         finally:
             if self.keepalive is not None and getattr(self.keepalive, "relay", None) is observer:
                 self.keepalive.relay = None
-            await observer.close_all()
+            # Every step here must run even if an earlier one throws: a claim
+            # left behind outlives the soak and fails keep-alive/control/
+            # discovery with PortClaimedError until the process restarts.
+            try:
+                await observer.close_all()
+            except Exception:
+                log.warning("soak observer close_all failed", exc_info=True)
             self.summary.observers_dropped = list(observer.summary.dropped)
             for serial in claimed:
-                self.portlocks.release_claim(serial, CLAIM_OWNER)
+                try:
+                    self.portlocks.release_claim(serial, CLAIM_OWNER)
+                except Exception:
+                    log.warning("soak could not release claim for %s", serial, exc_info=True)
             for serial in suspended:
                 try:
                     await self.serialmon.resume(serial)

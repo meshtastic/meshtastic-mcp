@@ -19,11 +19,14 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING
 
 import serial as pyserial
 
 from meshtastic_mcp import connection
+
+if TYPE_CHECKING:
+    from .portlock import PortClaimLookup
 from meshtastic_mcp.recorder.parsers import parse_log_line
 
 from ..db import repo_devices as rd
@@ -53,7 +56,7 @@ class SerialMonitor:
         # port a long-lived owner (the nightly soak observer) has claimed —
         # POSIX ttys allow double-opens, and a second reader would steal bytes
         # from the held protobuf stream.
-        self.portlocks: Any = None
+        self.portlocks: PortClaimLookup | None = None
         # Extra line consumers (e.g. the nightly soak recorder). Each is called
         # with the same parsed record dict as the forwarder — FROM THE READER
         # THREAD, so sinks must be thread-safe and quick.
@@ -138,11 +141,11 @@ class SerialMonitor:
         # A claimed device is port-owned by a long-lived holder (nightly soak
         # observer); it tees its records to this device's serial.* topic, so a
         # UI tab still sees live data — just not from a second raw reader.
-        claimed_by = getattr(self.portlocks, "claimed_by", None)
-        if claimed_by is not None and claimed_by(serial):
+        owner = self.portlocks.claimed_by(serial) if self.portlocks is not None else None
+        if owner:
             self.hub.publish_threadsafe(
                 self._topic(serial),
-                {"line": f"— port held by {claimed_by(serial)}; live records relayed —"},
+                {"line": f"— port held by {owner}; live records relayed —"},
             )
             return
         # Self-heal an abandoned close: if a previous _close() timed out, the
