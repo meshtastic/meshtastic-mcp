@@ -104,13 +104,18 @@ _NEGATED_CLEAN_RE = re.compile(
     re.IGNORECASE,
 )
 _ANOMALY_RE = re.compile(
-    r"\b(?:reboot|watchdog|wdt|brownout|crc|retransmi\w*|panic|crash|"
+    # reboot\w* so the verb form counts too — "!a4c1 rebooted twice" is the
+    # same finding as "a reboot on !a4c1", and \breboot\b misses it.
+    r"\b(?:reboot\w*|watchdog|wdt|brownout|crc|retransmi\w*|panic|crash|"
     r"stack overflow|corrupt|silence|silent|timeout|storm)\b",
     re.IGNORECASE,
 )
 # A clause that denies something uses anomaly words innocently ("no reboots or
 # unexpected silence observed"), so it must not count as anomaly evidence.
 _NEGATED_CLAUSE_RE = re.compile(r"\b(?:no|not|never|without|n't)\b", re.IGNORECASE)
+# A contrast flips the sentence back to reporting: whatever follows is its own
+# clause, outside the scope of the denial that preceded it.
+_CONTRAST_RE = re.compile(r"\b(?:but|however|although|though|yet|except that)\b", re.IGNORECASE)
 # ...except when the denial IS the finding ("no packets from !abc for 3600s").
 _ABSENCE_ANOMALY_RE = re.compile(
     r"\bno (?:packets?|traffic|response|data|telemetry|contact|beacons?|heartbeats?)\b",
@@ -123,10 +128,16 @@ CONTRADICTION_NOTE = (
 
 
 def _clauses(text: str) -> list[str]:
-    """Split into clauses so a denial's scope stays local to its own sentence."""
+    """Split into clauses so a denial's scope stays local to its own sentence.
+
+    Contrast conjunctions split too: "no reboots, but !a4c1 rebooted twice"
+    is a denial followed by the real finding, and without the split the whole
+    sentence reads as negated — hiding the very evidence the guard looks for.
+    """
     out: list[str] = []
     for line in text.splitlines():
-        out.extend(c for c in re.split(r"[;.]", line) if c.strip())
+        for sentence in re.split(r"[;.]", line):
+            out.extend(c for c in _CONTRAST_RE.split(sentence) if c.strip())
     return out
 
 

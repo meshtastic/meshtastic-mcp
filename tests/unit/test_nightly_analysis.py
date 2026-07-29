@@ -363,3 +363,23 @@ def test_flag_contradictory_all_clear_catches_scoped_self_contradiction():
     )
     _, flagged = na.flag_contradictory_all_clear(text)
     assert flagged
+
+
+def test_flag_contradictory_all_clear_sees_evidence_after_a_contrast():
+    # the granite4 shape with the anomaly hung off a contrast: the denial scopes
+    # only to its own clause, so the reboot after "but" is still evidence
+    for text in (
+        "- SOAK window clean, no reboots seen, but !a4c1382b rebooted twice",
+        "- nothing notable; no errors, however a watchdog reboot hit !c81d44a0",
+    ):
+        out, flagged = na.flag_contradictory_all_clear(text)
+        assert flagged, text
+        assert out.startswith(na.CONTRADICTION_NOTE)
+
+
+def test_flag_contradictory_all_clear_allows_an_honest_contrast():
+    # a contrast that introduces no anomaly must still read as clean
+    text = "- nothing notable, but the run finished early"
+    out, flagged = na.flag_contradictory_all_clear(text)
+    assert not flagged
+    assert out == text
