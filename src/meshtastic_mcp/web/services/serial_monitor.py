@@ -166,6 +166,14 @@ class SerialMonitor:
         port = row.get("current_port")
         if not port or connection.is_tcp_port(port):
             return
+        # Everything above was decided before `rd.get` yielded. The per-serial
+        # lock means a claim+suspend cannot actually complete inside that gap
+        # (suspend() blocks on the lock this call holds), but re-test rather
+        # than rely on that: a future caller reaching _open without the lock
+        # would otherwise put a raw reader on a port the soak's API observer
+        # holds, and byte-stealing there is silent — it looks like capture loss.
+        if mon.suspended or (self.portlocks is not None and self.portlocks.claimed_by(serial)):
+            return
         mon.stop = threading.Event()
         mon.thread = threading.Thread(
             target=self._read_loop, args=(serial, port, mon.stop), daemon=True

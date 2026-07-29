@@ -169,3 +169,74 @@ def test_monitor_refuses_to_open_a_claimed_port(monkeypatch):
         await mon.shutdown()
 
     asyncio.run(go())
+
+
+def test_claim_landing_during_open_cannot_leave_a_reader_on_the_port(monkeypatch):
+    """The claimed_by() check in _open() is only a snapshot: a claim can land
+    while _open() is awaiting rd.get(). What makes that safe is ordering, not
+    the check — the soak's suspend() contends for the same per-serial lock that
+    _open() holds across the await, so the raw reader is closed and joined
+    before the soak opens its API observer on that port.
+
+    Reproduces the interleaving directly: claim + suspend while rd.get() hangs.
+    """
+    import threading
+
+    reader_running = threading.Event()
+
+    def blocking_read_loop(_self, _serial, _port, stop):
+        reader_running.set()
+        stop.wait(5.0)  # a real reader holds the port until told to stop
+
+    monkeypatch.setattr(sm.SerialMonitor, "_read_loop", blocking_read_loop)
+
+    class _Hub:
+        def publish_threadsafe(self, *a, **k):
+            pass
+
+        async def publish(self, *a, **k):
+            pass
+
+    from meshtastic_mcp.web.services.portlock import PortLocks
+
+    async def go():
+        in_rd_get = asyncio.Event()
+        release_rd_get = asyncio.Event()
+
+        async def hanging_get(_db, serial):
+            in_rd_get.set()
+            await release_rd_get.wait()
+            return {"serial_number": serial, "kind": "usb", "current_port": "/dev/fake0"}
+
+        monkeypatch.setattr(sm.rd, "get", hanging_get)
+
+        mon = sm.SerialMonitor(db=object(), hub=_Hub())
+        locks = PortLocks(serialmon=mon)
+        mon.portlocks = locks
+
+        # A UI tab subscribes: _open() passes the claim check, then parks in
+        # rd.get() — the exact gap the snapshot check cannot cover.
+        acquire = asyncio.create_task(mon.acquire("S1"))
+        await asyncio.wait_for(in_rd_get.wait(), timeout=5)
+
+        # The soak claims the device mid-gap and runs its startup sequence.
+        locks.claim("S1", "nightly soak")
+        assert await locks.wait_clear("S1")
+        suspend = asyncio.create_task(mon.suspend("S1"))
+        await asyncio.sleep(0.05)
+        assert not suspend.done(), "suspend() overtook an in-flight _open()"
+
+        release_rd_get.set()
+        await asyncio.wait_for(acquire, timeout=5)
+        await asyncio.wait_for(suspend, timeout=15)
+
+        # suspend() has returned, so this is the instant the soak would call
+        # observer.open_device(): the port must be free.
+        state = mon._mons["S1"]
+        assert state.suspended
+        assert state.thread is None or not state.thread.is_alive(), (
+            "a raw reader was still on the port when the API observer would open"
+        )
+        await mon.shutdown()
+
+    asyncio.run(go())
