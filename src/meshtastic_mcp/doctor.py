@@ -20,12 +20,14 @@ Exposed as the `doctor` MCP tool (`server.py`) and the `meshtastic-mcp doctor` C
 
 from __future__ import annotations
 
+import contextlib
 import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -510,6 +512,65 @@ def _fbidb_check() -> Check:
     return Check("fb-idb", "apple", STATUS_OK, "iOS Simulator UI dump + tap/text", detail=detail)
 
 
+@contextlib.contextmanager
+def _muted_stderr() -> Iterator[None]:
+    """Silence fd 2 for the duration of a probe import.
+
+    NumPy's ABI-mismatch notice — a wall of text plus a stack dump that reads
+    exactly like a crash — is written by NumPy's C code straight to fd 2, so
+    neither `warnings` filters nor `contextlib.redirect_stderr` can suppress it.
+    Left alone it lands immediately above doctor's verdict and buries it; that
+    output is what made a working doctor run look like a doctor crash. Nothing is
+    lost: a probe failure still becomes the Check's detail.
+    """
+    try:
+        saved = os.dup(2)
+    except OSError:  # no real fd 2 (embedded / pythonw) — nothing to mute
+        yield
+        return
+    try:
+        with open(os.devnull, "w") as devnull:
+            sys.stderr.flush()
+            os.dup2(devnull.fileno(), 2)
+        yield
+    finally:
+        sys.stderr.flush()
+        os.dup2(saved, 2)
+        os.close(saved)
+
+
+def _easyocr_state() -> tuple[bool, str | None]:
+    """(usable, reason_it_is_not). Importing easyocr is NOT enough to call the
+    backend healthy: it runs every image through a numpy↔torch round-trip, and a
+    torch built against a different NumPy ABI *imports fine* — NumPy only prints
+    a warning (plus a stack dump that reads alarmingly like a crash) — while each
+    conversion then raises "Numpy is not available". Reporting that as `ok` sends
+    the operator away with no fix and defers the failure to capture time, so
+    probe the bridge rather than trusting the import.
+
+    Warnings are silenced because the NumPy mismatch notice is emitted at import
+    and would otherwise bury the report it is meant to explain.
+    """
+    import warnings
+
+    # catch_warnings as well as the fd mute: under `-W error` the NumPy notice
+    # would otherwise be raised as an exception and misreported as "not importable".
+    with warnings.catch_warnings(), _muted_stderr():
+        warnings.simplefilter("ignore")
+        try:
+            import easyocr  # noqa: F401
+        except Exception as exc:
+            return False, f"not importable ({type(exc).__name__})"
+        try:
+            import numpy
+            import torch
+
+            torch.from_numpy(numpy.zeros(1, dtype=numpy.float32))
+        except Exception as exc:
+            return False, f"installed but its numpy↔torch bridge is broken: {exc}"
+    return True, None
+
+
 def _ocr_check() -> Check:
     """OCR is optional; report the active backend or how to get one."""
     have_tesseract = _which("tesseract") is not None
@@ -519,21 +580,40 @@ def _ocr_check() -> Check:
         have_pytesseract = True
     except Exception:
         have_pytesseract = False
-    try:
-        import easyocr  # noqa: F401
+    have_easyocr, easyocr_broken_why = _easyocr_state()
+    have_pytesseract_backend = have_pytesseract and have_tesseract
 
-        have_easyocr = True
-    except Exception:
-        have_easyocr = False
-
-    if have_easyocr or (have_pytesseract and have_tesseract):
+    if have_easyocr or have_pytesseract_backend:
         backend = "easyocr" if have_easyocr else "pytesseract+tesseract"
+        detail = f"backend={backend}"
+        if not have_easyocr and easyocr_broken_why and "not importable" not in easyocr_broken_why:
+            # A working fallback exists, so this is not a missing capability —
+            # but say why the preferred backend was passed over.
+            detail += f"  (easyocr {easyocr_broken_why})"
         return Check(
             "ocr",
             "observability",
             STATUS_OK,
             "OLED screen-capture text extraction",
-            detail=f"backend={backend}",
+            detail=detail,
+            env_override="MESHTASTIC_UI_OCR_BACKEND",
+        )
+    if easyocr_broken_why and "not importable" not in easyocr_broken_why:
+        # easyocr is installed but cannot run, and there is no fallback: the
+        # capability is dead. Name the ABI break — "no backend importable" would
+        # be a lie that sends the operator to reinstall what is already there.
+        return Check(
+            "ocr",
+            "observability",
+            STATUS_DEGRADED,
+            "OLED screen-capture text extraction (optional)",
+            detail=f"easyocr {easyocr_broken_why}",
+            fix=_pkg(
+                "pip install --force-reinstall torch  # rebuild against the installed "
+                "NumPy (or pin numpy<2), or drop easyocr and brew install tesseract",
+                "pip install --force-reinstall torch  # rebuild against the installed "
+                "NumPy (or pin numpy<2), or drop easyocr and apt install tesseract-ocr",
+            ),
             env_override="MESHTASTIC_UI_OCR_BACKEND",
         )
     return Check(
@@ -752,14 +832,39 @@ def _uhubctl_check() -> Check:
     )
 
 
+def _safe(probe: Callable[[], Check], name: str, group: str) -> Check:
+    """Run one probe, turning an unexpected failure into a reported check.
+
+    ``run()`` promises never to raise, but the probes were called inline while
+    building the list, so one blowing up discarded the other thirty results and
+    printed a traceback instead — the exact opposite of what the caller needs
+    from the tool they were told to run when a dependency misbehaves.
+
+    Catches ``Exception``, deliberately NOT ``BaseException``: doctor shells out
+    to slow subprocesses (pio, gh, xcrun) and Ctrl-C has to keep working.
+    """
+    try:
+        return probe()
+    except Exception as exc:
+        return Check(
+            name,
+            group,
+            STATUS_DEGRADED,
+            f"{name} (probe failed — treat as unknown, not absent)",
+            detail=f"the {name} probe itself raised {type(exc).__name__}: {exc}",
+            fix="re-run `meshtastic-mcp doctor` after fixing the above; if it persists "
+            "this is a doctor bug, not a missing dependency — please report it",
+        )
+
+
 def run() -> DoctorReport:
     """Probe everything and return a structured report (never raises)."""
     caps = capabilities.detect()
     checks: list[Check] = [
         # firmware capability
-        _firmware_check(),
-        _pio_check(),
-        _meshtasticd_build_check(),
+        _safe(_firmware_check, "firmware-tree", "firmware"),
+        _safe(_pio_check, "platformio", "firmware"),
+        _safe(_meshtasticd_build_check, "meshtasticd-build-deps", "firmware"),
         # android capability
         _repo_root_check(
             "android-source",
@@ -770,8 +875,8 @@ def run() -> DoctorReport:
             "https://github.com/meshtastic/Meshtastic-Android",
             "Meshtastic-Android",
         ),
-        _java_check(),
-        _android_sdk_check(),
+        _safe(_java_check, "java", "android"),
+        _safe(_android_sdk_check, "android-sdk", "android"),
         _bin_check(
             "android",
             "android",
@@ -807,7 +912,7 @@ def run() -> DoctorReport:
             "brew tap facebook/fb && brew trust facebook/fb "
             "&& brew install facebook/fb/idb-companion  # NOT the `companion` cask",
         ),
-        _fbidb_check(),
+        _safe(_fbidb_check, "fb-idb", "apple"),
         # observability / hardware-bench extras (optional)
         _bin_check(
             "ffmpeg",
@@ -816,8 +921,8 @@ def run() -> DoctorReport:
             _pkg("brew install ffmpeg", "apt install ffmpeg"),
             env_override="MESHTASTIC_UI_CAMERA_BACKEND",
         ),
-        _uhubctl_check(),
-        _ocr_check(),
+        _safe(_uhubctl_check, "uhubctl", "observability"),
+        _safe(_ocr_check, "ocr", "observability"),
         # org-knowledge skill
         _bin_check(
             "gh",
@@ -826,15 +931,15 @@ def run() -> DoctorReport:
             _pkg("brew install gh", "apt install gh  # or: https://cli.github.com"),
         ),
         # nightly-report (FleetSuite nightly bake → GitHub issue delivery)
-        _gh_auth_check(),
+        _safe(_gh_auth_check, "gh-auth", "nightly-report"),
         # sdr capability (RF compliance oracle)
-        _sdr_check(),
+        _safe(_sdr_check, "pyrtlsdr", "sdr"),
         # power_meter capability (ImmersionRC PA-calibration bench)
-        _power_meter_check(),
+        _safe(_power_meter_check, "rf-power-meter", "power_meter"),
         # tak capability (TAKPacketV2 wire compression for the replay sim)
-        _tak_check(),
+        _safe(_tak_check, "meshtastic-tak", "tak"),
         # sdk capability (experimental Kotlin-SDK device-IO bridge)
-        _sdk_cli_check(),
+        _safe(_sdk_cli_check, "sdk-cli", "sdk"),
     ]
     return DoctorReport(
         platform=f"{platform.system()} {platform.machine()} / Python {platform.python_version()}",

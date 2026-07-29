@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import meshtastic_mcp.doctor as doctor
 
 
@@ -61,3 +63,105 @@ def test_report_renders_text() -> None:
     text = doctor.report()
     assert "meshtastic-mcp doctor" in text
     assert "capabilities:" in text
+
+
+# --- OCR backend: importable is not the same as usable ----------------------
+#
+# Live-discovered (2026-07-29): a torch built against a different NumPy ABI
+# IMPORTS fine — NumPy only warns, printing a stack dump that reads like a crash
+# — and then every numpy↔torch conversion raises "Numpy is not available". So
+# `import easyocr` succeeding proved nothing, and doctor reported the OCR
+# capability `ok` while the backend could not process a single image.
+
+
+def _fake_easyocr_state(monkeypatch, *, usable: bool, why: str | None) -> None:
+    monkeypatch.setattr(doctor, "_easyocr_state", lambda: (usable, why))
+
+
+def _ocr(rep) -> object:
+    return next(c for c in rep.checks if c.name == "ocr")
+
+
+def test_ocr_broken_easyocr_is_not_reported_ok(monkeypatch) -> None:
+    """No fallback + an installed-but-unusable easyocr => not ok, and the detail
+    names the real cause instead of claiming nothing is installed."""
+    _fake_easyocr_state(
+        monkeypatch,
+        usable=False,
+        why="installed but its numpy↔torch bridge is broken: Numpy is not available",
+    )
+    monkeypatch.setattr(doctor, "_which", lambda name: None)  # no tesseract binary
+
+    check = _ocr(doctor.run())
+
+    assert check.status != doctor.STATUS_OK, "an unusable backend must not read as healthy"
+    assert "numpy" in check.detail.lower()
+    assert "no OCR backend importable" not in check.detail, "misleading: easyocr IS installed"
+    assert check.fix, "a degraded capability still needs an actionable fix"
+    assert "numpy" in check.fix.lower() or "torch" in check.fix.lower()
+
+
+def test_ocr_broken_easyocr_falls_back_to_pytesseract(monkeypatch) -> None:
+    """With a working pytesseract the capability is still ok — but the report
+    says why the preferred backend was passed over."""
+    _fake_easyocr_state(
+        monkeypatch, usable=False, why="installed but its numpy↔torch bridge is broken: boom"
+    )
+    monkeypatch.setattr(doctor, "_which", lambda name: "/usr/bin/tesseract")
+    monkeypatch.setitem(__import__("sys").modules, "pytesseract", object())
+
+    check = _ocr(doctor.run())
+
+    assert check.status == doctor.STATUS_OK
+    assert "pytesseract" in check.detail
+    assert "easyocr" in check.detail, "should explain why easyocr was skipped"
+
+
+def test_ocr_absent_easyocr_still_reports_plain_missing(monkeypatch) -> None:
+    """The pre-existing message must survive for a genuinely empty environment —
+    'bridge broken' advice would be nonsense when nothing is installed."""
+    _fake_easyocr_state(monkeypatch, usable=False, why="not importable (ModuleNotFoundError)")
+    monkeypatch.setattr(doctor, "_which", lambda name: None)
+    monkeypatch.delitem(__import__("sys").modules, "pytesseract", raising=False)
+
+    check = _ocr(doctor.run())
+
+    assert check.status == doctor.STATUS_MISSING
+    assert check.detail == "no OCR backend importable"
+
+
+def test_run_survives_a_probe_that_raises(monkeypatch) -> None:
+    """run() documents "never raises", but probes were called inline while
+    building the list, so one blowing up discarded every other result and printed
+    a traceback — the opposite of what you need from the tool you were told to
+    run when a dependency misbehaves."""
+
+    def boom() -> doctor.Check:
+        raise RuntimeError("Numpy is not available")
+
+    monkeypatch.setattr(doctor, "_ocr_check", boom)
+
+    rep = doctor.run()  # must not raise
+
+    assert len(rep.checks) > 5, "one bad probe must not discard the other checks"
+    check = _ocr(rep)
+    assert check.status == doctor.STATUS_DEGRADED
+    assert "RuntimeError" in check.detail and "Numpy is not available" in check.detail
+    assert check.fix, "even a probe failure tells the caller what to do next"
+    # A failed probe means "unknown", not "absent" — it must not be advertised as
+    # a missing dependency the caller can install their way out of.
+    assert "ocr" not in [c.name for c in rep.missing]
+
+
+def test_ctrl_c_still_aborts_a_doctor_run(monkeypatch) -> None:
+    """The isolation above catches Exception, deliberately NOT BaseException:
+    doctor shells out to slow subprocesses (pio, gh, xcrun) and Ctrl-C has to
+    keep working. Swallowing KeyboardInterrupt would make it uninterruptible."""
+
+    def interrupted() -> doctor.Check:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(doctor, "_ocr_check", interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        doctor.run()

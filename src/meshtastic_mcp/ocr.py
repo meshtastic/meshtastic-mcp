@@ -104,12 +104,17 @@ def _reader() -> tuple[str, Callable[[bytes], str]]:
     # auto mode
     try:
         return _easyocr()
-    except ImportError:
-        pass
+    except Exception as exc:  # not just ImportError
+        # easyocr can be installed yet unusable — most often a torch built
+        # against a different NumPy ABI, which imports fine and then raises
+        # "Numpy is not available" from Reader(). Auto mode must fall through to
+        # a working pytesseract instead of propagating; only an explicit
+        # MESHTASTIC_UI_OCR_BACKEND=easyocr surfaces the error to the caller.
+        log.warning("easyocr unusable, trying the next backend: %s", exc)
     try:
         return _pytesseract()
-    except ImportError:
-        pass
+    except Exception as exc:
+        log.warning("pytesseract unusable: %s", exc)
     return _null()
 
 
