@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -347,16 +348,70 @@ _MESHTASTICD_DEPS_MAC: tuple[tuple[str, str], ...] = (
     ("openssl@3", "opt/openssl@3/include/openssl/ssl.h"),
 )
 
-# Debian: (apt package, a header that proves it is installed).
+# Debian: (apt package, header path relative to an include root).
 # argp is part of glibc on Debian, so argp.h comes from libc6-dev — there is no libargp-dev to
 # install, and naming one would make the fix line fail with "Unable to locate package". The
 # standalone formula only exists where the platform libc lacks argp, which is why macOS needs it.
+#
+# Root-relative for the same reason the macOS entries are prefix-relative: hard-coding
+# /usr/include reports every package missing on any toolchain that keeps its headers elsewhere —
+# Nix, Homebrew-on-Linux, a --prefix build, a cross sysroot — and then tells the user to install
+# what they already have. Resolved against _c_include_dirs().
 _MESHTASTICD_DEPS_DEBIAN: tuple[tuple[str, str], ...] = (
-    ("libc6-dev", "/usr/include/argp.h"),
-    ("libyaml-cpp-dev", "/usr/include/yaml-cpp/yaml.h"),
-    ("libuv1-dev", "/usr/include/uv.h"),
-    ("libssl-dev", "/usr/include/openssl/ssl.h"),
+    ("libc6-dev", "argp.h"),
+    ("libyaml-cpp-dev", "yaml-cpp/yaml.h"),
+    ("libuv1-dev", "uv.h"),
+    ("libssl-dev", "openssl/ssl.h"),
 )
+
+# The FHS roots every Linux toolchain searches without being told.
+_DEFAULT_INCLUDE_DIRS: tuple[str, ...] = ("/usr/include", "/usr/local/include")
+
+# Environment variables GCC and Clang read as bare directory lists (os.pathsep-separated).
+_INCLUDE_PATH_VARS: tuple[str, ...] = ("CPATH", "CPLUS_INCLUDE_PATH", "C_INCLUDE_PATH")
+
+# Environment variables carrying compiler *flags*, from which include dirs must be parsed.
+# NIX_CFLAGS_COMPILE is how a Nix shell hands its headers to the wrapped compiler; it is a
+# plain string of `-isystem <dir>` pairs and nothing else on PATH reveals those directories.
+_INCLUDE_FLAG_VARS: tuple[str, ...] = ("NIX_CFLAGS_COMPILE", "CXXFLAGS", "CFLAGS")
+
+# Flags that take the directory as the FOLLOWING argument, rather than glued on as -I<dir>.
+_INCLUDE_FLAGS_WITH_ARG: frozenset[str] = frozenset({"-I", "-isystem", "-idirafter", "-iquote"})
+
+
+def _c_include_dirs() -> list[Path]:
+    """Include roots a C/C++ compile on this machine would actually search.
+
+    The FHS defaults plus anything the environment adds, because "is the header installed"
+    and "is the header at /usr/include" are not the same question. Order is preserved and
+    duplicates dropped so the result reads like a real search path.
+
+    Deliberately environment-only: no compiler is spawned. This runs on every `doctor` call,
+    must never raise, and a subprocess would add a failure mode (and a timeout) to a probe
+    whose whole job is to be cheap and reliable.
+    """
+    found: list[Path] = [Path(d) for d in _DEFAULT_INCLUDE_DIRS]
+
+    for var in _INCLUDE_PATH_VARS:
+        found.extend(Path(e) for e in os.environ.get(var, "").split(os.pathsep) if e)
+
+    for var in _INCLUDE_FLAG_VARS:
+        try:
+            tokens = shlex.split(os.environ.get(var, ""))
+        except ValueError:
+            # Unbalanced quotes in someone's CFLAGS must not take the whole doctor down.
+            continue
+        expect_dir = False
+        for token in tokens:
+            if expect_dir:
+                found.append(Path(token))
+                expect_dir = False
+            elif token in _INCLUDE_FLAGS_WITH_ARG:
+                expect_dir = True
+            elif token.startswith("-I"):
+                found.append(Path(token[2:]))
+
+    return list(dict.fromkeys(found))
 
 
 def _brew_prefix() -> Path | None:
@@ -408,7 +463,14 @@ def _meshtasticd_build_check() -> Check:
         # Probe on Linux too. Returning ok unconditionally made this a check in name only: a
         # Debian user missing a package got a green tick and then the exact missing-header build
         # failure this exists to pre-empt.
-        missing = [pkg for pkg, header in _MESHTASTICD_DEPS_DEBIAN if not Path(header).exists()]
+        #
+        # Searched across the real include path, not just /usr/include — see _c_include_dirs.
+        include_dirs = _c_include_dirs()
+        missing = [
+            pkg
+            for pkg, header in _MESHTASTICD_DEPS_DEBIAN
+            if not any((root / header).exists() for root in include_dirs)
+        ]
         installer, env = "sudo apt install", "native"
 
     if not missing:

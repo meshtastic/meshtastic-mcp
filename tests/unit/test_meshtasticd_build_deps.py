@@ -14,6 +14,7 @@ a hard-coded one, so these tests pin a fake prefix instead of relying on the hos
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,12 @@ def test_missing_homebrew_is_reported_rather_than_silently_passing(
 # --- Linux -----------------------------------------------------------------
 
 
+def _no_include_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Blank every include-path variable so the host's own toolchain cannot leak in."""
+    for var in doctor._INCLUDE_PATH_VARS + doctor._INCLUDE_FLAG_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 def test_linux_missing_packages_are_probed_not_assumed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -120,11 +127,11 @@ def test_linux_missing_packages_are_probed_not_assumed(
     failure the check exists to pre-empt.
     """
     monkeypatch.setattr(doctor, "_IS_MAC", False)
+    monkeypatch.setattr(doctor, "_DEFAULT_INCLUDE_DIRS", (str(tmp_path / "empty"),))
     monkeypatch.setattr(
-        doctor,
-        "_MESHTASTICD_DEPS_DEBIAN",
-        (("libyaml-cpp-dev", str(tmp_path / "nope/yaml.h")),),
+        doctor, "_MESHTASTICD_DEPS_DEBIAN", (("libyaml-cpp-dev", "yaml-cpp/yaml.h"),)
     )
+    _no_include_env(monkeypatch)
 
     check = doctor._meshtasticd_build_check()
     assert check.status == doctor.STATUS_MISSING
@@ -135,13 +142,95 @@ def test_linux_missing_packages_are_probed_not_assumed(
 def test_linux_reports_ok_when_headers_are_present(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    header = _touch(tmp_path / "usr/include/uv.h")
+    _touch(tmp_path / "usr/include/uv.h")
     monkeypatch.setattr(doctor, "_IS_MAC", False)
-    monkeypatch.setattr(doctor, "_MESHTASTICD_DEPS_DEBIAN", (("libuv1-dev", str(header)),))
+    monkeypatch.setattr(doctor, "_DEFAULT_INCLUDE_DIRS", (str(tmp_path / "usr/include"),))
+    monkeypatch.setattr(doctor, "_MESHTASTICD_DEPS_DEBIAN", (("libuv1-dev", "uv.h"),))
+    _no_include_env(monkeypatch)
 
     check = doctor._meshtasticd_build_check()
     assert check.status == doctor.STATUS_OK
     assert check.fix == ""
+
+
+# --- include path beyond /usr/include --------------------------------------
+#
+# The probe used to stat /usr/include/<header> and nothing else, so any toolchain keeping its
+# headers elsewhere — Nix, Homebrew-on-Linux, a --prefix build, a cross sysroot — was told to
+# `sudo apt install` packages it already had, on distros where that command does not even exist.
+
+
+@pytest.mark.parametrize("var", ["CPATH", "CPLUS_INCLUDE_PATH", "C_INCLUDE_PATH"])
+def test_linux_honours_bare_include_path_variables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, var: str
+) -> None:
+    elsewhere = tmp_path / "opt/include"
+    _touch(elsewhere / "yaml-cpp/yaml.h")
+    monkeypatch.setattr(doctor, "_IS_MAC", False)
+    monkeypatch.setattr(doctor, "_DEFAULT_INCLUDE_DIRS", (str(tmp_path / "empty"),))
+    monkeypatch.setattr(
+        doctor, "_MESHTASTICD_DEPS_DEBIAN", (("libyaml-cpp-dev", "yaml-cpp/yaml.h"),)
+    )
+    _no_include_env(monkeypatch)
+    monkeypatch.setenv(var, str(elsewhere))
+
+    assert doctor._meshtasticd_build_check().status == doctor.STATUS_OK
+
+
+def test_linux_honours_isystem_flags_from_a_nix_shell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A Nix shell exports its headers only as `-isystem <dir>` in NIX_CFLAGS_COMPILE.
+
+    Nothing on PATH reveals those directories, so ignoring the variable is what made a fully
+    provisioned `nix develop` shell report libyaml-cpp-dev missing.
+    """
+    store = tmp_path / "nix/store/yaml-cpp/include"
+    _touch(store / "yaml-cpp/yaml.h")
+    monkeypatch.setattr(doctor, "_IS_MAC", False)
+    monkeypatch.setattr(doctor, "_DEFAULT_INCLUDE_DIRS", (str(tmp_path / "empty"),))
+    monkeypatch.setattr(
+        doctor, "_MESHTASTICD_DEPS_DEBIAN", (("libyaml-cpp-dev", "yaml-cpp/yaml.h"),)
+    )
+    _no_include_env(monkeypatch)
+    monkeypatch.setenv("NIX_CFLAGS_COMPILE", f"-frandom-seed=abc -isystem {store} -isystem /nope")
+
+    assert doctor._meshtasticd_build_check().status == doctor.STATUS_OK
+
+
+def test_linux_honours_glued_dash_i_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`-I<dir>` glued and `-I <dir>` separated are both legal; both must resolve."""
+    glued = tmp_path / "glued/include"
+    _touch(glued / "uv.h")
+    monkeypatch.setattr(doctor, "_IS_MAC", False)
+    monkeypatch.setattr(doctor, "_DEFAULT_INCLUDE_DIRS", (str(tmp_path / "empty"),))
+    monkeypatch.setattr(doctor, "_MESHTASTICD_DEPS_DEBIAN", (("libuv1-dev", "uv.h"),))
+    _no_include_env(monkeypatch)
+    monkeypatch.setenv("CXXFLAGS", f"-O2 -I{glued}")
+
+    assert doctor._meshtasticd_build_check().status == doctor.STATUS_OK
+
+
+def test_unbalanced_quotes_in_cflags_do_not_raise(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every doctor probe is non-fatal; a malformed CFLAGS must not take the report down."""
+    monkeypatch.setattr(doctor, "_IS_MAC", False)
+    monkeypatch.setattr(doctor, "_DEFAULT_INCLUDE_DIRS", (str(tmp_path / "empty"),))
+    monkeypatch.setattr(doctor, "_MESHTASTICD_DEPS_DEBIAN", (("libuv1-dev", "uv.h"),))
+    _no_include_env(monkeypatch)
+    monkeypatch.setenv("CFLAGS", '-I"unterminated')
+
+    assert doctor._meshtasticd_build_check().status == doctor.STATUS_MISSING
+
+
+def test_include_dirs_are_deduplicated_and_ordered(monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_include_env(monkeypatch)
+    monkeypatch.setattr(doctor, "_DEFAULT_INCLUDE_DIRS", ("/usr/include",))
+    monkeypatch.setenv("CPATH", f"/one{os.pathsep}/usr/include{os.pathsep}/one")
+
+    dirs = doctor._c_include_dirs()
+    assert dirs == [Path("/usr/include"), Path("/one")]
 
 
 # --- wiring ----------------------------------------------------------------
