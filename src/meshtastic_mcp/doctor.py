@@ -393,6 +393,12 @@ def _c_include_dirs() -> list[Path]:
     found: list[Path] = [Path(d) for d in _DEFAULT_INCLUDE_DIRS]
 
     for var in _INCLUDE_PATH_VARS:
+        # Empty components are dropped on purpose. GCC does read them as "the current working
+        # directory" (verified: `CPATH=:/other` resolves <probe.h> from the compile's cwd), but
+        # the cwd that would matter is PlatformIO's during `pio run`, not this process's when
+        # someone happens to run `doctor`. Honouring it here would resolve against the wrong
+        # directory and make the probe answer differently depending on where it was invoked
+        # from — green inside any tree that vendors a yaml-cpp/, while the build still fails.
         found.extend(Path(e) for e in os.environ.get(var, "").split(os.pathsep) if e)
 
     for var in _INCLUDE_FLAG_VARS:

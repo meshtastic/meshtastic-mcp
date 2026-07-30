@@ -233,6 +233,30 @@ def test_include_dirs_are_deduplicated_and_ordered(monkeypatch: pytest.MonkeyPat
     assert dirs == [Path("/usr/include"), Path("/one")]
 
 
+def test_empty_include_path_components_are_not_treated_as_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """GCC reads an empty CPATH component as the compile's cwd. We deliberately do not.
+
+    The cwd that would matter is PlatformIO's during `pio run`, not this process's when
+    someone runs `doctor`. Honouring it would resolve against the wrong directory and make
+    the probe answer differently depending on where it was invoked from — reporting ok inside
+    any tree that happens to vendor a yaml-cpp/ while the build still fails.
+    """
+    _touch(tmp_path / "yaml-cpp/yaml.h")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(doctor, "_IS_MAC", False)
+    monkeypatch.setattr(doctor, "_DEFAULT_INCLUDE_DIRS", (str(tmp_path / "empty"),))
+    monkeypatch.setattr(
+        doctor, "_MESHTASTICD_DEPS_DEBIAN", (("libyaml-cpp-dev", "yaml-cpp/yaml.h"),)
+    )
+    _no_include_env(monkeypatch)
+    monkeypatch.setenv("CPATH", f"{os.pathsep}{tmp_path / 'nowhere'}")
+
+    assert Path.cwd() not in doctor._c_include_dirs()
+    assert doctor._meshtasticd_build_check().status == doctor.STATUS_MISSING
+
+
 # --- wiring ----------------------------------------------------------------
 
 
