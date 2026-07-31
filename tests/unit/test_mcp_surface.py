@@ -18,11 +18,30 @@ def server():
     return server_mod
 
 
+def _registered_tools(app) -> dict[str, object]:
+    return {
+        tool.name: tool
+        for key, tool in app.local_provider._components.items()
+        if key.startswith("tool:")
+    }
+
+
+def _component_uris(app, kind: str) -> set[str]:
+    # Keys are "{kind}:{identifier}@{version}" (version may be empty → trailing "@").
+    # Strip only the final "@version" delimiter so identifiers containing "@" stay intact.
+    prefix = f"{kind}:"
+    return {
+        entry[len(prefix) :].rsplit("@", 1)[0] if "@" in entry else entry
+        for entry in (str(k) for k in app.local_provider._components)
+        if entry.startswith(prefix)
+    }
+
+
 def test_android_docs_tools_registered_and_readonly(server) -> None:
     # android_docs_* tools are capability-gated: they only register when the
     # android capability is active (android CLI + adb present). In CI and on
     # machines without android tooling they are intentionally absent.
-    tools = server.app._tool_manager._tools
+    tools = _registered_tools(server.app)
     if not server.CAPS.android:
         pytest.skip("android capability inactive — android_docs tools not registered")
     for name in ("android_docs_search", "android_docs_fetch"):
@@ -32,14 +51,15 @@ def test_android_docs_tools_registered_and_readonly(server) -> None:
 
 
 def test_resources_registered(server) -> None:
-    rm = server.app._resource_manager
-    assert "meshtastic://doctor" in rm._resources
-    assert "meshtastic://capabilities" in rm._resources
-    assert "meshtastic://e2e/{loop}" in rm._templates
+    resources = _component_uris(server.app, "resource")
+    templates = _component_uris(server.app, "template")
+    assert "meshtastic://doctor" in resources
+    assert "meshtastic://capabilities" in resources
+    assert "meshtastic://e2e/{loop}" in templates
 
 
 def test_prompts_registered(server) -> None:
-    names = set(server.app._prompt_manager._prompts)
+    names = _component_uris(server.app, "prompt")
     assert {"triage_e2e_failure", "bringup_device", "inbound_loop"} <= names
 
 

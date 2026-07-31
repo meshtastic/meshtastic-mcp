@@ -3,12 +3,9 @@
 
 """Guard the post-registration tool-annotation pass.
 
-`server._apply_tool_annotations()` reaches into FastMCP's private
-`app._tool_manager._tools` inside a broad try/except. If that private path is
-ever renamed, the except would swallow it and EVERY `destructiveHint` would
-silently vanish — defeating client-side gating, which violates the project rule.
-These assertions fail loudly in that case and also catch annotation-set drift
-(a tool whose applied hints disagree with the classification maps).
+`server._apply_tool_annotations()` raises loudly if the private registry path
+ever changes. The guard here catches annotation-set drift (a tool whose
+applied hints disagree with the classification maps).
 
 Runs in core-only mode (the portable unit tier), so it only asserts over
 *registered* tools — the firmware-gated tools aren't present here.
@@ -34,7 +31,11 @@ def server():
 
 
 def _tools(server):
-    return server.app._tool_manager._tools
+    return {
+        tool.name: tool
+        for key, tool in server.app.local_provider._components.items()
+        if str(key).startswith("tool:")
+    }
 
 
 def test_every_registered_tool_is_annotated(server):
@@ -131,3 +132,18 @@ def test_title_overrides_produce_correct_titles(server):
         assert ann.title == expected_title, (
             f"{tool_name}: title {ann.title!r} != {expected_title!r}"
         )
+
+
+def test_destructive_hint_survives_to_the_wire(server):
+    """Annotations must reach the MCP protocol surface, not just in-process objects."""
+    import asyncio
+
+    from fastmcp import Client
+
+    async def go():
+        async with Client(server.app) as c:
+            return {t.name: t.annotations for t in await c.list_tools()}
+
+    ann = asyncio.run(go())
+    assert ann["reboot"].destructiveHint is True
+    assert ann["list_devices"].readOnlyHint is True

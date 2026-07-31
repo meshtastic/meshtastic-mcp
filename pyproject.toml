@@ -21,6 +21,7 @@ classifiers = [
 
 # Portable core: works against any connected device (serial or TCP), no firmware checkout.
 dependencies = [
+  "fastmcp>=3.4.5,<4",
   "mcp>=1.2",
   "pyserial>=3.5",
   "meshtastic>=2.7.8",
@@ -160,7 +161,7 @@ ignore = [
 [tool.mypy]
 python_version = "3.11"
 files = ["src/meshtastic_mcp"]
-ignore_missing_imports = true   # meshtastic / mcp / cv2 / pubsub ship no stubs
+ignore_missing_imports = true   # meshtastic / cv2 / pubsub ship no stubs; fastmcp does
 check_untyped_defs = false
 warn_unused_ignores = false
 exclude = [
