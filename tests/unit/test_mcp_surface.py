@@ -18,11 +18,11 @@ def server():
     return server_mod
 
 
-def _registered_tools(app):
+def _registered_tools(app) -> dict[str, object]:
     return {
         tool.name: tool
         for key, tool in app.local_provider._components.items()
-        if str(key).startswith("tool:")
+        if key.startswith("tool:")
     }
 
 
@@ -30,14 +30,11 @@ def _component_uris(app, kind: str) -> set[str]:
     # Keys are "{kind}:{identifier}@{version}" (version may be empty → trailing "@").
     # Strip only the final "@version" delimiter so identifiers containing "@" stay intact.
     prefix = f"{kind}:"
-    out: set[str] = set()
-    for key in app.local_provider._components:
-        s = str(key)
-        if not s.startswith(prefix):
-            continue
-        body = s[len(prefix):]
-        out.add(body.rsplit("@", 1)[0] if "@" in body else body)
-    return out
+    return {
+        entry[len(prefix) :].rsplit("@", 1)[0] if "@" in entry else entry
+        for entry in (str(k) for k in app.local_provider._components)
+        if entry.startswith(prefix)
+    }
 
 
 def test_android_docs_tools_registered_and_readonly(server) -> None:

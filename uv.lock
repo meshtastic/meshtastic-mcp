@@ -1391,6 +1391,7 @@ name = "meshtastic-mcp"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "mcp" },
     { name = "meshtastic" },
     { name = "platformdirs" },
     { name = "pyserial" },
@@ -1457,6 +1458,7 @@ requires-dist = [
     { name = "easyocr", marker = "(platform_machine != 'x86_64' and extra == 'ui') or (sys_platform != 'darwin' and extra == 'ui')", specifier = ">=1.7" },
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.110" },
     { name = "fastmcp", specifier = ">=3.4.5,<4" },
+    { name = "mcp", specifier = ">=1.2" },
     { name = "meshtastic", specifier = ">=2.7.8" },
     { name = "meshtastic-tak", marker = "extra == 'tak'", git = "https://github.com/meshtastic/TAKPacket-SDK.git?subdirectory=python" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },

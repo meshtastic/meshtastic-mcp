@@ -17,6 +17,7 @@ from datetime import UTC
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.tools import FunctionTool
 
 from . import (
     admin,
@@ -58,10 +59,10 @@ from .replay import sim as replay_sim
 
 log = logging.getLogger(__name__)
 
-# Report our package version in the MCP handshake; otherwise the SDK falls back to
-# advertising its own version as the server version.
 from . import __version__ as _pkg_version  # noqa: E402
 
+# Report our package version in the MCP handshake; otherwise the SDK falls back to
+# advertising its own version (`pkg_version("mcp")`) as the server version.
 app = FastMCP("meshtastic-mcp", version=_pkg_version)
 
 # Capability detection drives conditional tool registration. The portable core always
@@ -2934,9 +2935,10 @@ _TITLE_OVERRIDES: dict[str, str] = {
 def _apply_tool_annotations() -> None:
     """Apply MCP hint metadata to every registered tool.
 
-    Walks FastMCP's local provider component registry. If that private path is
-    ever renamed, the except would raise loudly and EVERY `destructiveHint`
-    would vanish — defeating client-side gating, which violates the project rule.
+    Walks FastMCP's local provider component registry and filters by
+    ``FunctionTool`` type (not key-string prefix), so a future key-scheme
+    change cannot silently leave every tool unannotated. Raises on private-API
+    changes or if zero tools are found to annotate.
     """
     try:
         from mcp.types import ToolAnnotations
@@ -2957,8 +2959,9 @@ def _apply_tool_annotations() -> None:
         )
         raise
 
-    for key, tool in components.items():
-        if not str(key).startswith("tool:"):
+    annotated = 0
+    for tool in components.values():
+        if not isinstance(tool, FunctionTool):
             continue
         name = tool.name
         read_only = name in _READ_ONLY
@@ -2969,6 +2972,14 @@ def _apply_tool_annotations() -> None:
             destructiveHint=name in _DESTRUCTIVE,
             idempotentHint=read_only or name in _IDEMPOTENT_WRITES,
             openWorldHint=name in _OPEN_WORLD,
+        )
+        annotated += 1
+
+    if annotated == 0:
+        raise RuntimeError(
+            "_apply_tool_annotations: found zero FunctionTool components in "
+            "local_provider._components — FastMCP private API may have changed. "
+            "All tools would ship unannotated (destructive/open-world defaults)."
         )
 
 
