@@ -3,12 +3,12 @@
 
 """Guard the post-registration tool-annotation pass.
 
-`server._apply_tool_annotations()` reaches into FastMCP's private
-`app._tool_manager._tools` inside a broad try/except. If that private path is
-ever renamed, the except would swallow it and EVERY `destructiveHint` would
-silently vanish — defeating client-side gating, which violates the project rule.
-These assertions fail loudly in that case and also catch annotation-set drift
-(a tool whose applied hints disagree with the classification maps).
+`server._apply_tool_annotations()` walks FastMCP's local provider component
+registry. If that private path is ever renamed, the except would raise loudly
+and EVERY `destructiveHint` would vanish — defeating client-side gating, which
+violates the project rule. These assertions fail loudly in that case and also
+catch annotation-set drift (a tool whose applied hints disagree with the
+classification maps).
 
 Runs in core-only mode (the portable unit tier), so it only asserts over
 *registered* tools — the firmware-gated tools aren't present here.
@@ -34,7 +34,11 @@ def server():
 
 
 def _tools(server):
-    return server.app._tool_manager._tools
+    return {
+        tool.name: tool
+        for key, tool in server.app.local_provider._components.items()
+        if str(key).startswith("tool:")
+    }
 
 
 def test_every_registered_tool_is_annotated(server):

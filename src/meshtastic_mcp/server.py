@@ -16,7 +16,7 @@ import time
 from datetime import UTC
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from . import (
     admin,
@@ -58,12 +58,11 @@ from .replay import sim as replay_sim
 
 log = logging.getLogger(__name__)
 
-app = FastMCP("meshtastic-mcp")
 # Report our package version in the MCP handshake; otherwise the SDK falls back to
-# advertising its own version (`pkg_version("mcp")`) as the server version.
+# advertising its own version as the server version.
 from . import __version__ as _pkg_version  # noqa: E402
 
-app._mcp_server.version = _pkg_version
+app = FastMCP("meshtastic-mcp", version=_pkg_version)
 
 # Capability detection drives conditional tool registration. The portable core always
 # registers; firmware-coupled tools (build/flash/boards/userprefs) register only when a
@@ -2935,9 +2934,9 @@ _TITLE_OVERRIDES: dict[str, str] = {
 def _apply_tool_annotations() -> None:
     """Apply MCP hint metadata to every registered tool.
 
-    Reaches into FastMCP's private `_tool_manager._tools`. If that path ever
-    changes we want a loud failure — NOT a silent swallow that leaves every
-    tool with worst-case defaults (destructive/open-world/non-idempotent).
+    Walks FastMCP's local provider component registry. If that private path is
+    ever renamed, the except would raise loudly and EVERY `destructiveHint`
+    would vanish — defeating client-side gating, which violates the project rule.
     """
     try:
         from mcp.types import ToolAnnotations
@@ -2946,7 +2945,7 @@ def _apply_tool_annotations() -> None:
         return
 
     try:
-        tools = app._tool_manager._tools
+        components = app.local_provider._components
     except AttributeError as exc:
         # FastMCP private API changed. Fail loudly — unprotected tools are a
         # security regression that must be fixed, not logged and forgotten.
@@ -2958,7 +2957,10 @@ def _apply_tool_annotations() -> None:
         )
         raise
 
-    for name, tool in tools.items():
+    for key, tool in components.items():
+        if not str(key).startswith("tool:"):
+            continue
+        name = tool.name
         read_only = name in _READ_ONLY
         title = _TITLE_OVERRIDES.get(name) or name.replace("_", " ").title()
         tool.annotations = ToolAnnotations(

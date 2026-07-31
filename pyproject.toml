@@ -21,7 +21,7 @@ classifiers = [
 
 # Portable core: works against any connected device (serial or TCP), no firmware checkout.
 dependencies = [
-  "mcp>=1.2",
+  "fastmcp>=3.4.5,<4",
   "pyserial>=3.5",
   "meshtastic>=2.7.8",
   "platformdirs>=4.0",

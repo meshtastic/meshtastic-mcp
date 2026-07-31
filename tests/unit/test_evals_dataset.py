@@ -23,11 +23,12 @@ def known_tools():
 
     # Union of registered tools + all capability-gated tools so the guard is
     # valid regardless of this host's active capabilities.
-    return (
-        set(server.app._tool_manager._tools)
-        | set(server._FIRMWARE_TOOLS)
-        | set(server._ANDROID_TOOLS)
-    )
+    registered = {
+        tool.name
+        for key, tool in server.app.local_provider._components.items()
+        if str(key).startswith("tool:")
+    }
+    return registered | set(server._FIRMWARE_TOOLS) | set(server._ANDROID_TOOLS)
 
 
 def test_dataset_exists_and_has_rows() -> None:
