@@ -32,6 +32,7 @@ def test_erase_and_flash_resolves_esptool_and_adds_to_path() -> None:
     def _stub_subprocess_run(args, **kwargs):
         captured["env"] = kwargs.get("env", {})
         captured["args"] = args
+        captured["cwd"] = kwargs.get("cwd")
         # Return a successful result
         result = MagicMock()
         result.returncode = 0
@@ -71,6 +72,8 @@ def test_erase_and_flash_resolves_esptool_and_adds_to_path() -> None:
     assert "device-install.sh" in str(args[0])
     assert "-p" in args
     assert "/dev/ttyUSB0" in args
+    assert captured["cwd"] == str(factory_bin.parent)
+    assert args[-1] == factory_bin.name
 
 
 def test_update_flash_also_resolves_esptool() -> None:

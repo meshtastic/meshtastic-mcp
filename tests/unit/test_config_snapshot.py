@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import stat
 
 import pytest
 
@@ -21,6 +22,24 @@ def _isolate_snapshot_dir(tmp_path, monkeypatch):
 def _write_snapshot(name: str, config: dict) -> None:
     path = config_snapshot._snapshot_path(name)
     path.write_text(json.dumps({"name": name, "config": config}), encoding="utf-8")
+
+
+def test_capture_replaces_permissive_snapshot_with_owner_only_file(monkeypatch):
+    path = config_snapshot._snapshot_path("private")
+    path.write_text("stale", encoding="utf-8")
+    path.chmod(0o644)
+    monkeypatch.setattr(
+        config_snapshot.admin,
+        "get_config",
+        lambda section, port: {"config": {"localConfig": {"security": {"private_key": "secret"}}}},
+    )
+
+    config_snapshot.capture("private")
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert json.loads(path.read_text(encoding="utf-8"))["config"]["localConfig"]["security"] == {
+        "private_key": "secret"
+    }
 
 
 def test_flatten_nested_config():

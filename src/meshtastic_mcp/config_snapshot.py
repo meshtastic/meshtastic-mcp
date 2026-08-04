@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,30 @@ def _snapshot_path(name: str) -> Path:
     return _snapshot_dir() / f"{safe}.json"
 
 
+def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically replace a snapshot with owner-only permissions."""
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        os.chmod(temporary_path, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            file.write(json.dumps(payload, indent=2, default=str))
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def capture(name: str, port: str | None = None) -> dict[str, Any]:
     """Capture the device's full config to a named snapshot.
 
@@ -57,7 +82,7 @@ def capture(name: str, port: str | None = None) -> dict[str, Any]:
         "port": port,
         "config": cfg.get("config", cfg),
     }
-    path.write_text(json.dumps(snapshot, indent=2, default=str), encoding="utf-8")
+    _write_private_json(path, snapshot)
     config = snapshot["config"]
     local = config.get("localConfig", {})
     module = config.get("moduleConfig", {})
