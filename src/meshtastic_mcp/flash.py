@@ -293,8 +293,8 @@ def _run_install_script(script: Path, port: str, binary: Path) -> dict[str, Any]
 
     t0 = time.monotonic()
     proc = subprocess.run(
-        [str(script), "-p", port, "-f", str(binary)],
-        cwd=str(config.firmware_root()),
+        [str(script), "-p", port, "-f", binary.name],
+        cwd=str(binary.parent),
         capture_output=True,
         text=True,
         timeout=pio.TIMEOUT_UPLOAD,
