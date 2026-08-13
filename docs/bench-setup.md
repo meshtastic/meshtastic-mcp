@@ -57,6 +57,35 @@ esp32s3:
   (`rak4631`, `esp32s3`, `t_echo`, `heltec_t114`) keeps you aligned with the
   reference bench's parametrization.
 
+### Already-configured device? Skip the reflash entirely
+
+`baked_mesh` (the fixture behind every hardware test) only *verifies* a
+device's live region/channel against the harness's test-mesh profile — it
+never reflashes on its own. By default that profile is a fixed isolated
+mesh (`US` / channel `McpTest` / slot 88), which won't match a device you
+configured yourself. Rather than let the harness reflash your board into
+that profile, tell it what's *already* there with a top-level `session:`
+block in your hub profile:
+
+```yaml
+# my-bench.yaml
+session:
+  region: EU_868 # read via: meshtastic-mcp device_info --port=<port>
+  channel_name: FAB26 # same
+  channel_num: 0 # read via: meshtastic-mcp get_config --section=lora --port=<port>
+
+esp32s3:
+  vid: 0x303a
+```
+
+With this, `pytest tests/ --hub-profile=my-bench.yaml --assume-baked` runs
+against the device exactly as it already is — no reflash, and no risk of
+the harness silently switching a device to a regulatory region you didn't
+choose. Every `session:` key is also settable via an env var
+(`MESHTASTIC_MCP_REGION` etc.) for a one-off override without editing the
+file — the env var wins when both are set. See `example.yaml` at the repo
+root for every option, documented.
+
 ## 3. Run it
 
 ```bash
