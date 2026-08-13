@@ -2259,6 +2259,7 @@ def replay_start(
     announce_interval: float = 0.0,
     modem_preset: str = "LONG_FAST",
     firmware_edition: str = "VANILLA",
+    firmware_version: str | None = None,
     observer_lat: int | None = None,
     observer_lon: int | None = None,
     sim_nodes: int = 800,
@@ -2324,7 +2325,9 @@ def replay_start(
     can see from inside the app that it's a replay. `modem_preset` sets the
     advertised LoRa preset (e.g. `LONG_FAST`, `SHORT_TURBO`); `firmware_edition`
     sets the app's event banner (`VANILLA`, `DEFCON`, `BURNING_MAN`, `HAMVENTION`,
-    …). `observer_lat`/`observer_lon` (1e-7 degrees) place the *connected* node
+    …). `firmware_version` overrides the reported build; leave it unset to report
+    the real event build for the chosen edition (so the app's event-info build
+    comparison behaves like a live event node). `observer_lat`/`observer_lon` (1e-7 degrees) place the *connected* node
     (the app's "you are here" on the map) — distinct from the sim's RF gateway
     observer, which is configured via `sim_profile["observer"]`. Default is the
     capture's median position so the map and node distances look right.
@@ -2383,6 +2386,7 @@ def replay_start(
         announce_interval=announce_interval,
         modem_preset=modem_preset,
         firmware_edition=firmware_edition,
+        firmware_version=firmware_version,
         observer_lat=observer_lat,
         observer_lon=observer_lon,
         fuzz=replay_fuzz.from_spec(fuzz, seed=fuzz_seed),

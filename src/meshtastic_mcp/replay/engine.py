@@ -72,6 +72,23 @@ OBSERVER_NUM = 0x42524331  # "BRC1"
 # strict clients only need *a* passkey to finish their post-NodeDB seeding step.
 OWNER_SESSION_PASSKEY = b"replay01"
 
+# Default DeviceMetadata.firmware_version reported for each firmware edition when the
+# caller does not override it. Event editions report the real event build served by
+# api.meshtastic.org/resource/eventFirmware so a replay of that event drives the app's
+# event-info build comparison exactly as a live event node would; everything else keeps
+# the historical placeholder. Update the event values as the published builds advance.
+DEFAULT_FIRMWARE_VERSION = "2.7.8"
+EVENT_FIRMWARE_VERSIONS = {
+    "DEFCON": "2.8.0.c800fc8",
+}
+
+
+def firmware_version_for(edition: str, override: str | None) -> str:
+    """Resolve the reported firmware version: caller override wins, else per-edition default."""
+    if override:
+        return override
+    return EVENT_FIRMWARE_VERSIONS.get(edition, DEFAULT_FIRMWARE_VERSION)
+
 
 class PortInUseError(RuntimeError):
     """Raised when the replay listen port is already taken (clear, actionable)."""
@@ -198,6 +215,10 @@ class ReplayParams:
     observer_lon: int | None = None
     modem_preset: str = "LONG_FAST"  # advertised LoRa preset
     firmware_edition: str = "VANILLA"  # drives the app's event banner (e.g. DEFCON, HAMVENTION)
+    # Reported DeviceMetadata.firmware_version. None => a per-edition default (see
+    # EVENT_FIRMWARE_VERSIONS): event editions report the real event build so the app's
+    # event-info build comparison behaves like a live event node instead of a placeholder.
+    firmware_version: str | None = None
     # Replay Clock: post a kickoff + periodic "ETA — done/total" to the busiest
     # channel so you can see, from inside the app, that it's a replay. 0 = off.
     announce_interval: float = 0.0
@@ -483,7 +504,9 @@ class ReplaySession:
 
         fr = mesh_pb2.FromRadio()
         md = fr.metadata
-        md.firmware_version = "2.7.8"
+        md.firmware_version = firmware_version_for(
+            self.params.firmware_edition, self.params.firmware_version
+        )
         md.role = config_pb2.Config.DeviceConfig.Role.CLIENT
         md.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
         send(fr)
