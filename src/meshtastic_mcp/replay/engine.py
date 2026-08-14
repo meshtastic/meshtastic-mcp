@@ -21,6 +21,8 @@ so the MCP tools can ``start`` / ``status`` / ``stop`` them without blocking.
 
 from __future__ import annotations
 
+import os
+
 import contextlib
 import queue
 import random
@@ -66,7 +68,9 @@ NONCE_CONFIG = 69420
 NONCE_DB = 69421
 
 # Synthetic observer node the app connects "as" (must not collide with capture).
-OBSERVER_NUM = 0x42524331  # "BRC1"
+# Overridable so multiple replay instances can present distinct radios (node num, device id,
+# and the mDNS identity all derive from this) — required for driving app node-SWITCH flows.
+OBSERVER_NUM = int(os.environ.get("MESHTASTIC_REPLAY_OBSERVER_NUM", str(0x42524331)), 0)  # default "BRC1"
 # Opaque 8-byte admin session passkey the replay device hands a client in its
 # get_owner_response. Value is irrelevant (replay is read-only / tx disabled);
 # strict clients only need *a* passkey to finish their post-NodeDB seeding step.
