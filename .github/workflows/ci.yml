@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  merge_group: # required checks must re-run against the merge-queue temp commit
   workflow_dispatch: # on-demand hardware-free e2e (optionally pin component versions)
     inputs:
       firmware_ref:
