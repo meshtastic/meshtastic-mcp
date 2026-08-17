@@ -232,8 +232,10 @@ replay_status(); replay_stop()
 - **App-facing polish**: the connected node is placed at the capture's median position (sane map
   + distances); `announce_interval` adds a "Replay Clock" node posting kickoff + live ETA/progress
   to the busiest channel; `local_metrics_interval` makes the connected node report its own
-  `DEVICE_METRICS` (battery/voltage/channel-util/air-util/uptime) every N seconds (default 5 min)
-  so the app's "Device Metrics" view fills in and channel utilization tracks the live load;
+  telemetry every N seconds (default 5 min) — both `DEVICE_METRICS` (battery/voltage/channel-util/
+  air-util/uptime → the app's "Device Metrics" view) and `LOCAL_STATS` (packets rx/tx, online/total
+  nodes, noise floor → the "Local Stats" view) — with channel-util and packets-rx tracking the live
+  load;
   `modem_preset` / `firmware_edition` set the advertised LoRa preset and the app's event banner
   (e.g. `DEFCON`, `HAMVENTION`); `replay_status` returns `connect` host:port hints; a send timeout
   keeps a stalled app from hanging a session.

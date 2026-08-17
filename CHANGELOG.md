@@ -6,14 +6,16 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
-- **Replay local device metrics** (`replay_start(local_metrics_interval=…)`, default 300 s;
-  CLI `--local-metrics-interval`) — the connected/observer node now emits its own
-  `DEVICE_METRICS` telemetry every N seconds, like real firmware reporting its
-  battery/voltage/channel-utilization/air-util/uptime, so the app's "Device Metrics" view for
-  the device it's connected to populates and updates over time. Uptime climbs with the session,
-  channel utilization tracks the live replay load (a stress run shows a busy channel), air-util
-  stays low (the observer is a mostly-RX gateway), and the battery drifts down slowly so the
-  value visibly changes. `0` disables it; `replay_status` reports the interval + count.
+- **Replay local device metrics + local stats** (`replay_start(local_metrics_interval=…)`,
+  default 300 s; CLI `--local-metrics-interval`) — the connected/observer node now emits its own
+  telemetry every N seconds, like real firmware reporting itself, in **both** variants:
+  `DEVICE_METRICS` (battery/voltage/channel-utilization/air-util/uptime → the app's "Device
+  Metrics" view) and `LOCAL_STATS` (packets rx/tx, rx-dupe, online/total nodes, noise floor,
+  uptime → the app's "Local Stats" / live-activity view). Uptime climbs with the session,
+  channel utilization tracks the live replay load (a stress run shows a busy channel), packets-rx
+  climbs as the observer receives the streamed feed, online/total nodes = the mesh size, and the
+  battery drifts down slowly so the value visibly changes. `0` disables it; `replay_status`
+  reports the interval + count.
 - **`meshtastic-mcp replay` CLI + `conference-stress` preset** — serve a simulated device
   from the shell with no MCP session: `meshtastic-mcp replay conference-stress --nodes 1600
   --rate 140 --loop` runs the dense-convention stress scenario (gateway-observed density +

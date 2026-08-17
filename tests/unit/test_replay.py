@@ -1333,12 +1333,12 @@ def test_cli_replay_builds_session_from_args():
     assert sess.state.ended is False
 
 
-# ── Local device metrics (connected node reports its own stats) ─────────────
-def test_local_device_metrics_are_emitted_periodically():
-    """The connected/observer node must emit DEVICE_METRICS telemetry on the
-    configured interval, so the app's "Device Metrics" view populates. The packet
-    is TELEMETRY_APP (67) from OBSERVER_NUM with a device_metrics variant whose
-    uptime is nonzero and channel_utilization is populated from the replay load.
+# ── Local device metrics + local stats (connected node reports its own stats) ─
+def test_local_metrics_emit_both_device_metrics_and_local_stats():
+    """The connected/observer node must emit BOTH telemetry variants on the
+    interval: DEVICE_METRICS (battery/voltage/uptime → app "Device Metrics") and
+    LOCAL_STATS (packets rx/tx, online nodes → app "Local Stats"). Both are
+    TELEMETRY_APP (67) from OBSERVER_NUM; values track the live replay.
     """
     from meshtastic.protobuf import telemetry_pb2
 
@@ -1371,27 +1371,29 @@ def test_local_device_metrics_are_emitted_periodically():
         _send_toradio(client, want_config_id=69420)
         _send_toradio(client, want_config_id=69421)
 
-        found = 0
+        seen: dict[str, object] = {}
         t0 = time.time()
-        while time.time() - t0 < 4 and found < 2:
+        while time.time() - t0 < 5 and {"device_metrics", "local_stats"} - seen.keys():
             fr = _read_frame(client)
             if fr.WhichOneof("payload_variant") != "packet":
                 continue
             pkt = fr.packet
-            if pkt.decoded.portnum != 67:  # TELEMETRY_APP
-                continue
-            if getattr(pkt, "from") != OBSERVER_NUM:
+            if pkt.decoded.portnum != 67 or getattr(pkt, "from") != OBSERVER_NUM:
                 continue
             tm = telemetry_pb2.Telemetry()
             tm.ParseFromString(pkt.decoded.payload)
-            if tm.WhichOneof("variant") != "device_metrics":
-                continue
-            assert tm.device_metrics.uptime_seconds > 0
-            assert tm.device_metrics.channel_utilization > 0  # tracks the 100/s load
-            found += 1
+            seen[tm.WhichOneof("variant")] = tm
         client.close()
-        assert found >= 2, "observer did not emit periodic device metrics"
-        assert sess.state.local_metrics_sent >= 2
+
+        assert "device_metrics" in seen, "no DEVICE_METRICS from the observer"
+        assert "local_stats" in seen, "no LOCAL_STATS from the observer"
+        dm = seen["device_metrics"].device_metrics
+        assert dm.uptime_seconds > 0 and dm.channel_utilization > 0
+        ls = seen["local_stats"].local_stats
+        assert ls.uptime_seconds > 0
+        assert ls.num_online_nodes == len(cap.nodes)  # mesh size
+        assert ls.num_packets_rx > 0  # observer received the streamed feed
+        assert ls.noise_floor < 0  # realistic RF noise floor
     finally:
         sess.stop()
 

@@ -733,7 +733,7 @@ class ReplaySession:
         fr.packet.CopyFrom(mp)
         send(fr)
 
-    # -- local device metrics (the connected node reports its own stats) --
+    # -- local telemetry (the connected node reports its own stats) --
     def _stream_rate(self) -> float:
         """Current replay-stream packet rate (for chutil), 0 before streaming."""
         st = self.state
@@ -743,45 +743,82 @@ class ReplaySession:
         streamed = (st.packets_sent - st.injected) - st.stream_base
         return streamed / elapsed if elapsed > 0 and streamed > 0 else 0.0
 
-    def _local_device_metrics(self) -> mesh_pb2.FromRadio:
-        """A DEVICE_METRICS telemetry packet from the connected/observer node.
-
-        Mirrors what real firmware reports about *itself*: uptime climbs with the
-        session, channel utilization tracks the live replay load (so a stress run
-        shows a busy channel), air-util-tx stays low (the observer is a mostly-RX
-        gateway — it only transmits traceroute/admin replies), and the battery
-        drifts down slowly so the value visibly changes across ticks.
-        """
-        now = int(time.time())
-        uptime = max(1, now - int(self.state.started_at))
+    def _local_chutil(self) -> float:
+        """Channel utilization tracking the live replay load (busy under stress)."""
         rate = self._stream_rate() or (self.params.rate or 0.0)
-        # rate → channel utilization: a busy stress stream reads ~50% at 140/s,
-        # capped like firmware's own clamp; small jitter so it's not a flat line.
-        chutil = min(65.0, 5.0 + 0.32 * rate) * random.uniform(0.9, 1.1)
-        batt = max(20, int(100 - uptime / 3600.0 * 2.0))  # ~2%/hr drift, floor 20
+        # a busy stress stream reads ~50% at 140/s, capped like firmware's own
+        # clamp; small jitter so it's not a flat line.
+        return round(min(65.0, 5.0 + 0.32 * rate) * random.uniform(0.9, 1.1), 2)
 
-        tm = telemetry_pb2.Telemetry()
-        tm.time = now
-        d = tm.device_metrics
-        d.battery_level = batt
-        d.voltage = round(3.0 + 1.25 * batt / 100.0 + random.uniform(-0.03, 0.03), 3)
-        d.channel_utilization = round(chutil, 2)
-        d.air_util_tx = round(random.uniform(0.0, 1.5), 3)
-        d.uptime_seconds = uptime
+    def _local_telemetry_fr(self, tm: telemetry_pb2.Telemetry) -> mesh_pb2.FromRadio:
+        """Wrap a Telemetry message in a FromRadio packet from the observer node.
 
+        The app dispatches TELEMETRY_APP by `packet.from`; the connected node's
+        own telemetry (`from == connectedNode`) is treated as local. A random
+        packet id keeps the two per-tick packets distinct so neither is deduped.
+        """
         fr = mesh_pb2.FromRadio()
         mp = fr.packet
         setattr(mp, "from", OBSERVER_NUM)
         mp.to = OBSERVER_NUM  # a node's own telemetry is addressed to itself
         mp.channel = 0
-        mp.id = int(time.time() * 1000) & 0x7FFFFFFF
-        mp.rx_time = now
+        mp.id = random.getrandbits(31) or 1
+        mp.rx_time = int(time.time())
         mp.decoded.portnum = TELEMETRY_APP
         mp.decoded.payload = tm.SerializeToString()
         return fr
 
+    def _local_device_metrics(self) -> mesh_pb2.FromRadio:
+        """DEVICE_METRICS for the observer: battery/voltage/chutil/air-util/uptime.
+
+        Uptime climbs with the session; the battery drifts down slowly (~2%/hr)
+        so the value visibly changes across ticks; air-util-tx stays low (the
+        observer is a mostly-RX gateway — it only TXes traceroute/admin replies).
+        """
+        now = int(time.time())
+        uptime = max(1, now - int(self.state.started_at))
+        batt = max(20, int(100 - uptime / 3600.0 * 2.0))
+        tm = telemetry_pb2.Telemetry()
+        tm.time = now
+        d = tm.device_metrics
+        d.battery_level = batt
+        d.voltage = round(3.0 + 1.25 * batt / 100.0 + random.uniform(-0.03, 0.03), 3)
+        d.channel_utilization = self._local_chutil()
+        d.air_util_tx = round(random.uniform(0.0, 1.5), 3)
+        d.uptime_seconds = uptime
+        return self._local_telemetry_fr(tm)
+
+    def _local_stats(self) -> mesh_pb2.FromRadio:
+        """LOCAL_STATS for the observer: the mesh/network "Local Stats" view.
+
+        Distinct from device metrics — this drives the app's live-activity stats:
+        packets rx (the observer receives the whole replay feed, so this climbs),
+        packets tx (small — it mostly listens), online/total nodes = the mesh
+        size, plus a realistic negative noise floor.
+        """
+        now = int(time.time())
+        st = self.state
+        n_nodes = len(self.capture.nodes)
+        rx = st.packets_sent & 0xFFFFFFFF  # observer received everything streamed
+        tx = (st.injected + st.local_metrics_sent * 2) & 0xFFFFFFFF  # it TXes little
+        tm = telemetry_pb2.Telemetry()
+        tm.time = now
+        ls = tm.local_stats
+        ls.uptime_seconds = max(1, now - int(st.started_at))
+        ls.channel_utilization = self._local_chutil()
+        ls.air_util_tx = round(random.uniform(0.0, 1.5), 3)
+        ls.num_packets_tx = tx
+        ls.num_packets_rx = rx
+        ls.num_packets_rx_bad = 0
+        ls.num_rx_dupe = int(rx * 0.03)  # a few duplicates, as a real mesh sees
+        ls.num_tx_relay = 0
+        ls.num_online_nodes = n_nodes
+        ls.num_total_nodes = n_nodes
+        ls.noise_floor = random.randint(-105, -92)
+        return self._local_telemetry_fr(tm)
+
     def _local_metrics_loop(self, send: Any, client: socket.socket) -> None:
-        """Emit local device metrics every `local_metrics_interval` seconds.
+        """Emit local device metrics + local stats every `local_metrics_interval` s.
 
         First tick fires a few seconds after connect (so the handshake's observer
         NodeInfo lands first), then on the interval — matching firmware, which
@@ -796,6 +833,7 @@ class ReplaySession:
         while not stop.is_set():
             try:
                 send(self._local_device_metrics())
+                send(self._local_stats())
             except (OSError, ConnectionError):
                 self._sever(client)
                 return
