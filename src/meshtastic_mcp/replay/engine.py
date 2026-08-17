@@ -386,8 +386,16 @@ class ReplaySession:
                     continue
                 except OSError:
                     break
-                client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                _set_send_timeout(client, self.params.send_timeout)
+                try:
+                    client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    _set_send_timeout(client, self.params.send_timeout)
+                except OSError:
+                    # The client vanished between accept() and configuration (macOS raises
+                    # EINVAL from setsockopt on a dead socket). Wait for the next client
+                    # instead of tearing down the whole accept loop.
+                    with contextlib.suppress(OSError):
+                        client.close()
+                    continue
                 self.state.client_addr = f"{addr[0]}:{addr[1]}"
                 self.state.connected = True
                 self._client = client
