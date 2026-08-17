@@ -2327,8 +2327,9 @@ def replay_start(
     sets the app's event banner (`VANILLA`, `DEFCON`, `BURNING_MAN`, `HAMVENTION`,
     …). `firmware_version` overrides the reported build; leave it unset to report
     the real event build for the chosen edition (so the app's event-info build
-    comparison behaves like a live event node). `observer_lat`/`observer_lon` (1e-7 degrees) place the *connected* node
-    (the app's "you are here" on the map) — distinct from the sim's RF gateway
+    comparison behaves like a live event node). `observer_lat`/`observer_lon`
+    (1e-7 degrees) place the *connected* node (the app's "you are here" on the
+    map) — distinct from the sim's RF gateway
     observer, which is configured via `sim_profile["observer"]`. Default is the
     capture's median position so the map and node distances look right.
 
