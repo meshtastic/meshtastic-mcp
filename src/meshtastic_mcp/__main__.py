@@ -553,6 +553,7 @@ def _build_replay_session(args):
         node_delay=args.node_delay,
         announce_interval=args.announce_interval,
         firmware_edition=args.edition,
+        firmware_version=args.firmware_version,
         mdns=False if args.no_mdns else None,
         local_metrics_interval=args.local_metrics_interval,
     )
@@ -771,6 +772,12 @@ def main(argv=None) -> None:
     rpl.add_argument("--fuzz", default=None, help="fuzz preset (light/parser/adversary/chaos)")
     rpl.add_argument(
         "--edition", default="VANILLA", help="firmware edition banner (e.g. DEFCON, VANILLA)"
+    )
+    rpl.add_argument(
+        "--firmware-version",
+        default=None,
+        help="reported firmware build; default is the real event build for a configured "
+        "--edition, else the historical placeholder",
     )
     rpl.add_argument(
         "--announce-interval",

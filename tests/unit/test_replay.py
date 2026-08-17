@@ -1317,6 +1317,7 @@ def test_cli_replay_builds_session_from_args():
         profile='{"bots": {"count": 2}}',
         fuzz=None,
         edition="DEFCON",
+        firmware_version=None,
         announce_interval=0.0,
         node_delay=0.0,
         no_mdns=True,
@@ -1329,6 +1330,8 @@ def test_cli_replay_builds_session_from_args():
     assert sess.params.mdns is False  # --no-mdns
     assert sess.params.local_metrics_interval == 300.0
     assert sess.params.firmware_edition == "DEFCON"
+    # Unset --firmware-version => the DEFCON replay reports the real event build.
+    assert sess.params.firmware_version is None
     assert len(sess.capture.nodes) == 30 + 2  # --profile override beat the preset
     assert sess.state.ended is False
 
@@ -1619,3 +1622,21 @@ def test_traceroute_responder_replies_to_client_request():
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
+
+
+def test_firmware_version_defaults_per_edition():
+    """Event editions report their real build; others keep the placeholder; override wins."""
+    from meshtastic_mcp.replay.engine import (
+        DEFAULT_FIRMWARE_VERSION,
+        EVENT_FIRMWARE_VERSIONS,
+        firmware_version_for,
+    )
+
+    # DEFCON replay reports the real event build, so the app's event-info build
+    # comparison behaves like a live event node instead of a placeholder.
+    assert firmware_version_for("DEFCON", None) == EVENT_FIRMWARE_VERSIONS["DEFCON"]
+    # Non-event editions keep the historical default.
+    assert firmware_version_for("VANILLA", None) == DEFAULT_FIRMWARE_VERSION
+    # An explicit override always wins, for any edition.
+    assert firmware_version_for("DEFCON", "2.7.0.deadbee") == "2.7.0.deadbee"
+    assert firmware_version_for("VANILLA", "2.9.9") == "2.9.9"

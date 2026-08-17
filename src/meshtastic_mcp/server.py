@@ -2259,8 +2259,10 @@ def replay_start(
     announce_interval: float = 0.0,
     modem_preset: str = "LONG_FAST",
     firmware_edition: str = "VANILLA",
+    firmware_version: str | None = None,
     observer_lat: int | None = None,
     observer_lon: int | None = None,
+    observer_num: int | None = None,
     sim_nodes: int = 800,
     sim_days: int = 3,
     sim_seed: int = 1337,
@@ -2325,10 +2327,19 @@ def replay_start(
     can see from inside the app that it's a replay. `modem_preset` sets the
     advertised LoRa preset (e.g. `LONG_FAST`, `SHORT_TURBO`); `firmware_edition`
     sets the app's event banner (`VANILLA`, `DEFCON`, `BURNING_MAN`, `HAMVENTION`,
-    …). `observer_lat`/`observer_lon` (1e-7 degrees) place the *connected* node
-    (the app's "you are here" on the map) — distinct from the sim's RF gateway
+    …). `firmware_version` overrides the reported build; leave it unset to report
+    the real event build for a configured event edition (so the app's event-info
+    build comparison behaves like a live event node) — an edition with no
+    published build (see `EVENT_FIRMWARE_VERSIONS`) reports the historical
+    placeholder instead. `observer_lat`/`observer_lon`
+    (1e-7 degrees) place the *connected* node (the app's "you are here" on the
+    map) — distinct from the sim's RF gateway
     observer, which is configured via `sim_profile["observer"]`. Default is the
     capture's median position so the map and node distances look right.
+    `observer_num` sets this session's node num (identity + device id + mDNS
+    TXT record); leave unset to use the process-wide default (env
+    `MESHTASTIC_REPLAY_OBSERVER_NUM`) — pass a distinct value per call to run
+    more than one concurrent session without them presenting the same identity.
 
     `fuzz` turns the stream hostile (fault injection + bad actors): a preset name
     (`light`, `parser`, `adversary`, `chaos`) or a dict of overrides (optionally
@@ -2390,8 +2401,10 @@ def replay_start(
         announce_interval=announce_interval,
         modem_preset=modem_preset,
         firmware_edition=firmware_edition,
+        firmware_version=firmware_version,
         observer_lat=observer_lat,
         observer_lon=observer_lon,
+        observer_num=observer_num if observer_num is not None else replay_engine.OBSERVER_NUM,
         fuzz=replay_fuzz.from_spec(fuzz, seed=fuzz_seed),
         mdns=mdns,
         local_metrics_interval=local_metrics_interval,

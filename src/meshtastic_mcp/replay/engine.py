@@ -22,6 +22,7 @@ so the MCP tools can ``start`` / ``status`` / ``stop`` them without blocking.
 from __future__ import annotations
 
 import contextlib
+import os
 import queue
 import random
 import socket
@@ -73,11 +74,32 @@ NONCE_CONFIG = 69420
 NONCE_DB = 69421
 
 # Synthetic observer node the app connects "as" (must not collide with capture).
-OBSERVER_NUM = 0x42524331  # "BRC1"
+# Overridable so multiple replay instances can present distinct radios (node num, device id,
+# and the mDNS identity all derive from this) — required for driving app node-SWITCH flows.
+OBSERVER_NUM = int(
+    os.environ.get("MESHTASTIC_REPLAY_OBSERVER_NUM", str(0x42524331)), 0
+)  # default "BRC1"
 # Opaque 8-byte admin session passkey the replay device hands a client in its
 # get_owner_response. Value is irrelevant (replay is read-only / tx disabled);
 # strict clients only need *a* passkey to finish their post-NodeDB seeding step.
 OWNER_SESSION_PASSKEY = b"replay01"
+
+# Default DeviceMetadata.firmware_version reported for each firmware edition when the
+# caller does not override it. Event editions report the real event build served by
+# api.meshtastic.org/resource/eventFirmware so a replay of that event drives the app's
+# event-info build comparison exactly as a live event node would; everything else keeps
+# the historical placeholder. Update the event values as the published builds advance.
+DEFAULT_FIRMWARE_VERSION = "2.7.8"
+EVENT_FIRMWARE_VERSIONS = {
+    "DEFCON": "2.8.0.c800fc8",
+}
+
+
+def firmware_version_for(edition: str, override: str | None) -> str:
+    """Resolve the reported firmware version: caller override wins, else per-edition default."""
+    if override:
+        return override
+    return EVENT_FIRMWARE_VERSIONS.get(edition, DEFAULT_FIRMWARE_VERSION)
 
 
 class PortInUseError(RuntimeError):
@@ -204,8 +226,16 @@ class ReplayParams:
     # observer (connected node) position; None => derive from the capture center
     observer_lat: int | None = None
     observer_lon: int | None = None
+    # Synthetic observer node num this session presents as. Defaults to the process-wide
+    # OBSERVER_NUM (env-overridable), but each concurrent session can be given a distinct
+    # value so ReplayManager.start() can run more than one session without identity collisions.
+    observer_num: int = OBSERVER_NUM
     modem_preset: str = "LONG_FAST"  # advertised LoRa preset
     firmware_edition: str = "VANILLA"  # drives the app's event banner (e.g. DEFCON, HAMVENTION)
+    # Reported DeviceMetadata.firmware_version. None => a per-edition default (see
+    # EVENT_FIRMWARE_VERSIONS): event editions report the real event build so the app's
+    # event-info build comparison behaves like a live event node instead of a placeholder.
+    firmware_version: str | None = None
     # Replay Clock: post a kickoff + periodic "ETA — done/total" to the busiest
     # channel so you can see, from inside the app, that it's a replay. 0 = off.
     announce_interval: float = 0.0
@@ -350,7 +380,7 @@ class ReplaySession:
             self._advertiser = _mdns.Advertiser(
                 f"Meshtastic Replay {self.capture.label}",
                 self.params.port,
-                _mdns.txt_records("RPLY", f"!{OBSERVER_NUM:08x}"),
+                _mdns.txt_records("RPLY", f"!{self.params.observer_num:08x}"),
             ).start()
             self._log_event("mdns", **self._advertiser.status())
 
@@ -502,11 +532,11 @@ class ReplaySession:
         n_nodes = len(self.capture.nodes)
         fr = mesh_pb2.FromRadio()
         mi = fr.my_info
-        mi.my_node_num = OBSERVER_NUM
+        mi.my_node_num = self.params.observer_num
         mi.reboot_count = 1
         mi.min_app_version = 30200
         mi.nodedb_count = n_nodes
-        mi.device_id = struct.pack("<I", OBSERVER_NUM) * 4  # stable 16-byte id
+        mi.device_id = struct.pack("<I", self.params.observer_num) * 4  # stable 16-byte id
         mi.pio_env = "replay"
         with contextlib.suppress(ValueError, KeyError):
             mi.firmware_edition = mesh_pb2.FirmwareEdition.Value(self.params.firmware_edition)
@@ -514,7 +544,9 @@ class ReplaySession:
 
         fr = mesh_pb2.FromRadio()
         md = fr.metadata
-        md.firmware_version = "2.7.8"
+        md.firmware_version = firmware_version_for(
+            self.params.firmware_edition, self.params.firmware_version
+        )
         md.role = config_pb2.Config.DeviceConfig.Role.CLIENT
         md.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
         send(fr)
@@ -612,10 +644,10 @@ class ReplaySession:
         if req.WhichOneof("payload_variant") != "get_owner_request":
             return
 
-        requester = getattr(pkt, "from", 0) or OBSERVER_NUM
+        requester = getattr(pkt, "from", 0) or self.params.observer_num
         resp = admin_pb2.AdminMessage()
         owner = resp.get_owner_response
-        owner.id = f"!{OBSERVER_NUM:08x}"
+        owner.id = f"!{self.params.observer_num:08x}"
         owner.long_name = "Replay Observer"
         owner.short_name = "RPLY"
         owner.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
@@ -624,7 +656,8 @@ class ReplaySession:
 
         fr = mesh_pb2.FromRadio()
         mp = fr.packet
-        setattr(mp, "from", OBSERVER_NUM)  # responder identity; client keys the passkey on this
+        # responder identity; client keys the passkey on this
+        setattr(mp, "from", self.params.observer_num)
         mp.to = requester & 0xFFFFFFFF
         mp.id = int(time.time() * 1000) & 0x7FFFFFFF
         mp.rx_time = int(time.time())
@@ -648,7 +681,7 @@ class ReplaySession:
         firmware's SNR×4 int encoding.
         """
         dest = pkt.to & 0xFFFFFFFF
-        requester = getattr(pkt, "from", 0) or OBSERVER_NUM
+        requester = getattr(pkt, "from", 0) or self.params.observer_num
 
         # Plausible intermediate relay from the capture node DB (or direct). A
         # NodeRow.role of None (file-backed captures with no role column) counts
@@ -658,7 +691,7 @@ class ReplaySession:
         routers = [
             n.num
             for n in self.capture.nodes
-            if n.num not in (dest, requester, OBSERVER_NUM)
+            if n.num not in (dest, requester, self.params.observer_num)
             and (getattr(n, "role", None) or "") in ("ROUTER", "ROUTER_LATE", "")
         ]
         relays = [random.choice(routers)] if routers else []
@@ -697,8 +730,8 @@ class ReplaySession:
     def _observer_nodeinfo(self) -> mesh_pb2.FromRadio:
         fr = mesh_pb2.FromRadio()
         ni = fr.node_info
-        ni.num = OBSERVER_NUM
-        ni.user.id = f"!{OBSERVER_NUM:08x}"
+        ni.num = self.params.observer_num
+        ni.user.id = f"!{self.params.observer_num:08x}"
         ni.user.long_name = "Replay Observer"
         ni.user.short_name = "RPLY"
         ni.user.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
