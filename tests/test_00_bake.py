@@ -202,11 +202,20 @@ def _bake_role(
     if not force_bake:
         try:
             live = info.device_info(port=port, timeout_s=8.0)
-            # Quick heuristic: region matches and primary channel matches.
+            # Heuristic: region, primary channel, channel_num and modem_preset all match.
+            # A device sharing region/name but flashed with a different slot or preset must
+            # NOT be treated as already baked — and if either value can't be observed on this
+            # device, fall through and bake rather than risk a false-positive skip.
             expected_region_short = test_profile["USERPREFS_CONFIG_LORA_REGION"].rsplit("_", 1)[-1]
+            expected_channel_num = test_profile["USERPREFS_LORACONFIG_CHANNEL_NUM"]
+            expected_modem_preset = test_profile["USERPREFS_LORACONFIG_MODEM_PRESET"].rsplit(
+                "ModemPreset_", 1
+            )[-1]
             if (
                 live.get("region") == expected_region_short
                 and live.get("primary_channel") == test_profile["USERPREFS_CHANNEL_0_NAME"]
+                and live.get("channel_num") == expected_channel_num
+                and live.get("modem_preset") == expected_modem_preset
             ):
                 pytest.skip(
                     f"{role} at {port} already baked with session profile "

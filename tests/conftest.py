@@ -77,7 +77,7 @@ _HUB_PROFILE_SESSION_KEY = "session"
 _HUB_PROFILE_SESSION_ALLOWED_KEYS = {"region", "channel_name", "channel_num", "modem_preset"}
 
 
-def _load_hub_profile(path: str) -> dict:
+def _load_hub_profile(path: str) -> dict[str, dict[str, Any]]:
     """Load and shape-check a ``--hub-profile`` YAML: must be a mapping of
     role name -> spec mapping (plus an optional reserved ``session:`` key,
     stripped here — see `_load_hub_profile_session`). Fails fast with a
@@ -125,6 +125,17 @@ def _load_hub_profile_session(path: str | None) -> dict[str, Any]:
             f"--hub-profile {path}: unknown session key(s) {sorted(unknown)}; "
             f"allowed: {sorted(_HUB_PROFILE_SESSION_ALLOWED_KEYS)}"
         )
+    if "channel_num" in session:
+        channel_num = session["channel_num"]
+        if isinstance(channel_num, bool) or not isinstance(channel_num, int):
+            raise pytest.UsageError(
+                f"--hub-profile {path}: session.channel_num must be an integer, got {channel_num!r}"
+            )
+    for key in ("region", "channel_name", "modem_preset"):
+        if key in session and not isinstance(session[key], str):
+            raise pytest.UsageError(
+                f"--hub-profile {path}: session.{key} must be a string, got {session[key]!r}"
+            )
     return session
 
 

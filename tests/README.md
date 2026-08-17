@@ -54,8 +54,8 @@ pytest tests/ --force-bake --html=report.html
 
 ## Environment variables
 
-Everything below except `MESHTASTIC_FIRMWARE_ROOT` has a YAML equivalent in
-`--hub-profile` (see [`example.yaml`](../example.yaml)) — set it in the file
+Everything below except `MESHTASTIC_FIRMWARE_ROOT` and `MESHTASTIC_MCP_SEED` has
+a YAML equivalent in `--hub-profile` (see [`example.yaml`](../example.yaml)) — set it in the file
 instead of exporting it, or use both: **the env var wins whenever a key is
 set both places**, so a checked-in profile stays a safe shared default while
 one run can still override a single value ad hoc.
