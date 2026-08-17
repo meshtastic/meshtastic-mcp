@@ -231,9 +231,12 @@ replay_status(); replay_stop()
   (Validated end-to-end against the Android waypoint-geofence PR.)
 - **App-facing polish**: the connected node is placed at the capture's median position (sane map
   + distances); `announce_interval` adds a "Replay Clock" node posting kickoff + live ETA/progress
-  to the busiest channel; `modem_preset` / `firmware_edition` set the advertised LoRa preset and
-  the app's event banner (e.g. `DEFCON`, `HAMVENTION`); `replay_status` returns `connect` host:port
-  hints; a send timeout keeps a stalled app from hanging a session.
+  to the busiest channel; `local_metrics_interval` makes the connected node report its own
+  `DEVICE_METRICS` (battery/voltage/channel-util/air-util/uptime) every N seconds (default 5 min)
+  so the app's "Device Metrics" view fills in and channel utilization tracks the live load;
+  `modem_preset` / `firmware_edition` set the advertised LoRa preset and the app's event banner
+  (e.g. `DEFCON`, `HAMVENTION`); `replay_status` returns `connect` host:port hints; a send timeout
+  keeps a stalled app from hanging a session.
 - **Fuzzer** (`replay/fuzz.py`, `replay_start(fuzz=…)`, `replay_fuzz_presets`): turn the stream
   hostile to test decoder + UI robustness. *Protocol* faults (corrupt/garbage/truncated payloads,
   portnum↔body mismatch, invalid-UTF-8 text, impossible telemetry, teleporting positions, hop

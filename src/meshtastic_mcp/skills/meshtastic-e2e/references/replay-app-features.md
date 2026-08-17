@@ -77,6 +77,13 @@ st = replay_status(sid)
 expected count, the message list scrolls. Pair with the recorder’s `logs_window` on the app’s
 logcat for the same window if you ship logs there.
 
+**Local device metrics:** the connected node reports its own `DEVICE_METRICS` telemetry every
+`local_metrics_interval` seconds (default 300; `0` to disable) — battery/voltage/uptime plus a
+channel-utilization that tracks the live replay rate. So the app's **Device Metrics** view for the
+device it's connected to fills in and updates: `poll_for_text` an uptime/battery/util value, or
+assert the util reads "busy" under a high-rate stress stream. `replay_status().local_metrics`
+reports the interval + emitted count.
+
 **Disconnect-survival is now guaranteed:** with `loop=True`, closing/backgrounding the app (or a
 `Connection reset by peer`) severs only *that* connection — the session keeps listening and the
 next reconnect handshakes and streams a fresh pass. So a soak test can bounce the app repeatedly

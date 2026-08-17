@@ -554,6 +554,7 @@ def _build_replay_session(args):
         announce_interval=args.announce_interval,
         firmware_edition=args.edition,
         mdns=False if args.no_mdns else None,
+        local_metrics_interval=args.local_metrics_interval,
     )
     if args.fuzz:
         from meshtastic_mcp.replay import fuzz as replay_fuzz
@@ -582,6 +583,8 @@ def _cmd_replay(args) -> int:
         m = st["mdns"]
         label = m["display_name"] if m["advertised"] else f"off ({m['error']})"
         print(f"mdns: {label}")
+    if st["local_metrics"]:
+        print(f"local device metrics: every {int(st['local_metrics']['interval_s'])}s")
     # stdout is block-buffered when piped; surface the connect info immediately
     sys.stdout.flush()
     print("Ctrl-C to stop…", file=sys.stderr)
@@ -777,6 +780,12 @@ def main(argv=None) -> None:
     )
     rpl.add_argument("--node-delay", type=float, default=0.005, help="node-DB pacing seconds")
     rpl.add_argument("--no-mdns", action="store_true", help="don't advertise via mDNS/Bonjour")
+    rpl.add_argument(
+        "--local-metrics-interval",
+        type=float,
+        default=300.0,
+        help="emit local device metrics (battery/chutil/uptime) every N s (0=off; default 300)",
+    )
     rpl.add_argument(
         "--status-interval", type=float, default=30.0, help="status line cadence seconds"
     )

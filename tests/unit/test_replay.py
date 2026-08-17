@@ -1320,15 +1320,95 @@ def test_cli_replay_builds_session_from_args():
         announce_interval=0.0,
         node_delay=0.0,
         no_mdns=True,
+        local_metrics_interval=300.0,
         status_interval=30.0,
     )
     sess = _build_replay_session(args)
     assert sess.params.rate == 140.0
     assert sess.params.loop is True
     assert sess.params.mdns is False  # --no-mdns
+    assert sess.params.local_metrics_interval == 300.0
     assert sess.params.firmware_edition == "DEFCON"
     assert len(sess.capture.nodes) == 30 + 2  # --profile override beat the preset
     assert sess.state.ended is False
+
+
+# ── Local device metrics (connected node reports its own stats) ─────────────
+def test_local_device_metrics_are_emitted_periodically():
+    """The connected/observer node must emit DEVICE_METRICS telemetry on the
+    configured interval, so the app's "Device Metrics" view populates. The packet
+    is TELEMETRY_APP (67) from OBSERVER_NUM with a device_metrics variant whose
+    uptime is nonzero and channel_utilization is populated from the replay load.
+    """
+    from meshtastic.protobuf import telemetry_pb2
+
+    from meshtastic_mcp.replay.engine import OBSERVER_NUM
+
+    cap = sim.generate(nodes=20, days=1, seed=5, start=1_700_000_000)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession(
+        "localmetrics",
+        cap,
+        ReplayParams(
+            host="127.0.0.1", port=port, rate=100, node_delay=0, local_metrics_interval=0.5
+        ),
+    )
+    sess.start()
+    try:
+        deadline = time.time() + 5
+        client = None
+        while time.time() < deadline:
+            try:
+                client = socket.create_connection(("127.0.0.1", port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        assert client is not None
+        client.settimeout(10)
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+
+        found = 0
+        t0 = time.time()
+        while time.time() - t0 < 4 and found < 2:
+            fr = _read_frame(client)
+            if fr.WhichOneof("payload_variant") != "packet":
+                continue
+            pkt = fr.packet
+            if pkt.decoded.portnum != 67:  # TELEMETRY_APP
+                continue
+            if getattr(pkt, "from") != OBSERVER_NUM:
+                continue
+            tm = telemetry_pb2.Telemetry()
+            tm.ParseFromString(pkt.decoded.payload)
+            if tm.WhichOneof("variant") != "device_metrics":
+                continue
+            assert tm.device_metrics.uptime_seconds > 0
+            assert tm.device_metrics.channel_utilization > 0  # tracks the 100/s load
+            found += 1
+        client.close()
+        assert found >= 2, "observer did not emit periodic device metrics"
+        assert sess.state.local_metrics_sent >= 2
+    finally:
+        sess.stop()
+
+
+def test_local_metrics_off_when_interval_zero():
+    """`local_metrics_interval=0` disables the emitter (status reports None)."""
+    from meshtastic_mcp.replay.engine import _status_dict
+
+    cap = sim.generate(nodes=5, days=1, seed=1, start=1_700_000_000)
+    sess = ReplaySession(
+        "no-lm", cap, ReplayParams(host="127.0.0.1", port=0, local_metrics_interval=0)
+    )
+    assert _status_dict(sess)["local_metrics"] is None
+    sess2 = ReplaySession(
+        "lm", cap, ReplayParams(host="127.0.0.1", port=0, local_metrics_interval=300)
+    )
+    assert _status_dict(sess2)["local_metrics"] == {"interval_s": 300, "sent": 0}
 
 
 # ── mDNS/Bonjour advertisement ──────────────────────────────────────────────

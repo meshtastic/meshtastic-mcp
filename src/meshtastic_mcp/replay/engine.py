@@ -32,7 +32,14 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from meshtastic.protobuf import admin_pb2, channel_pb2, config_pb2, mesh_pb2, portnums_pb2
+from meshtastic.protobuf import (
+    admin_pb2,
+    channel_pb2,
+    config_pb2,
+    mesh_pb2,
+    portnums_pb2,
+    telemetry_pb2,
+)
 
 from ..recorder.recorder import _default_dir as _recorder_default_dir
 from ..recorder.rotating import _RotatingJsonl
@@ -80,6 +87,7 @@ class PortInUseError(RuntimeError):
 # Synthetic "Replay Clock" node that posts progress messages into the mesh.
 ANNOUNCER_NUM = 0x5245504C  # "REPL"
 TEXT_MESSAGE_APP = 1
+TELEMETRY_APP = portnums_pb2.PortNum.TELEMETRY_APP  # 67
 
 
 def _format_eta(seconds: float) -> str:
@@ -208,6 +216,12 @@ class ReplayParams:
     # unless bound loopback-only; True/False force. Best-effort — a missing
     # backend degrades to a hint in status, never a failure.
     mdns: bool | None = None
+    # Local device metrics: emit a DEVICE_METRICS telemetry packet from the
+    # connected/observer node every N seconds (like real firmware reporting its
+    # own battery/chutil/air-util/uptime), so the app's "Device Metrics" view for
+    # the device it's connected to populates and updates. chutil tracks the live
+    # replay load. Seconds; 0 = off. Default 300 (5 min).
+    local_metrics_interval: float = 300.0
 
 
 @dataclass
@@ -228,6 +242,7 @@ class _SessionState:
     # so idle gaps between a disconnect and a reconnect don't dilute the rate.
     stream_started_at: float | None = None
     stream_base: int = 0
+    local_metrics_sent: int = 0  # DEVICE_METRICS telemetry emitted for the local node
     connected: bool = False
     error: str | None = None
     ended: bool = False
@@ -443,6 +458,14 @@ class ReplaySession:
             daemon=True,
             name=f"replay-inject-fr-{self.state.id}",
         ).start()
+        # periodic local device metrics for the connected/observer node.
+        if self.params.local_metrics_interval > 0:
+            threading.Thread(
+                target=self._local_metrics_loop,
+                args=(send, client),
+                daemon=True,
+                name=f"replay-localmetrics-{self.state.id}",
+            ).start()
 
         while not self.state.stop.is_set():
             tr = _read_toradio(client)
@@ -709,6 +732,76 @@ class ReplaySession:
         fr = mesh_pb2.FromRadio()
         fr.packet.CopyFrom(mp)
         send(fr)
+
+    # -- local device metrics (the connected node reports its own stats) --
+    def _stream_rate(self) -> float:
+        """Current replay-stream packet rate (for chutil), 0 before streaming."""
+        st = self.state
+        if st.stream_started_at is None:
+            return 0.0
+        elapsed = time.time() - st.stream_started_at
+        streamed = (st.packets_sent - st.injected) - st.stream_base
+        return streamed / elapsed if elapsed > 0 and streamed > 0 else 0.0
+
+    def _local_device_metrics(self) -> mesh_pb2.FromRadio:
+        """A DEVICE_METRICS telemetry packet from the connected/observer node.
+
+        Mirrors what real firmware reports about *itself*: uptime climbs with the
+        session, channel utilization tracks the live replay load (so a stress run
+        shows a busy channel), air-util-tx stays low (the observer is a mostly-RX
+        gateway — it only transmits traceroute/admin replies), and the battery
+        drifts down slowly so the value visibly changes across ticks.
+        """
+        now = int(time.time())
+        uptime = max(1, now - int(self.state.started_at))
+        rate = self._stream_rate() or (self.params.rate or 0.0)
+        # rate → channel utilization: a busy stress stream reads ~50% at 140/s,
+        # capped like firmware's own clamp; small jitter so it's not a flat line.
+        chutil = min(65.0, 5.0 + 0.32 * rate) * random.uniform(0.9, 1.1)
+        batt = max(20, int(100 - uptime / 3600.0 * 2.0))  # ~2%/hr drift, floor 20
+
+        tm = telemetry_pb2.Telemetry()
+        tm.time = now
+        d = tm.device_metrics
+        d.battery_level = batt
+        d.voltage = round(3.0 + 1.25 * batt / 100.0 + random.uniform(-0.03, 0.03), 3)
+        d.channel_utilization = round(chutil, 2)
+        d.air_util_tx = round(random.uniform(0.0, 1.5), 3)
+        d.uptime_seconds = uptime
+
+        fr = mesh_pb2.FromRadio()
+        mp = fr.packet
+        setattr(mp, "from", OBSERVER_NUM)
+        mp.to = OBSERVER_NUM  # a node's own telemetry is addressed to itself
+        mp.channel = 0
+        mp.id = int(time.time() * 1000) & 0x7FFFFFFF
+        mp.rx_time = now
+        mp.decoded.portnum = TELEMETRY_APP
+        mp.decoded.payload = tm.SerializeToString()
+        return fr
+
+    def _local_metrics_loop(self, send: Any, client: socket.socket) -> None:
+        """Emit local device metrics every `local_metrics_interval` seconds.
+
+        First tick fires a few seconds after connect (so the handshake's observer
+        NodeInfo lands first), then on the interval — matching firmware, which
+        reports its own telemetry shortly after boot and periodically thereafter.
+        """
+        iv = self.params.local_metrics_interval
+        if iv <= 0:
+            return
+        stop = self.state.stop
+        if stop.wait(min(3.0, iv)):  # brief grace for the handshake to complete
+            return
+        while not stop.is_set():
+            try:
+                send(self._local_device_metrics())
+            except (OSError, ConnectionError):
+                self._sever(client)
+                return
+            self.state.local_metrics_sent += 1
+            if stop.wait(iv):
+                return
 
     # -- live injection --
     def inject_fromradio(self, messages: list[mesh_pb2.FromRadio]) -> int:
@@ -994,6 +1087,11 @@ def _status_dict(sess: ReplaySession) -> dict[str, Any]:
         "uptime_s": round(time.time() - st.started_at, 1),
         "fuzz": sess.fuzzer.status() if sess.fuzzer is not None else None,
         "mdns": sess._advertiser.status() if sess._advertiser is not None else None,
+        "local_metrics": (
+            {"interval_s": p.local_metrics_interval, "sent": st.local_metrics_sent}
+            if p.local_metrics_interval > 0
+            else None
+        ),
     }
 
 

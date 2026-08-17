@@ -2268,6 +2268,7 @@ def replay_start(
     fuzz: str | dict[str, Any] | None = None,
     fuzz_seed: int = 0,
     mdns: bool | None = None,
+    local_metrics_interval: float = 300.0,
 ) -> dict[str, Any]:
     """Start a simulated Meshtastic TCP device that streams a capture to an app.
 
@@ -2345,6 +2346,12 @@ def replay_start(
     `zeroconf` package, falls back to `dns-sd`/`avahi-publish-service`, else
     reports a hint under `mdns` in `replay_status`).
 
+    `local_metrics_interval` emits a DEVICE_METRICS telemetry packet from the
+    connected/observer node every N seconds (default 300 = 5 min; 0 = off), like
+    real firmware reporting its own battery/voltage/channel-utilization/air-util/
+    uptime — so the app's "Device Metrics" view for the device it's connected to
+    populates and updates. Channel utilization tracks the live replay load.
+
     Returns the session status (id, listen address, totals). Poll with
     `replay_status`, tear down with `replay_stop`.
     """
@@ -2387,6 +2394,7 @@ def replay_start(
         observer_lon=observer_lon,
         fuzz=replay_fuzz.from_spec(fuzz, seed=fuzz_seed),
         mdns=mdns,
+        local_metrics_interval=local_metrics_interval,
     )
     try:
         return get_replay_manager().start(cap, params)
