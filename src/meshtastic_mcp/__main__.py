@@ -773,7 +773,8 @@ def main(argv=None) -> None:
     rpl.add_argument(
         "--firmware-version",
         default=None,
-        help="reported firmware build; default is the real event build for --edition",
+        help="reported firmware build; default is the real event build for a configured "
+        "--edition, else the historical placeholder",
     )
     rpl.add_argument(
         "--announce-interval",

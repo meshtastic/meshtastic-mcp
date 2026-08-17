@@ -218,6 +218,10 @@ class ReplayParams:
     # observer (connected node) position; None => derive from the capture center
     observer_lat: int | None = None
     observer_lon: int | None = None
+    # Synthetic observer node num this session presents as. Defaults to the process-wide
+    # OBSERVER_NUM (env-overridable), but each concurrent session can be given a distinct
+    # value so ReplayManager.start() can run more than one session without identity collisions.
+    observer_num: int = OBSERVER_NUM
     modem_preset: str = "LONG_FAST"  # advertised LoRa preset
     firmware_edition: str = "VANILLA"  # drives the app's event banner (e.g. DEFCON, HAMVENTION)
     # Reported DeviceMetadata.firmware_version. None => a per-edition default (see
@@ -361,7 +365,7 @@ class ReplaySession:
             self._advertiser = _mdns.Advertiser(
                 f"Meshtastic Replay {self.capture.label}",
                 self.params.port,
-                _mdns.txt_records("RPLY", f"!{OBSERVER_NUM:08x}"),
+                _mdns.txt_records("RPLY", f"!{self.params.observer_num:08x}"),
             ).start()
             self._log_event("mdns", **self._advertiser.status())
 
@@ -497,11 +501,11 @@ class ReplaySession:
         n_nodes = len(self.capture.nodes)
         fr = mesh_pb2.FromRadio()
         mi = fr.my_info
-        mi.my_node_num = OBSERVER_NUM
+        mi.my_node_num = self.params.observer_num
         mi.reboot_count = 1
         mi.min_app_version = 30200
         mi.nodedb_count = n_nodes
-        mi.device_id = struct.pack("<I", OBSERVER_NUM) * 4  # stable 16-byte id
+        mi.device_id = struct.pack("<I", self.params.observer_num) * 4  # stable 16-byte id
         mi.pio_env = "replay"
         with contextlib.suppress(ValueError, KeyError):
             mi.firmware_edition = mesh_pb2.FirmwareEdition.Value(self.params.firmware_edition)
@@ -609,10 +613,10 @@ class ReplaySession:
         if req.WhichOneof("payload_variant") != "get_owner_request":
             return
 
-        requester = getattr(pkt, "from", 0) or OBSERVER_NUM
+        requester = getattr(pkt, "from", 0) or self.params.observer_num
         resp = admin_pb2.AdminMessage()
         owner = resp.get_owner_response
-        owner.id = f"!{OBSERVER_NUM:08x}"
+        owner.id = f"!{self.params.observer_num:08x}"
         owner.long_name = "Replay Observer"
         owner.short_name = "RPLY"
         owner.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
@@ -621,7 +625,8 @@ class ReplaySession:
 
         fr = mesh_pb2.FromRadio()
         mp = fr.packet
-        setattr(mp, "from", OBSERVER_NUM)  # responder identity; client keys the passkey on this
+        # responder identity; client keys the passkey on this
+        setattr(mp, "from", self.params.observer_num)
         mp.to = requester & 0xFFFFFFFF
         mp.id = int(time.time() * 1000) & 0x7FFFFFFF
         mp.rx_time = int(time.time())
@@ -645,7 +650,7 @@ class ReplaySession:
         firmware's SNR×4 int encoding.
         """
         dest = pkt.to & 0xFFFFFFFF
-        requester = getattr(pkt, "from", 0) or OBSERVER_NUM
+        requester = getattr(pkt, "from", 0) or self.params.observer_num
 
         # Plausible intermediate relay from the capture node DB (or direct). A
         # NodeRow.role of None (file-backed captures with no role column) counts
@@ -655,7 +660,7 @@ class ReplaySession:
         routers = [
             n.num
             for n in self.capture.nodes
-            if n.num not in (dest, requester, OBSERVER_NUM)
+            if n.num not in (dest, requester, self.params.observer_num)
             and (getattr(n, "role", None) or "") in ("ROUTER", "ROUTER_LATE", "")
         ]
         relays = [random.choice(routers)] if routers else []
@@ -694,8 +699,8 @@ class ReplaySession:
     def _observer_nodeinfo(self) -> mesh_pb2.FromRadio:
         fr = mesh_pb2.FromRadio()
         ni = fr.node_info
-        ni.num = OBSERVER_NUM
-        ni.user.id = f"!{OBSERVER_NUM:08x}"
+        ni.num = self.params.observer_num
+        ni.user.id = f"!{self.params.observer_num:08x}"
         ni.user.long_name = "Replay Observer"
         ni.user.short_name = "RPLY"
         ni.user.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
