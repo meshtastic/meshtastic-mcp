@@ -6,8 +6,8 @@ description: Discover, connect to, drive, configure, observe, and flash Meshtast
 
 # Meshtastic device operations (via the MCP server)
 
-The Meshtastic MCP server exposes ~43 tools plus resources and prompts. This skill maps
-common operator intents to the right tools and the safe order to use them.
+The Meshtastic MCP server exposes a large tool surface, plus resources and prompts. This
+skill maps common operator intents to the right tools and the safe order to use them.
 
 ## First: know your environment
 
