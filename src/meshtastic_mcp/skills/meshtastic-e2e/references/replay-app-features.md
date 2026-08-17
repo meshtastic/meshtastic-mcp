@@ -77,6 +77,19 @@ st = replay_status(sid)
 expected count, the message list scrolls. Pair with the recorder’s `logs_window` on the app’s
 logcat for the same window if you ship logs there.
 
+**Local device metrics + local stats:** the connected node reports its own telemetry every
+`local_metrics_interval` seconds (default 300; `0` to disable), in **both** variants — so two app
+views populate for the device it's connected to:
+- `DEVICE_METRICS` → the **Device Metrics** view (battery/voltage/uptime + a channel-utilization
+  that tracks the live replay rate).
+- `LOCAL_STATS` → the **Local Stats** / live-activity view (packets rx/tx, rx-dupe, online/total
+  nodes = the mesh size, noise floor, uptime); packets-rx climbs as the observer receives the feed.
+
+Assert via `poll_for_text` on an uptime/battery/online-nodes value, or that channel-util reads
+"busy" under a high-rate stress stream. `replay_status().local_metrics` reports the interval +
+emitted count. Note both are `TELEMETRY_APP` from the observer node — the app only logs a
+node's *own* telemetry to these views when `packet.from == connectedNode`.
+
 **Disconnect-survival is now guaranteed:** with `loop=True`, closing/backgrounding the app (or a
 `Connection reset by peer`) severs only *that* connection — the session keeps listening and the
 next reconnect handshakes and streams a fresh pass. So a soak test can bounce the app repeatedly
