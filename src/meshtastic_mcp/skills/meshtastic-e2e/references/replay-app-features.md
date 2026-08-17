@@ -77,18 +77,24 @@ st = replay_status(sid)
 expected count, the message list scrolls. Pair with the recorder’s `logs_window` on the app’s
 logcat for the same window if you ship logs there.
 
-**Local device metrics + local stats:** the connected node reports its own telemetry every
-`local_metrics_interval` seconds (default 300; `0` to disable), in **both** variants — so two app
-views populate for the device it's connected to:
+**Local device metrics + local stats:** the connected node reports its own telemetry via two
+independent, separately-paced `TELEMETRY_APP` variants, so two app views populate for the device
+it's connected to:
 - `DEVICE_METRICS` → the **Device Metrics** view (battery/voltage/uptime + a channel-utilization
-  that tracks the live replay rate).
+  that tracks the live replay rate). Paced by `local_metrics_interval` seconds (default 300;
+  `0` to disable).
 - `LOCAL_STATS` → the **Local Stats** / live-activity view (packets rx/tx, rx-dupe, online/total
-  nodes = the mesh size, noise floor, uptime); packets-rx climbs as the observer receives the feed.
+  nodes = the mesh size + 1 for the observer itself, noise floor, uptime); packets-rx climbs as
+  the observer receives the feed, and channel-util/air-util track the *median* of the capture's
+  own `DEVICE_METRICS` samples rather than the live rate. Paced by `stats_interval` seconds
+  (default 5; `0` keeps only the initial pre-node-DB snapshot). An initial snapshot always sends
+  before the bulk node DB, and a final one on replay end (non-looping).
 
 Assert via `poll_for_text` on an uptime/battery/online-nodes value, or that channel-util reads
-"busy" under a high-rate stress stream. `replay_status().local_metrics` reports the interval +
-emitted count. Note both are `TELEMETRY_APP` from the observer node — the app only logs a
-node's *own* telemetry to these views when `packet.from == connectedNode`.
+"busy" under a high-rate stress stream. `replay_status()` reports `local_metrics` (interval +
+emitted count) and `stats_sent`/`duplicates_seen` for the two paces separately. Note both variants
+are `TELEMETRY_APP` from the observer node — the app only logs a node's *own* telemetry to these
+views when `packet.from == connectedNode`.
 
 **Disconnect-survival is now guaranteed:** with `loop=True`, closing/backgrounding the app (or a
 `Connection reset by peer`) severs only *that* connection — the session keeps listening and the
@@ -202,6 +208,11 @@ internally) rather than hand-injecting the pair.
 - **Two `_meshtastic._tcp` advertisers look identical in the picker.** A real WiFi-mDNS node on the
   LAN and your replay session both show up; the replay row is `RPLY_<id>`. Match on that, or
   `--no-mdns` / `mdns=False` and connect by IP to be unambiguous.
+- **Use `dupe_every=N` to exercise app duplicate-health UI.** The replay observer simulates a
+  duplicate radio RX every Nth delivered packet and reports the cumulative count through
+  `LOCAL_STATS`; like firmware, it suppresses the duplicate `MeshPacket` before the app.
+  `stats_interval` controls how often the app receives the updated counter. Both accept `0` to
+  disable their periodic behavior.
 - **A requested rate that isn’t met means the machine is the bottleneck,** not the pacer — the pacer
   is drift-free up to the raw send ceiling (thousands/sec). If `achieved_rate` sits below
   `target_rate` at a modest rate, look at the *reader*: a backgrounded/slow app stops draining its

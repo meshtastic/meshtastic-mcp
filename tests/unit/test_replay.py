@@ -20,9 +20,11 @@ import time
 from collections import Counter
 
 import pytest
-from meshtastic.protobuf import mesh_pb2
+from meshtastic.protobuf import mesh_pb2, portnums_pb2, telemetry_pb2
 
-from meshtastic_mcp.replay import ReplayParams, ReplaySession, capture, fuzz, sim
+from meshtastic_mcp.replay import Capture, ReplayParams, ReplaySession, capture, fuzz, sim
+from meshtastic_mcp.replay import engine as replay_engine
+from meshtastic_mcp.replay.engine import OBSERVER_NUM, _representative_radio_metrics
 
 ALL_PORTNUMS = {1, 3, 4, 5, 6, 8, 34, 37, 65, 66, 67, 70, 71}
 
@@ -34,6 +36,28 @@ def _portnum_counts(cap) -> Counter:
         mp.ParseFromString(raw)
         counts[mp.decoded.portnum] += 1
     return counts
+
+
+def test_representative_radio_metrics_ignore_malformed_protobufs():
+    """Malformed capture rows must not hide later valid radio metrics."""
+    malformed_telemetry = mesh_pb2.MeshPacket()
+    malformed_telemetry.decoded.portnum = portnums_pb2.PortNum.TELEMETRY_APP
+    malformed_telemetry.decoded.payload = b"\x80"
+
+    telemetry = telemetry_pb2.Telemetry()
+    telemetry.device_metrics.channel_utilization = 42.0
+    telemetry.device_metrics.air_util_tx = 7.0
+    valid_telemetry = mesh_pb2.MeshPacket()
+    valid_telemetry.decoded.portnum = portnums_pb2.PortNum.TELEMETRY_APP
+    valid_telemetry.decoded.payload = telemetry.SerializeToString()
+
+    assert _representative_radio_metrics(
+        [
+            (0, b"\x80", "LongFast"),
+            (1, malformed_telemetry.SerializeToString(), "LongFast"),
+            (2, valid_telemetry.SerializeToString(), "LongFast"),
+        ]
+    ) == (42.0, 7.0)
 
 
 def test_sim_is_seeded_and_has_full_portnum_breadth():
@@ -121,7 +145,7 @@ def test_session_handshake_and_stream():
                 my_node = fr.my_info.my_node_num
             elif v == "node_info":
                 node_infos += 1
-            elif v == "packet":
+            elif v == "packet" and (my_node is None or getattr(fr.packet, "from") != my_node):
                 packets += 1
         client.close()
 
@@ -134,6 +158,161 @@ def test_session_handshake_and_stream():
         assert sess.state.packets_sent >= packets
     finally:
         sess.stop()
+
+
+def test_observer_local_stats_precede_bulk_database():
+    """The tvOS strip gets LocalStats before the large node DB can delay rendering."""
+    cap = sim.generate(nodes=12, days=1, seed=17, start=1_700_000_000)
+    sess = ReplaySession(
+        "stats",
+        cap,
+        ReplayParams(
+            host="127.0.0.1",
+            port=0,
+            rate=500,
+            loop=True,
+            node_delay=0,
+            stats_interval=0.02,
+            dupe_every=1,
+            mdns=False,
+        ),
+    )
+    sess.start()
+    client = socket.create_connection(("127.0.0.1", sess.params.port), timeout=1)
+    client.settimeout(0.25)
+    try:
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+
+        my_node = None
+        database_complete = False
+        captured_node_infos_before_stats = 0
+        initial_database_complete = None
+        initial_captured_node_info_count = None
+        observer_stats: list[dict[str, int | float]] = []
+        streamed_packet_ids: Counter[tuple[int, int]] = Counter()
+        deadline = time.time() + 3
+        while time.time() < deadline and len(observer_stats) < 2:
+            try:
+                fr = _read_frame(client)
+            except TimeoutError:
+                continue
+            variant = fr.WhichOneof("payload_variant")
+            if variant == "my_info":
+                my_node = fr.my_info.my_node_num
+            elif (
+                variant == "node_info"
+                and not observer_stats
+                and my_node is not None
+                and fr.node_info.num != my_node
+            ):
+                captured_node_infos_before_stats += 1
+            elif variant == "config_complete_id" and fr.config_complete_id == 69421:
+                database_complete = True
+            elif variant == "packet" and my_node is not None:
+                packet = fr.packet
+                if getattr(packet, "from") != my_node:
+                    streamed_packet_ids[(getattr(packet, "from"), packet.id)] += 1
+                    continue
+                if packet.decoded.portnum != 67:
+                    continue
+                telemetry = telemetry_pb2.Telemetry()
+                telemetry.ParseFromString(packet.decoded.payload)
+                if telemetry.WhichOneof("variant") == "local_stats":
+                    if not observer_stats:
+                        initial_database_complete = database_complete
+                        initial_captured_node_info_count = captured_node_infos_before_stats
+                    stats = telemetry.local_stats
+                    observer_stats.append(
+                        {
+                            "channel_utilization": stats.channel_utilization,
+                            "air_util_tx": stats.air_util_tx,
+                            "num_packets_tx": stats.num_packets_tx,
+                            "num_packets_rx": stats.num_packets_rx,
+                            "num_rx_dupe": stats.num_rx_dupe,
+                            "num_online_nodes": stats.num_online_nodes,
+                            "num_total_nodes": stats.num_total_nodes,
+                        }
+                    )
+
+        assert my_node == 0x42524331
+        assert len(observer_stats) == 2
+        assert initial_database_complete is False
+        assert initial_captured_node_info_count == 0
+        initial, updated = observer_stats
+        assert initial["channel_utilization"] >= 0
+        assert initial["air_util_tx"] >= 0
+        assert initial["num_packets_tx"] == 1
+        assert updated["num_packets_tx"] == 2
+        assert updated["num_packets_rx"] > initial["num_packets_rx"]
+        assert initial["num_rx_dupe"] == 0
+        assert updated["num_rx_dupe"] > initial["num_rx_dupe"]
+        assert updated["num_rx_dupe"] <= updated["num_packets_rx"]
+        assert streamed_packet_ids
+        assert all(count == 1 for count in streamed_packet_ids.values())
+        assert initial["num_online_nodes"] == len(cap.nodes) + 1
+        assert initial["num_total_nodes"] == len(cap.nodes) + 1
+        assert sess.state.stats_sent >= 2
+        assert updated["num_packets_rx"] - updated["num_rx_dupe"] <= sess.state.packets_sent
+    finally:
+        client.close()
+        sess.stop()
+
+
+@pytest.mark.parametrize(
+    ("stats_interval", "packet_count", "clock_values", "exhausts_window"),
+    [
+        (0.0, 1, [0.0, 0.0, 0.0, 0.0, 0.0], True),
+        (1.0, 2, [0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0], False),
+    ],
+)
+def test_observer_stats_send_failure_severs_client(
+    monkeypatch, tmp_path, stats_interval, packet_count, clock_values, exhausts_window
+):
+    """Periodic and final LocalStats failures must sever only the current client."""
+    monkeypatch.setenv("MESHTASTIC_MCP_DATA_DIR", str(tmp_path))
+    packets = []
+    for packet_id in range(packet_count):
+        packet = mesh_pb2.MeshPacket()
+        setattr(packet, "from", packet_id + 1)
+        packet.id = packet_id + 1
+        packet.decoded.portnum = portnums_pb2.PortNum.TEXT_MESSAGE_APP
+        packet.decoded.payload = b"test"
+        packets.append((packet_id, packet.SerializeToString(), "LongFast"))
+    sess = ReplaySession(
+        "stats-send-failure",
+        Capture(channels=["LongFast"], packets=packets),
+        ReplayParams(rate=500, loop=False, stats_interval=stats_interval, mdns=False),
+    )
+    client = socket.socket()
+    severed = []
+    sent_portnums = []
+    clock = iter(clock_values)
+
+    def send(frame):
+        sent_portnums.append(frame.packet.decoded.portnum)
+        if frame.packet.decoded.portnum == portnums_pb2.PortNum.TELEMETRY_APP:
+            raise OSError("peer closed")
+
+    monkeypatch.setattr(
+        replay_engine,
+        "time",
+        type("Clock", (), {"time": lambda _self: next(clock, clock_values[-1])})(),
+    )
+    # Stub _sever so the assertion observes which client the failure path selected.
+    monkeypatch.setattr(sess, "_sever", severed.append)
+    try:
+        sess._stream(send, client)
+    finally:
+        client.close()
+
+    assert sent_portnums[-1] == portnums_pb2.PortNum.TELEMETRY_APP
+    assert sess.state.packets_sent == 1
+    assert (sess.state.packets_sent == len(sess.window)) is exhausts_window
+    assert sess.state.stats_sent == 0
+    assert severed == [client]
+    assert sess.state.stop.is_set() is False
+    assert sess.state.ended is False
 
 
 def test_get_owner_request_is_answered_for_strict_clients():
@@ -598,16 +777,27 @@ def test_client_disconnect_mid_stream_survives_with_loop():
                 time.sleep(0.05)
         return None
 
-    def _handshake_and_get_packet(client):
+    def _handshake_and_get_packets(client):
         client.settimeout(10)
         _send_toradio(client, want_config_id=69420)
         _send_toradio(client, want_config_id=69421)
+        local_stats_seen = False
+        streamed_packet_seen = False
         t0 = time.time()
-        while time.time() - t0 < 5:
+        while time.time() - t0 < 5 and not (local_stats_seen and streamed_packet_seen):
             fr = _read_frame(client)
-            if fr.WhichOneof("payload_variant") == "packet":
-                return True
-        return False
+            if fr.WhichOneof("payload_variant") != "packet":
+                continue
+            packet = fr.packet
+            if getattr(packet, "from") != OBSERVER_NUM:
+                streamed_packet_seen = True
+                continue
+            if packet.decoded.portnum != 67:
+                continue
+            telemetry = telemetry_pb2.Telemetry()
+            telemetry.ParseFromString(packet.decoded.payload)
+            local_stats_seen = telemetry.WhichOneof("variant") == "local_stats"
+        return local_stats_seen, streamed_packet_seen
 
     cap = sim.generate(nodes=20, days=1, seed=8, start=1_700_000_000)
     probe = socket.socket()
@@ -623,7 +813,7 @@ def test_client_disconnect_mid_stream_survives_with_loop():
     try:
         first = _connect(port)
         assert first is not None
-        assert _handshake_and_get_packet(first)  # stream is flowing
+        assert _handshake_and_get_packets(first) == (True, True)
         # hard-disconnect mid-stream (app closed / reset by peer)
         first.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         first.close()
@@ -636,7 +826,7 @@ def test_client_disconnect_mid_stream_survives_with_loop():
         # and a reconnect must handshake + stream again
         second = _connect(port)
         assert second is not None, "listener gone after mid-stream disconnect"
-        assert _handshake_and_get_packet(second), "no stream after reconnect"
+        assert _handshake_and_get_packets(second) == (True, True)
         second.close()
     finally:
         sess.stop()
@@ -670,6 +860,12 @@ def test_duration_nonpositive_is_rejected():
     for bad in (0, -5.0):
         with pytest.raises(ValueError, match="duration"):
             ReplaySession("bad", cap, ReplayParams(host="127.0.0.1", port=0, duration=bad))
+
+
+def test_dupe_every_negative_is_rejected():
+    cap = sim.generate(nodes=10, days=1, seed=1, start=1_700_000_000)
+    with pytest.raises(ValueError, match="dupe_every"):
+        ReplaySession("bad", cap, ReplayParams(dupe_every=-1))
 
 
 def test_session_does_not_mutate_caller_params():
@@ -1319,6 +1515,8 @@ def test_cli_replay_builds_session_from_args():
         edition="DEFCON",
         firmware_version=None,
         announce_interval=0.0,
+        stats_interval=2.5,
+        dupe_every=17,
         node_delay=0.0,
         no_mdns=True,
         local_metrics_interval=300.0,
@@ -1328,25 +1526,45 @@ def test_cli_replay_builds_session_from_args():
     assert sess.params.rate == 140.0
     assert sess.params.loop is True
     assert sess.params.mdns is False  # --no-mdns
-    assert sess.params.local_metrics_interval == 300.0
     assert sess.params.firmware_edition == "DEFCON"
     # Unset --firmware-version => the DEFCON replay reports the real event build.
     assert sess.params.firmware_version is None
+    assert sess.params.stats_interval == 2.5
+    assert sess.params.dupe_every == 17
+    assert sess.params.local_metrics_interval == 300.0
     assert len(sess.capture.nodes) == 30 + 2  # --profile override beat the preset
     assert sess.state.ended is False
 
 
+def test_mcp_replay_start_wires_dupe_every(monkeypatch):
+    from meshtastic_mcp import server
+
+    cap = sim.generate(nodes=2, days=1, seed=1, start=1_700_000_000)
+    captured = None
+
+    class Manager:
+        def start(self, capture, params):
+            nonlocal captured
+            assert capture is cap
+            captured = params
+            return {"id": "test"}
+
+    monkeypatch.setattr(server, "_load_replay_capture", lambda *_args, **_kwargs: cap)
+    monkeypatch.setattr(server, "get_replay_manager", lambda: Manager())
+
+    assert server.replay_start(dupe_every=23, mdns=False) == {"id": "test"}
+    assert captured is not None
+    assert captured.dupe_every == 23
+
+
 # ── Local device metrics + local stats (connected node reports its own stats) ─
 def test_local_metrics_emit_both_device_metrics_and_local_stats():
-    """The connected/observer node must emit BOTH telemetry variants on the
-    interval: DEVICE_METRICS (battery/voltage/uptime → app "Device Metrics") and
-    LOCAL_STATS (packets rx/tx, online nodes → app "Local Stats"). Both are
-    TELEMETRY_APP (67) from OBSERVER_NUM; values track the live replay.
+    """The connected/observer node must emit BOTH telemetry variants: DEVICE_METRICS
+    (battery/voltage/uptime → app "Device Metrics", on `local_metrics_interval`) and
+    LOCAL_STATS (packets rx/tx, online nodes → app "Local Stats", on the independent
+    `stats_interval`). Both are TELEMETRY_APP (67) from OBSERVER_NUM, self-addressed;
+    values track the live replay.
     """
-    from meshtastic.protobuf import telemetry_pb2
-
-    from meshtastic_mcp.replay.engine import OBSERVER_NUM
-
     cap = sim.generate(nodes=20, days=1, seed=5, start=1_700_000_000)
     probe = socket.socket()
     probe.bind(("127.0.0.1", 0))
@@ -1356,7 +1574,13 @@ def test_local_metrics_emit_both_device_metrics_and_local_stats():
         "localmetrics",
         cap,
         ReplayParams(
-            host="127.0.0.1", port=port, rate=100, node_delay=0, local_metrics_interval=0.5
+            host="127.0.0.1",
+            port=port,
+            rate=100,
+            node_delay=0,
+            local_metrics_interval=0.5,
+            stats_interval=0.5,
+            mdns=False,
         ),
     )
     sess.start()
@@ -1374,15 +1598,24 @@ def test_local_metrics_emit_both_device_metrics_and_local_stats():
         _send_toradio(client, want_config_id=69420)
         _send_toradio(client, want_config_id=69421)
 
+        def _have_both(seen):
+            # The pre-node-DB LOCAL_STATS snapshot legitimately reports rx == 0;
+            # keep reading until a later one shows the streamed feed arriving.
+            ls = seen.get("local_stats")
+            if "device_metrics" not in seen or ls is None:
+                return False
+            return ls.local_stats.num_packets_rx > 0
+
         seen: dict[str, object] = {}
         t0 = time.time()
-        while time.time() - t0 < 5 and {"device_metrics", "local_stats"} - seen.keys():
+        while time.time() - t0 < 5 and not _have_both(seen):
             fr = _read_frame(client)
             if fr.WhichOneof("payload_variant") != "packet":
                 continue
             pkt = fr.packet
             if pkt.decoded.portnum != 67 or getattr(pkt, "from") != OBSERVER_NUM:
                 continue
+            assert pkt.to == OBSERVER_NUM  # local status, self-addressed — not mesh traffic
             tm = telemetry_pb2.Telemetry()
             tm.ParseFromString(pkt.decoded.payload)
             seen[tm.WhichOneof("variant")] = tm
@@ -1394,8 +1627,11 @@ def test_local_metrics_emit_both_device_metrics_and_local_stats():
         assert dm.uptime_seconds > 0 and dm.channel_utilization > 0
         ls = seen["local_stats"].local_stats
         assert ls.uptime_seconds > 0
-        assert ls.num_online_nodes == len(cap.nodes)  # mesh size
+        assert ls.num_online_nodes == len(cap.nodes) + 1  # mesh size + the observer itself
+        assert ls.num_total_nodes == len(cap.nodes) + 1
         assert ls.num_packets_rx > 0  # observer received the streamed feed
+        assert ls.num_packets_rx_bad == 0
+        assert ls.num_tx_relay == 0
         assert ls.noise_floor < 0  # realistic RF noise floor
     finally:
         sess.stop()

@@ -2257,6 +2257,8 @@ def replay_start(
     node_delay: float = 0.01,
     channels: list[dict[str, Any]] | None = None,
     announce_interval: float = 0.0,
+    stats_interval: float = 5.0,
+    dupe_every: int = 0,
     modem_preset: str = "LONG_FAST",
     firmware_edition: str = "VANILLA",
     firmware_version: str | None = None,
@@ -2324,7 +2326,11 @@ def replay_start(
 
     `announce_interval` > 0 adds a "Replay Clock" node that posts a kickoff and a
     periodic "ETA — done/total" progress message to the busiest channel, so you
-    can see from inside the app that it's a replay. `modem_preset` sets the
+    can see from inside the app that it's a replay. `stats_interval` controls how
+    often the connected replay observer publishes LocalStats while replay packets
+    flow; 0 keeps only the initial pre-node-DB snapshot. `dupe_every` simulates a
+    duplicate radio RX every Nth replay packet and includes it in LocalStats; 0
+    disables synthetic duplicates. `modem_preset` sets the
     advertised LoRa preset (e.g. `LONG_FAST`, `SHORT_TURBO`); `firmware_edition`
     sets the app's event banner (`VANILLA`, `DEFCON`, `BURNING_MAN`, `HAMVENTION`,
     …). `firmware_version` overrides the reported build; leave it unset to report
@@ -2399,6 +2405,8 @@ def replay_start(
         limit_nodes=limit_nodes,
         node_delay=node_delay,
         announce_interval=announce_interval,
+        stats_interval=stats_interval,
+        dupe_every=dupe_every,
         modem_preset=modem_preset,
         firmware_edition=firmware_edition,
         firmware_version=firmware_version,

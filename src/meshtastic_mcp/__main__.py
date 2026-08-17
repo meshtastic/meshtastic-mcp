@@ -552,6 +552,8 @@ def _build_replay_session(args):
         loop=args.loop,
         node_delay=args.node_delay,
         announce_interval=args.announce_interval,
+        stats_interval=args.stats_interval,
+        dupe_every=args.dupe_every,
         firmware_edition=args.edition,
         firmware_version=args.firmware_version,
         mdns=False if args.no_mdns else None,
@@ -784,6 +786,18 @@ def main(argv=None) -> None:
         type=float,
         default=0.0,
         help="post in-app Replay Clock progress every N seconds (0 = off)",
+    )
+    rpl.add_argument(
+        "--stats-interval",
+        type=float,
+        default=5.0,
+        help="observer LocalStats cadence while replay packets flow (0 = initial snapshot only)",
+    )
+    rpl.add_argument(
+        "--dupe-every",
+        type=int,
+        default=0,
+        help="simulate a duplicate RX in LocalStats every Nth packet without sending it (0 = off)",
     )
     rpl.add_argument("--node-delay", type=float, default=0.005, help="node-DB pacing seconds")
     rpl.add_argument("--no-mdns", action="store_true", help="don't advertise via mDNS/Bonjour")
