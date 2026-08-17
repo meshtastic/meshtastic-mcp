@@ -828,7 +828,17 @@ class ReplaySession:
         if iv <= 0:
             return
         stop = self.state.stop
-        if stop.wait(min(3.0, iv)):  # brief grace for the handshake to complete
+        # Wait for streaming to actually start before the first tick (a big node
+        # DB can take several seconds to download) so the first LOCAL_STATS shows
+        # a real packets-rx instead of 0 — bounded by the interval so device
+        # metrics still emit even if a stream never begins. Then a short grace
+        # lets a few packets flow.
+        waited = 0.0
+        while self.state.stream_started_at is None and waited < iv:
+            if stop.wait(0.5):
+                return
+            waited += 0.5
+        if stop.wait(min(2.0, iv)):
             return
         while not stop.is_set():
             try:
