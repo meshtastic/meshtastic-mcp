@@ -41,6 +41,24 @@ def region_name(iface) -> str | None:
         return None
 
 
+def modem_preset_name(iface) -> str | None:
+    """LoRa modem-preset enum name (e.g. "LONG_FAST") from an already-connected interface."""
+    try:
+        lora = iface.localNode.localConfig.lora
+        fields = lora.DESCRIPTOR.fields_by_name["modem_preset"]
+        return fields.enum_type.values_by_number[lora.modem_preset].name
+    except Exception:
+        return None
+
+
+def channel_num(iface) -> int | None:
+    """LoRa channel_num (frequency slot) from an already-connected interface."""
+    try:
+        return iface.localNode.localConfig.lora.channel_num
+    except Exception:
+        return None
+
+
 def device_info(port: str | None = None, timeout_s: float = 8.0) -> dict[str, Any]:
     """Return summary info for the connected device."""
     with connect(port=port, timeout_s=timeout_s) as iface:
@@ -70,6 +88,8 @@ def device_info(port: str | None = None, timeout_s: float = 8.0) -> dict[str, An
             "region": region,
             "num_nodes": len(iface.nodesByNum) if iface.nodesByNum else 0,
             "primary_channel": primary_channel_name(iface),
+            "modem_preset": modem_preset_name(iface),
+            "channel_num": channel_num(iface),
         }
 
 

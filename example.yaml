@@ -1,0 +1,70 @@
+# example.yaml — every --hub-profile option, documented.
+#
+#   pytest tests/ --hub-profile=example.yaml --assume-baked
+#
+# A --hub-profile YAML is the whole configuration surface for a non-default
+# bench: which physical boards exist (per-role vid/location/env) and,
+# optionally, the session-wide test-mesh profile devices are checked
+# against (region/channel_name/channel_num/modem_preset). No environment
+# variable is required for anything below — set a key here instead, or
+# leave it out to keep the harness default.
+#
+# Every value here can still be overridden ad hoc with an env var without
+# editing this file — see the "env var equivalent" comment on each key.
+# The env var always wins when both are set; that's deliberate, so a
+# checked-in profile stays a safe shared default while one operator can
+# still override a single value for one run.
+
+# ---------------------------------------------------------------------------
+# Optional. Session-wide test-mesh profile. `baked_mesh` (the fixture behind
+# every hardware test) only *verifies* a connected device's live region /
+# channel against these values — it never reflashes on its own. Point them
+# at what's ALREADY on your device(s) and the harness accepts them as-is,
+# with no reflash and no risk of it silently switching your device to a
+# regulatory region you didn't choose. Omit any key (or the whole block) to
+# keep that value at the harness's built-in isolated-test-mesh default.
+#
+# Read a device's actual live values first:
+#   meshtastic-mcp device_info --port=<port>              # region, primary_channel
+#   meshtastic-mcp get_config --section=lora --port=<port> # channel_num, modem_preset
+session:
+  region: EU_868 # env var equivalent: MESHTASTIC_MCP_REGION       (default: US)
+  channel_name: FAB26 # env var equivalent: MESHTASTIC_MCP_CHANNEL_NAME (default: McpTest)
+  channel_num: 0 # env var equivalent: MESHTASTIC_MCP_CHANNEL_NUM  (default: 88)
+  modem_preset: LONG_FAST # env var equivalent: MESHTASTIC_MCP_MODEM_PRESET (default: LONG_FAST)
+
+# ---------------------------------------------------------------------------
+# One entry per bench role. Role names are free-form — what the test IDs and
+# MESHTASTIC_MCP_ENV_<ROLE> env var key off of (uppercased). Reusing the
+# reference-bench names (rak4631, esp32s3, t_echo, heltec_t114) isn't
+# required but keeps you aligned with their parametrization if you ever add
+# a matching board.
+#
+# A role with none of its tests' preconditions met (no matching device
+# attached) simply doesn't run — it's not an error to list a role that
+# isn't currently plugged in.
+esp32s3:
+  # How this role finds its physical board. At least one of `vid` or
+  # `location` is required.
+  vid: 0x303a # USB VID. Espressif native-USB (XIAO ESP32-S3 and similar): 0x303a.
+  # CP2102-bridged S3 boards (e.g. Heltec V3): 0x10c4.
+  alt_vids: [0x10c4] # optional — additional VIDs also accepted for this role.
+  location: null # optional — pins an EXACT USB hub slot, e.g. "1-2.3.5" (see
+  # `ls /sys/bus/usb/devices/` or FleetSuite's device card). Only
+  # needed when two boards on your bench share a VID and you must
+  # tell them apart. When set, VID matching is NOT used as a
+  # fallback for this role — only that exact slot counts.
+  pid_contains: null # optional — substring match on USB PID. Ignored whenever
+  # `location` is set; a fallback disambiguator for VID-only setups.
+
+  # PlatformIO env to build/flash for this board. Only read if a bake
+  # actually runs (i.e. you're NOT passing --assume-baked). Must match the
+  # board's real hardware.
+  env: seeed-xiao-s3 # env var equivalent: MESHTASTIC_MCP_ENV_ESP32S3
+
+# A second role, showing the minimal shape — just enough to detect the
+# board and know what to bake.
+rak4631:
+  vid: 0x239a
+  location: "1-2.3.1"
+  env: rak4631

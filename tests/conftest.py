@@ -68,22 +68,75 @@ from . import (
 # ---------- CLI options ---------------------------------------------------
 
 
-def _load_hub_profile(path: str) -> dict:
+# Reserved top-level key in a --hub-profile YAML for session-wide test
+# profile overrides (region/channel_name/channel_num/modem_preset) — see
+# `_load_hub_profile_session` and the `test_profile` fixture. Kept out of
+# the role-spec mapping `_load_hub_profile` returns so it's never mistaken
+# for a device role.
+_HUB_PROFILE_SESSION_KEY = "session"
+_HUB_PROFILE_SESSION_ALLOWED_KEYS = {"region", "channel_name", "channel_num", "modem_preset"}
+
+
+def _load_hub_profile(path: str) -> dict[str, dict[str, Any]]:
     """Load and shape-check a ``--hub-profile`` YAML: must be a mapping of
-    role name -> spec mapping. Fails fast with a clear UsageError instead of
-    an AttributeError deep inside a fixture when handed a scalar/list YAML."""
+    role name -> spec mapping (plus an optional reserved ``session:`` key,
+    stripped here — see `_load_hub_profile_session`). Fails fast with a
+    clear UsageError instead of an AttributeError deep inside a fixture when
+    handed a scalar/list YAML."""
     import yaml
 
     with open(path, encoding="utf-8") as f:
-        profile = yaml.safe_load(f) or {}
-    if not isinstance(profile, dict) or not all(
-        isinstance(role, str) and isinstance(spec, dict) for role, spec in profile.items()
-    ):
+        raw = yaml.safe_load(f) or {}
+    if not isinstance(raw, dict):
         raise pytest.UsageError(
             f"--hub-profile {path}: expected a YAML mapping of role name -> "
-            f"spec (location/env/vid/...), got {type(profile).__name__}"
+            f"spec (location/env/vid/...), got {type(raw).__name__}"
+        )
+    profile = {role: spec for role, spec in raw.items() if role != _HUB_PROFILE_SESSION_KEY}
+    if not all(isinstance(role, str) and isinstance(spec, dict) for role, spec in profile.items()):
+        raise pytest.UsageError(
+            f"--hub-profile {path}: expected a YAML mapping of role name -> "
+            f"spec (location/env/vid/...), got a non-mapping value for one or more roles"
         )
     return profile
+
+
+def _load_hub_profile_session(path: str | None) -> dict[str, Any]:
+    """The optional ``session:`` block of a ``--hub-profile`` YAML — region /
+    channel_name / channel_num / modem_preset overrides for the
+    `test_profile` fixture (see there for precedence vs. env vars). Returns
+    ``{}`` when there's no profile, or the profile has no `session:` key."""
+    if not path:
+        return {}
+    import yaml
+
+    with open(path, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    session = raw.get(_HUB_PROFILE_SESSION_KEY) if isinstance(raw, dict) else None
+    if session is None:
+        return {}
+    if not isinstance(session, dict):
+        raise pytest.UsageError(
+            f"--hub-profile {path}: `session` must be a mapping, got {type(session).__name__}"
+        )
+    unknown = set(session) - _HUB_PROFILE_SESSION_ALLOWED_KEYS
+    if unknown:
+        raise pytest.UsageError(
+            f"--hub-profile {path}: unknown session key(s) {sorted(unknown)}; "
+            f"allowed: {sorted(_HUB_PROFILE_SESSION_ALLOWED_KEYS)}"
+        )
+    if "channel_num" in session:
+        channel_num = session["channel_num"]
+        if isinstance(channel_num, bool) or not isinstance(channel_num, int):
+            raise pytest.UsageError(
+                f"--hub-profile {path}: session.channel_num must be an integer, got {channel_num!r}"
+            )
+    for key in ("region", "channel_name", "modem_preset"):
+        if key in session and not isinstance(session[key], str):
+            raise pytest.UsageError(
+                f"--hub-profile {path}: session.{key} must be a string, got {session[key]!r}"
+            )
+    return session
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -232,20 +285,51 @@ def session_seed(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="session")
-def test_profile(session_seed: str) -> dict[str, Any]:
+def hub_profile_session_overrides(request: pytest.FixtureRequest) -> dict[str, Any]:
+    """The optional `session:` block of `--hub-profile` — see `test_profile`."""
+    path = request.config.getoption("--hub-profile")
+    return _load_hub_profile_session(path)
+
+
+@pytest.fixture(scope="session")
+def test_profile(
+    session_seed: str, hub_profile_session_overrides: dict[str, Any]
+) -> dict[str, Any]:
     """The canonical isolated-mesh test profile for this session.
 
     `enable_ui_log=True` stamps `USERPREFS_UI_TEST_LOG` so the firmware
     emits `Screen: frame N/M name=... reason=...` log lines per UI
     transition — consumed by the `tests/ui/` tier. Harmless on boards
     without a screen (the `#ifdef` sits behind `HAS_SCREEN`).
+
+    Region / channel name / channel slot / modem preset default to the
+    harness's isolated test mesh (`US` / `McpTest` / 88 / `LONG_FAST`).
+    Override them with the `session:` block of a `--hub-profile` YAML (see
+    `example.yaml` for every key), or with `MESHTASTIC_MCP_REGION` /
+    `MESHTASTIC_MCP_CHANNEL_NAME` / `MESHTASTIC_MCP_CHANNEL_NUM` /
+    `MESHTASTIC_MCP_MODEM_PRESET` env vars — an env var wins over the YAML
+    when both are set for the same key, so an operator can still override
+    a checked-in profile ad hoc without editing it. Neither is required:
+    the YAML alone is enough, and so is the env-var-only path from before.
+
+    This matters for `baked_mesh`, which only *verifies* the live device
+    against this profile (see above it) — it never reflashes on its own.
+    Point these at a device's actual already-flashed values (e.g. `EU_868`,
+    a real region) and `baked_mesh` passes without any reflash, and without
+    ever touching a region the operator didn't choose. Defaults are
+    unchanged, so nothing here affects a run with no overrides set.
     """
+    overrides = hub_profile_session_overrides
+
+    def _get(key: str, env_name: str, default: str) -> str:
+        return os.environ.get(env_name) or str(overrides.get(key, default))
+
     return userprefs.build_testing_profile(
         psk_seed=session_seed,
-        channel_name="McpTest",
-        channel_num=88,
-        region="US",
-        modem_preset="LONG_FAST",
+        channel_name=_get("channel_name", "MESHTASTIC_MCP_CHANNEL_NAME", "McpTest"),
+        channel_num=int(_get("channel_num", "MESHTASTIC_MCP_CHANNEL_NUM", "88")),
+        region=_get("region", "MESHTASTIC_MCP_REGION", "US"),
+        modem_preset=_get("modem_preset", "MESHTASTIC_MCP_MODEM_PRESET", "LONG_FAST"),
         enable_ui_log=True,
     )
 

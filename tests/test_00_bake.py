@@ -172,14 +172,17 @@ def _prepare_nrf52_for_upload(port: str) -> str:
     return new_port
 
 
-def _env_for(role: str) -> str:
-    override = os.environ.get(f"MESHTASTIC_MCP_ENV_{role.upper()}")
+def _env_for(role: str, profile_env: str | None = None) -> str:
+    """Resolve the PlatformIO env for `role` on env or the
+    active `--hub-profile` YAML"""
+    override = os.environ.get(f"MESHTASTIC_MCP_ENV_{role.upper()}") or profile_env
     if override:
         return override
     if role not in _DEFAULT_ENVS:
         pytest.fail(
             f"no default PlatformIO env for role {role!r}. "
-            f"Set MESHTASTIC_MCP_ENV_{role.upper()} to the env name."
+            f"Set MESHTASTIC_MCP_ENV_{role.upper()}, or an `env:` key for "
+            f"{role!r} in your --hub-profile YAML."
         )
     return _DEFAULT_ENVS[role]
 
@@ -189,20 +192,30 @@ def _bake_role(
     port: str,
     test_profile: dict[str, Any],
     force_bake: bool,
+    profile_env: str | None = None,
 ) -> None:
     """Bake + boot + verify for a single role. Skips if already baked unless
     `--force-bake` was passed."""
-    env = _env_for(role)
+    env = _env_for(role, profile_env)
 
     # If not forcing, check if already baked with session profile.
     if not force_bake:
         try:
             live = info.device_info(port=port, timeout_s=8.0)
-            # Quick heuristic: region matches and primary channel matches.
+            # Heuristic: region, primary channel, channel_num and modem_preset all match.
+            # A device sharing region/name but flashed with a different slot or preset must
+            # NOT be treated as already baked — and if either value can't be observed on this
+            # device, fall through and bake rather than risk a false-positive skip.
             expected_region_short = test_profile["USERPREFS_CONFIG_LORA_REGION"].rsplit("_", 1)[-1]
+            expected_channel_num = test_profile["USERPREFS_LORACONFIG_CHANNEL_NUM"]
+            expected_modem_preset = test_profile["USERPREFS_LORACONFIG_MODEM_PRESET"].rsplit(
+                "ModemPreset_", 1
+            )[-1]
             if (
                 live.get("region") == expected_region_short
                 and live.get("primary_channel") == test_profile["USERPREFS_CHANNEL_0_NAME"]
+                and live.get("channel_num") == expected_channel_num
+                and live.get("modem_preset") == expected_modem_preset
             ):
                 pytest.skip(
                     f"{role} at {port} already baked with session profile "
@@ -328,16 +341,19 @@ def _bake_role(
 def test_bake(
     baked_single_role: str,
     hub_devices: dict[str, str],
+    hub_profile: dict[str, dict[str, Any]],
     test_profile: dict[str, Any],
     request: pytest.FixtureRequest,
 ) -> None:
     """Flash one bench role with the session test profile.
 
     Auto-parametrized by `pytest_generate_tests` over every detected role, so
-    each connected board is provisioned with ITS correct firmware (the env is
-    resolved per role from `tests/_bench.py`) — instead of the old model that
-    flashed one hard-coded env onto whichever same-VID board enumerated first
-    and left the rest unprovisioned.
+    each connected board is provisioned with ITS correct firmware. The env is
+    resolved per role via `_env_for`: `MESHTASTIC_MCP_ENV_<ROLE>` env var,
+    else this role's `env:` key in the active `--hub-profile` YAML, else the
+    `tests/_bench.py` default — instead of the old model that flashed one
+    hard-coded env onto whichever same-VID board enumerated first and left
+    the rest unprovisioned.
     """
     role = baked_single_role
     if role not in hub_devices:
@@ -347,4 +363,5 @@ def test_bake(
         port=hub_devices[role],
         test_profile=test_profile,
         force_bake=request.config.getoption("--force-bake"),
+        profile_env=hub_profile.get(role, {}).get("env"),
     )
