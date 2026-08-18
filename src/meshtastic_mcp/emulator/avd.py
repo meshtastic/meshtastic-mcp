@@ -40,6 +40,11 @@ from typing import Any
 EMULATOR_HOST_ALIAS = "10.0.2.2"
 DEFAULT_TCP_PORT = 4403
 
+# Cache of the most recent annotate=True screenshot per serial (or "" for the
+# default device), keyed the same way the rest of this module keys per-device
+# state. Populated by screenshot(); read by resolve_label().
+_LAST_ANNOTATED: dict[str, dict[str, Any]] = {}
+
 # Known Meshtastic-Android applicationIds, most-specific first. The fdroid debug
 # build is preferred for e2e (no Play Services deps; TCP connect works everywhere).
 # See scripts/build_android_apk.sh's --variant default (assembleFdroidDebug).
@@ -632,7 +637,9 @@ def screenshot(out_path: str | Path, *, serial: str | None = None, annotate: boo
     """Capture a screenshot to `out_path`.
 
     Emulator: uses ``android screen capture`` (supports --annotate).
-    Physical device: uses ``adb exec-out screencap -p`` (annotate ignored).
+    Physical device: uses ``adb exec-out screencap -p``; when annotate=True,
+    boxes are drawn ourselves via `annotate_screenshot` (the android CLI's
+    --annotate is emulator-only).
     """
     out_path = Path(out_path)
     if serial and not is_emulator(serial):
@@ -655,6 +662,10 @@ def screenshot(out_path: str | Path, *, serial: str | None = None, annotate: boo
             tmp.unlink(missing_ok=True)
             raise EmulatorError(f"screencap failed: {proc.stderr.decode(errors='replace').strip()}")
         os.replace(tmp, out_path)
+        if annotate:
+            elements = ui_dump(serial=serial)
+            annotate_screenshot(out_path, elements)
+            _LAST_ANNOTATED[serial or ""] = {"screenshot": out_path, "elements": elements}
         return out_path
     args = ["screen", "capture", "-o", str(out_path)]
     if annotate:
@@ -662,7 +673,74 @@ def screenshot(out_path: str | Path, *, serial: str | None = None, annotate: boo
     if serial:
         args += ["--device", serial]
     android(*args)
+    if annotate:
+        _LAST_ANNOTATED[serial or ""] = {"screenshot": out_path, "elements": None}
     return out_path
+
+
+def annotate_screenshot(png_path: str | Path, elements: list[dict[str, Any]]) -> None:
+    """Draw labeled bounding boxes onto `png_path` in place.
+
+    Matches the `#<label>` convention `android screen resolve` uses on the
+    emulator path. Used for physical devices only — the emulator path gets
+    annotation for free from `android screen capture --annotate`. Requires
+    the `[ui]` extra (Pillow); raises EmulatorError if unavailable.
+    """
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError as exc:
+        raise EmulatorError(
+            "screenshot annotation needs Pillow — install the `[ui]` extra"
+        ) from exc
+
+    img = Image.open(png_path).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    for el in elements:
+        bounds = el.get("bounds")
+        label = el.get("label")
+        if bounds is None or label is None:
+            continue
+        x1, y1, x2, y2 = bounds
+        draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
+        draw.text((x1 + 2, y1 + 2), f"#{label}", fill="red")
+    img.save(png_path)
+
+
+def resolve_label(label: int, serial: str | None = None) -> tuple[int, int]:
+    """Return (x, y) for a `#<label>` drawn by the most recent
+    `screenshot(..., annotate=True)` call for `serial`.
+
+    Emulator: delegates to `android screen resolve` against the cached
+    screenshot path. Physical: looks up the label in the cached element
+    list directly — no CLI round-trip, since we drew the boxes ourselves.
+    """
+    key = serial or ""
+    cached = _LAST_ANNOTATED.get(key)
+    if cached is None:
+        raise EmulatorError(
+            f"no annotated screenshot captured yet for serial={serial!r}; "
+            "call screenshot(..., annotate=True) first"
+        )
+    if serial and not is_emulator(serial):
+        for el in cached["elements"] or []:
+            if el.get("label") == label:
+                x1, y1, x2, y2 = el["bounds"]
+                return ((x1 + x2) // 2, (y1 + y2) // 2)
+        raise EmulatorError(f"label #{label} not found in last annotated screenshot")
+
+    args = [
+        "screen",
+        "resolve",
+        "--screenshot",
+        str(cached["screenshot"]),
+        "--string",
+        f"#{label}",
+    ]
+    out = android(*args).stdout.strip()
+    match = re.search(r"(-?\d+)\s+(-?\d+)\s*$", out)
+    if not match:
+        raise EmulatorError(f"could not parse coordinates from `android screen resolve`: {out!r}")
+    return (int(match.group(1)), int(match.group(2)))
 
 
 def find_text(token: str, serial: str | None = None) -> bool:
