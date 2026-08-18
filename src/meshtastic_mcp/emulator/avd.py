@@ -525,9 +525,13 @@ def _parse_uiautomator_xml(xml_text: str) -> list[dict[str, Any]]:
     """Flatten uiautomator XML into the same dict schema as `android layout` JSON.
 
     Schema per element: text, interactions (list), center ([x, y]), and
-    optionally content_desc / resource_id.
+    optionally content_desc / resource_id / bounds ([x1, y1, x2, y2]) / label
+    (stable per-call int, assigned in walk order — only present alongside
+    bounds). label is a local convention for the physical-device annotation
+    path (Task 2); it has no relation to the emulator's own labeling.
     """
     nodes: list[dict[str, Any]] = []
+    next_label = [1]
 
     def _walk(node: ET.Element) -> None:
         interactions = []
@@ -539,6 +543,7 @@ def _parse_uiautomator_xml(xml_text: str) -> list[dict[str, Any]]:
             interactions.append("scrollable")
 
         center: list[int] | None = None
+        bounds_rect: list[int] | None = None
         bounds = node.get("bounds", "")
         if bounds:
             # Allow negative coords: partially off-screen views report e.g.
@@ -549,6 +554,7 @@ def _parse_uiautomator_xml(xml_text: str) -> list[dict[str, Any]]:
                 x1, y1 = int(coords[0][0]), int(coords[0][1])
                 x2, y2 = int(coords[1][0]), int(coords[1][1])
                 center = [(x1 + x2) // 2, (y1 + y2) // 2]
+                bounds_rect = [x1, y1, x2, y2]
 
         el: dict[str, Any] = {
             "text": node.get("text", ""),
@@ -556,6 +562,10 @@ def _parse_uiautomator_xml(xml_text: str) -> list[dict[str, Any]]:
         }
         if center is not None:
             el["center"] = center
+        if bounds_rect is not None:
+            el["bounds"] = bounds_rect
+            el["label"] = next_label[0]
+            next_label[0] += 1
         if cd := node.get("content-desc", ""):
             el["content_desc"] = cd
         if rid := node.get("resource-id", ""):

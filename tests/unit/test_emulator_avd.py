@@ -215,3 +215,27 @@ def test_connect_app_to_tcp_falls_back_to_ui_taps_when_deeplink_never_confirms(m
 
     ok = avd.connect_app_to_tcp(host="192.0.2.68", port=4403, confirm_timeout_s=0.01)
     assert ok is False  # UI-tap flow ran but "Add device manually" was never found
+
+
+def test_parse_uiautomator_xml_includes_bounds_and_label() -> None:
+    xml = (
+        '<?xml version="1.0"?><hierarchy>'
+        '<node text="A" bounds="[10,20][110,220]">'
+        '<node text="B" bounds="[10,20][60,70]" clickable="true"/>'
+        "</node>"
+        "</hierarchy>"
+    )
+    els = avd._parse_uiautomator_xml(xml)
+    assert els[0]["text"] == "A"
+    assert els[0]["bounds"] == [10, 20, 110, 220]
+    assert els[0]["label"] == 1
+    assert els[1]["text"] == "B"
+    assert els[1]["bounds"] == [10, 20, 60, 70]
+    assert els[1]["label"] == 2
+
+
+def test_parse_uiautomator_xml_skips_label_without_bounds() -> None:
+    xml = '<?xml version="1.0"?><hierarchy><node text="no-bounds"/></hierarchy>'
+    els = avd._parse_uiautomator_xml(xml)
+    assert "bounds" not in els[0]
+    assert "label" not in els[0]
