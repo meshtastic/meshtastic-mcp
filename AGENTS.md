@@ -17,7 +17,8 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 - **firmware capability** (needs `MESHTASTIC_FIRMWARE_ROOT` + `pio`): `flash`, `boards`,
   `userprefs`, `pio`, `fixtures`.
 - **android capability** (needs `android` + `adb`): `emulator/` native-node + AVD
-  orchestration.
+  orchestration, plus app-plane driving (`android_ui_dump`, `android_tap`,
+  `android_screenshot`, `android_poll_for_text`, etc. — see `docs/android-ui-driving-plan.md`).
 - **apple capability** (needs `xcrun`; `idb` for UI): `emulator/apple_sim.py` iOS-Sim/macOS
   app-plane orchestration.
 - **local-model capability** (needs a reachable Ollama / OpenAI-compatible `llama-server`, or a

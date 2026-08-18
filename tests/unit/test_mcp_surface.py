@@ -50,6 +50,32 @@ def test_android_docs_tools_registered_and_readonly(server) -> None:
         assert ann is not None and ann.readOnlyHint and ann.openWorldHint
 
 
+def test_android_driving_tools_registered(server) -> None:
+    tools = _registered_tools(server.app)
+    if not server.CAPS.android:
+        pytest.skip("android capability inactive — driving tools not registered")
+    expected_read_only = {
+        "android_ui_dump",
+        "android_resolve",
+        "android_find_text",
+        "android_poll_for_text",
+        "android_read_logcat",
+    }
+    expected_destructive = {
+        "android_screenshot",
+        "android_tap",
+        "android_swipe",
+        "android_type_text",
+        "android_clear_logcat",
+    }
+    for name in expected_read_only | expected_destructive:
+        assert name in tools, f"{name} not registered"
+    for name in expected_read_only:
+        assert tools[name].annotations.readOnlyHint, f"{name} should be read-only"
+    for name in expected_destructive:
+        assert tools[name].annotations.destructiveHint, f"{name} should be destructive"
+
+
 def test_resources_registered(server) -> None:
     resources = _component_uris(server.app, "resource")
     templates = _component_uris(server.app, "template")
