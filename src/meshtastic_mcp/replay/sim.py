@@ -181,10 +181,11 @@ PROFILE: dict = {
     # Node identity flavor: fraction of (non-router) nodes whose short name is a
     # single emoji (hugely common on real meshes); fraction of nodes running
     # 2.8+ firmware that advertise a PKC public key (signed node data); and of
-    # those, the fraction the connected device has manually key-verified.
-    "emoji_short_fraction": 0.35,
-    "pki_fraction": 0.6,
-    "key_verified_fraction": 0.15,
+    # those, the fraction the connected device has manually key-verified (rare —
+    # most users never verify).
+    "emoji_short_fraction": 0.5,
+    "pki_fraction": 0.33,
+    "key_verified_fraction": 0.05,
     # Observer / RF gateway model (see replay/observer.py): when enabled, the
     # generated "all traffic that exists" stream is filtered + duplicated into
     # what a single gateway at the venue would have heard — RF loss with
@@ -525,6 +526,26 @@ _EMOJI_SHORT = [
     "🐧",
     "🍄",
     "🌮",
+]
+
+# Infrastructure short-names lean into role puns — routers/relays/hubs get a
+# tower/antenna/relay-themed emoji instead of a terse abbreviation, because even
+# the backbone deserves a little personality.
+_INFRA_EMOJI = [
+    "🗼",  # tower
+    "📡",  # dish / relay
+    "🛰️",  # satellite
+    "🛜",  # wireless
+    "🕸️",  # the mesh itself
+    "🔀",  # a router, routing
+    "🚦",  # traffic control
+    "🏃",  # relay runner
+    "🧭",  # always points the way
+    "🗄️",  # the server rack
+    "🌐",  # the network
+    "📶",  # full bars, always
+    "⚡",  # mains-powered, never sleeps
+    "🎛️",  # the mixing board
 ]
 
 
@@ -1091,9 +1112,14 @@ def _build_nodes(
     cl_w = [(c, c[4]) for c in P["clusters"]]
     ridx = 0
     fake = _get_faker()  # None unless the [sim] extra is installed
-    emoji_frac = P.get("emoji_short_fraction", 0.35)
-    pki_frac = P.get("pki_fraction", 0.6)
-    verified_frac = P.get("key_verified_fraction", 0.15)
+    emoji_frac = P.get("emoji_short_fraction", 0.5)
+    pki_frac = P.get("pki_fraction", 0.33)
+    verified_frac = P.get("key_verified_fraction", 0.05)
+    # Node identity (names, emoji shorts, PKC keys) draws from a *child* RNG so
+    # tuning these cosmetic fractions never perturbs the simulation stream
+    # (positions, traffic, text) — otherwise a fraction tweak shifts every
+    # downstream packet and drifts the calibrated realism bands.
+    id_rng = random.Random(rng.getrandbits(64))
     for i in range(nodes):
         while True:
             num = rng.randint(0x10000000, 0xEFFFFFFF)
@@ -1108,20 +1134,24 @@ def _build_nodes(
             cl = _weighted_cluster(rng, cl_w)
         if role in ("ROUTER", "ROUTER_LATE") and ridx < len(_ROUTER_NAMES):
             long = _ROUTER_NAMES[ridx]
-            short = "".join(ch for ch in long if ch.isalnum())[:4].upper()
+            # infra nodes get a role-pun emoji short (cycled so the backbone
+            # shows distinct icons), not a terse abbreviation.
+            short = _INFRA_EMOJI[ridx % len(_INFRA_EMOJI)]
             ridx += 1
         else:
-            # per-node name seed keeps the outer rng stream identical whether or
-            # not Faker is installed (only the name string differs).
-            long = _gen_node_name(rng.getrandbits(32), fake)
+            # per-node name seed keeps names deterministic whether or not Faker
+            # is installed (only the name string differs).
+            long = _gen_node_name(id_rng.getrandbits(32), fake)
             short = (
-                rng.choice(_EMOJI_SHORT) if rng.random() < emoji_frac else _short_from_long(long)
+                id_rng.choice(_EMOJI_SHORT)
+                if id_rng.random() < emoji_frac
+                else _short_from_long(long)
             )
-        # 2.8 signed node data: a public key on the ~pki_frac of nodes running
-        # 2.8+ firmware, a slice of which the connected device has verified.
-        if rng.random() < pki_frac:
-            pubkey = bytes(rng.getrandbits(8) for _ in range(32))
-            verified = rng.random() < verified_frac
+        # 2.8 signed node data: a public key on ~pki_frac of nodes running 2.8+
+        # firmware, a slice of which the connected device has verified.
+        if id_rng.random() < pki_frac:
+            pubkey = bytes(id_rng.getrandbits(8) for _ in range(32))
+            verified = id_rng.random() < verified_frac
         else:
             pubkey, verified = None, False
         lat, lon = _jitter(rng, cl[1], cl[2], cl[3])
@@ -1495,6 +1525,8 @@ def generate(
     beacon_iv = P.get("beacon_interval", 1800)
     beacon_frac = P.get("beacon_fraction", 0.4)
     beacon_nodes = [m for m in routers if rng.random() < beacon_frac]
+    if not beacon_nodes and routers:  # always keep at least one beacon emitter
+        beacon_nodes = [routers[0]]  # so MESH_BEACON_APP is never absent
     for m in beacon_nodes:
         t = start_epoch + rng.randint(0, beacon_iv)
         while t < end_epoch:

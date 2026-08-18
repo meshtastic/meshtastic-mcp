@@ -727,6 +727,27 @@ class ReplaySession:
         except (OSError, ConnectionError):
             pass
 
+    def _firmware_is_28plus(self) -> bool:
+        """True when the reported firmware version is >= 2.8 (has PKC signing)."""
+        v = firmware_version_for(self.params.firmware_edition, self.params.firmware_version)
+        try:
+            major, minor = (int(x) for x in v.split(".")[:2])
+        except (ValueError, IndexError):
+            return False
+        return (major, minor) >= (2, 8)
+
+    def _observer_public_key(self) -> bytes:
+        """A stable, synthetic 32-byte PKC public key for the connected node.
+
+        Deterministic in the observer num so the same replay device always
+        presents the same key (and distinct instances present distinct keys).
+        """
+        import hashlib
+
+        return hashlib.sha256(
+            b"replay-observer-pubkey" + self.params.observer_num.to_bytes(4, "little")
+        ).digest()
+
     def _observer_nodeinfo(self) -> mesh_pb2.FromRadio:
         fr = mesh_pb2.FromRadio()
         ni = fr.node_info
@@ -736,6 +757,10 @@ class ReplaySession:
         ni.user.short_name = "RPLY"
         ni.user.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
         ni.user.role = config_pb2.Config.DeviceConfig.Role.CLIENT
+        # On 2.8+ editions (e.g. DEFCON) the connected node runs PKC firmware, so
+        # it advertises its own public key — the app shows the local node signed.
+        if self._firmware_is_28plus():
+            ni.user.public_key = self._observer_public_key()
         # "you are here": params override, else the capture's median position, so
         # the app map centers on the mesh and node distances are sensible.
         pos = None

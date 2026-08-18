@@ -309,16 +309,21 @@ def test_sim_emoji_shortnames_and_pki_keys():
     """
     from meshtastic_mcp.replay import capture, sim
 
-    cap = sim.generate(nodes=300, days=1, seed=8, start=1_700_000_000)
+    n = 600
+    cap = sim.generate(nodes=n, days=1, seed=8, start=1_700_000_000)
+    pki_frac = sim.PROFILE["pki_fraction"]
     emoji_pool = set(sim._EMOJI_SHORT)
-    emoji = [n for n in cap.nodes if n.short_name in emoji_pool]
-    keyed = [n for n in cap.nodes if n.public_key]
-    verified = [n for n in cap.nodes if n.key_verified]
-    assert len(emoji) > 30  # a meaningful emoji-short population
-    assert 0.4 * len(cap.nodes) < len(keyed) < 0.8 * len(cap.nodes)  # ~pki_fraction
-    assert all(len(n.public_key) == 32 for n in keyed)  # Curve25519-sized keys
-    assert verified  # some manually-verified
-    assert {n.num for n in verified}.issubset({n.num for n in keyed})  # verified ⊆ keyed
+    emoji = [x for x in cap.nodes if x.short_name in emoji_pool]
+    keyed = [x for x in cap.nodes if x.public_key]
+    verified = [x for x in cap.nodes if x.key_verified]
+    # emoji shorts apply to non-router nodes at emoji_short_fraction
+    assert len(emoji) > 0.35 * n  # ~half, minus routers + variance
+    # keyed ≈ pki_fraction of all nodes (±0.1 tolerance for a finite draw)
+    assert (pki_frac - 0.1) * n < len(keyed) < (pki_frac + 0.1) * n
+    assert all(len(x.public_key) == 32 for x in keyed)  # Curve25519-sized keys
+    # verified is a small slice (key_verified_fraction) of keyed — present but sparse
+    assert 0 < len(verified) < 0.2 * len(keyed)
+    assert {x.num for x in verified}.issubset({x.num for x in keyed})  # verified ⊆ keyed
 
     # the key + manual-verification flag reach the app via the node-DB NodeInfo
     ni = capture.node_to_nodeinfo(keyed[0], last_heard=1)
@@ -329,13 +334,47 @@ def test_sim_emoji_shortnames_and_pki_keys():
     assert not capture.node_to_nodeinfo(keyless, last_heard=1).user.public_key
 
 
+def test_infra_nodes_get_pun_emoji_shortnames():
+    """Infrastructure (router) nodes get a role-pun emoji short name, not an
+    abbreviation — the backbone gets personality too.
+    """
+    from meshtastic_mcp.replay import sim
+
+    cap = sim.generate(nodes=60, days=1, seed=3, start=1_700_000_000)
+    router_names = set(sim._ROUTER_NAMES)
+    infra = [n for n in cap.nodes if n.long_name in router_names]
+    assert infra  # the seeded infra core exists
+    assert all(n.short_name in set(sim._INFRA_EMOJI) for n in infra)
+
+
+def test_observer_is_signed_on_28_editions():
+    """The connected/observer node advertises its own PKC public key on a 2.8+
+    edition (e.g. DEFCON), so the app shows the local node signed — and not on a
+    pre-2.8 edition.
+    """
+    cap = sim.generate(nodes=5, days=1, seed=1, start=1_700_000_000)
+    signed = ReplaySession(
+        "d", cap, ReplayParams(host="127.0.0.1", port=0, firmware_edition="DEFCON")
+    )
+    ni = signed._observer_nodeinfo().node_info
+    assert len(ni.user.public_key) == 32  # DEFCON => 2.8 => signed
+    unsigned = ReplaySession(
+        "v", cap, ReplayParams(host="127.0.0.1", port=0, firmware_edition="VANILLA")
+    )
+    assert not unsigned._observer_nodeinfo().node_info.user.public_key  # 2.7.x => not signed
+
+
 def test_pki_and_emoji_fractions_are_tunable():
     from meshtastic_mcp.replay import sim
 
     prof = {"pki_fraction": 0.0, "emoji_short_fraction": 0.0}
     cap = sim.generate(nodes=100, days=1, seed=2, start=1_700_000_000, profile=prof)
     assert all(n.public_key is None for n in cap.nodes)  # PKI fully off
-    assert all(n.short_name not in set(sim._EMOJI_SHORT) for n in cap.nodes)
+    # emoji_short_fraction=0 disables *attendee* emoji shorts; infra nodes still
+    # get their role-pun emoji (that's not governed by the fraction).
+    router_names = set(sim._ROUTER_NAMES)
+    attendees = [n for n in cap.nodes if n.long_name not in router_names]
+    assert all(n.short_name not in set(sim._EMOJI_SHORT) for n in attendees)
 
 
 def test_faker_name_path_used_when_available():
