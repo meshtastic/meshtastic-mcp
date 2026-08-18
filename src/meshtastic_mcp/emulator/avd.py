@@ -661,11 +661,21 @@ def screenshot(out_path: str | Path, *, serial: str | None = None, annotate: boo
         if proc.returncode != 0:
             tmp.unlink(missing_ok=True)
             raise EmulatorError(f"screencap failed: {proc.stderr.decode(errors='replace').strip()}")
-        os.replace(tmp, out_path)
         if annotate:
             elements = ui_dump(serial=serial)
-            annotate_screenshot(out_path, elements)
+            # Annotate the temp file (not the final path) so the existing
+            # os.replace() below moves an already-annotated file into place
+            # atomically — a crash/timeout mid-save never leaves a partially
+            # annotated PNG at out_path.
+            annotate_screenshot(tmp, elements)
+            os.replace(tmp, out_path)
             _LAST_ANNOTATED[serial or ""] = {"screenshot": out_path, "elements": elements}
+        else:
+            os.replace(tmp, out_path)
+            # A plain capture at this path/serial invalidates any cached
+            # annotation — the file on disk is no longer what _LAST_ANNOTATED
+            # describes, so resolve_label must not resolve against it.
+            _LAST_ANNOTATED.pop(serial or "", None)
         return out_path
     args = ["screen", "capture", "-o", str(out_path)]
     if annotate:
@@ -675,6 +685,8 @@ def screenshot(out_path: str | Path, *, serial: str | None = None, annotate: boo
     android(*args)
     if annotate:
         _LAST_ANNOTATED[serial or ""] = {"screenshot": out_path, "elements": None}
+    else:
+        _LAST_ANNOTATED.pop(serial or "", None)
     return out_path
 
 
@@ -685,6 +697,16 @@ def annotate_screenshot(png_path: str | Path, elements: list[dict[str, Any]]) ->
     emulator path. Used for physical devices only — the emulator path gets
     annotation for free from `android screen capture --annotate`. Requires
     the `[ui]` extra (Pillow); raises EmulatorError if unavailable.
+
+    Only elements with visible content or interactivity — a non-empty
+    `interactions` list, non-empty `text`, or non-empty `content_desc` — get a
+    box drawn. A real uiautomator dump commonly has 50-150 elements, most of
+    them purely structural containers (layout wrappers, a full-screen root)
+    with no visible affordance; boxing all of them makes the image unreadable
+    and defeats the point of annotation. This is a rendering choice only —
+    every element with `bounds`+`label` is still labeled in the underlying
+    element list (see `_parse_uiautomator_xml`), so `resolve_label` keeps
+    working for labels whose box wasn't drawn.
     """
     try:
         from PIL import Image, ImageDraw
@@ -700,10 +722,17 @@ def annotate_screenshot(png_path: str | Path, elements: list[dict[str, Any]]) ->
         label = el.get("label")
         if bounds is None or label is None:
             continue
+        if not (el.get("interactions") or el.get("text") or el.get("content_desc")):
+            continue
         x1, y1, x2, y2 = bounds
+        # Real devices can report inverted/malformed rects (e.g. partially
+        # off-screen negative coords); normalize ordering so
+        # ImageDraw.rectangle (which requires x1<=x2, y1<=y2) never raises.
+        x1, x2 = sorted((x1, x2))
+        y1, y2 = sorted((y1, y2))
         draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
         draw.text((x1 + 2, y1 + 2), f"#{label}", fill="red")
-    img.save(png_path)
+    img.save(png_path, format="PNG")
 
 
 def resolve_label(label: int, serial: str | None = None) -> tuple[int, int]:

@@ -289,6 +289,53 @@ def test_resolve_label_no_screenshot_yet_raises() -> None:
         avd.resolve_label(1, serial="never-captured")
 
 
+def _png_bytes() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (200, 200), color="white").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_screenshot_plain_capture_invalidates_stale_annotation_cache(monkeypatch, tmp_path) -> None:
+    # Regression: a plain (annotate=False) capture at the same path/serial must
+    # invalidate any cached annotation, or resolve_label keeps resolving against
+    # stale/wrong content after the on-disk file is no longer annotated.
+    serial = "R5CT80ABCDE"  # physical (non-emulator) serial
+    png_bytes = _png_bytes()
+
+    def fake_run(cmd, *, stdout, stderr, timeout):
+        stdout.write(png_bytes)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(avd, "_adb_bin", lambda: "adb")
+    monkeypatch.setattr(avd.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        avd,
+        "ui_dump",
+        lambda serial=None: [
+            {
+                "text": "Send",
+                "bounds": [10, 10, 60, 40],
+                "label": 1,
+                "interactions": ["clickable"],
+            }
+        ],
+    )
+
+    out_path = tmp_path / "shot.png"
+
+    avd.screenshot(out_path, serial=serial, annotate=True)
+    assert avd.resolve_label(1, serial=serial) == (35, 25)
+
+    # A subsequent plain capture at the same serial must clear the cache.
+    avd.screenshot(out_path, serial=serial, annotate=False)
+    with pytest.raises(avd.EmulatorError, match="no annotated screenshot"):
+        avd.resolve_label(1, serial=serial)
+
+
 def test_resolve_label_emulator_shells_out_to_android_resolve(monkeypatch) -> None:
     avd._LAST_ANNOTATED["emulator-5554"] = {
         "screenshot": "/tmp/ui.png",
