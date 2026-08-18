@@ -417,7 +417,7 @@ _ROUTER_NAMES = [
     "Datil-Gate",
     "SouthBaldy-HI",
     "Davenport-HI",
-    "BaseCamp-Core",
+    "BaseCamp",
 ]
 _ADJ = [
     "Solar",
