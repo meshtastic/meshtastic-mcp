@@ -791,7 +791,10 @@ def main(argv=None) -> None:
         "--stats-interval",
         type=float,
         default=5.0,
-        help="observer LocalStats cadence while replay packets flow (0 = initial snapshot only)",
+        help=(
+            "observer LocalStats cadence while packets flow "
+            "(0 = initial and non-looping final snapshots only)"
+        ),
     )
     rpl.add_argument(
         "--dupe-every",

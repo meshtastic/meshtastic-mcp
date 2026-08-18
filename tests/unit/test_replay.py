@@ -796,7 +796,7 @@ def test_client_disconnect_mid_stream_survives_with_loop():
                 continue
             telemetry = telemetry_pb2.Telemetry()
             telemetry.ParseFromString(packet.decoded.payload)
-            local_stats_seen = telemetry.WhichOneof("variant") == "local_stats"
+            local_stats_seen |= telemetry.WhichOneof("variant") == "local_stats"
         return local_stats_seen, streamed_packet_seen
 
     cap = sim.generate(nodes=20, days=1, seed=8, start=1_700_000_000)

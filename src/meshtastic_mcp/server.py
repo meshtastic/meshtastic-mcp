@@ -2328,7 +2328,8 @@ def replay_start(
     periodic "ETA — done/total" progress message to the busiest channel, so you
     can see from inside the app that it's a replay. `stats_interval` controls how
     often the connected replay observer publishes LocalStats while replay packets
-    flow; 0 keeps only the initial pre-node-DB snapshot. `dupe_every` simulates a
+    flow; 0 disables periodic updates but keeps the initial pre-node-DB snapshot
+    and, for non-looping replays, the final snapshot. `dupe_every` simulates a
     duplicate radio RX every Nth replay packet and includes it in LocalStats; 0
     disables synthetic duplicates. `modem_preset` sets the
     advertised LoRa preset (e.g. `LONG_FAST`, `SHORT_TURBO`); `firmware_edition`
