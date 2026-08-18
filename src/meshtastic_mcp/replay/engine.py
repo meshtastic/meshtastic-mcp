@@ -26,6 +26,7 @@ import os
 import queue
 import random
 import socket
+import statistics
 import struct
 import threading
 import time
@@ -115,6 +116,45 @@ TELEMETRY_APP = portnums_pb2.PortNum.TELEMETRY_APP  # 67
 def _format_eta(seconds: float) -> str:
     s = max(0, int(seconds))
     return f"~{s // 60}m {s % 60}s left" if s >= 60 else f"~{s}s left"
+
+
+def _representative_radio_metrics(
+    packets: list[tuple[int, bytes, str]],
+) -> tuple[float, float]:
+    """Median radio load from captured DeviceMetrics, for observer LocalStats."""
+    channel_utilization: list[float] = []
+    air_util_tx: list[float] = []
+    packet = mesh_pb2.MeshPacket()
+    telemetry = telemetry_pb2.Telemetry()
+    for _rx_time, raw, _channel in packets:
+        packet.Clear()
+        try:
+            packet.ParseFromString(raw)
+        except Exception:
+            continue
+        if (
+            packet.WhichOneof("payload_variant") != "decoded"
+            or packet.decoded.portnum != TELEMETRY_APP
+        ):
+            continue
+        telemetry.Clear()
+        try:
+            telemetry.ParseFromString(packet.decoded.payload)
+        except Exception:
+            continue
+        if telemetry.WhichOneof("variant") != "device_metrics":
+            continue
+        metrics = telemetry.device_metrics
+        if metrics.HasField("channel_utilization"):
+            channel_utilization.append(float(metrics.channel_utilization))
+        if metrics.HasField("air_util_tx"):
+            air_util_tx.append(float(metrics.air_util_tx))
+
+    channel = statistics.median(channel_utilization) if channel_utilization else 0.0
+    air = statistics.median(air_util_tx) if air_util_tx else 0.0
+    channel = min(100.0, max(0.0, channel))
+    air = min(channel, max(0.0, air))
+    return round(channel, 3), round(air, 4)
 
 
 def local_ips() -> list[str]:
@@ -239,6 +279,12 @@ class ReplayParams:
     # Replay Clock: post a kickoff + periodic "ETA — done/total" to the busiest
     # channel so you can see, from inside the app, that it's a replay. 0 = off.
     announce_interval: float = 0.0
+    # Observer LocalStats cadence while replay packets flow. The initial snapshot is
+    # always sent before the bulk node DB; 0 disables only periodic updates.
+    stats_interval: float = 5.0
+    # Simulate a duplicate radio RX every Nth replay packet so LocalStats duplicate
+    # accounting is observable. Firmware suppresses these before the app; 0 disables.
+    dupe_every: int = 0
     # true SO_SNDTIMEO seconds; a stalled app can't hang our sends. 0 = none
     send_timeout: float = 10.0
     # mDNS/Bonjour advertisement (`_meshtastic._tcp` like real firmware, so
@@ -266,6 +312,9 @@ class _SessionState:
     client_addr: str | None = None
     packets_sent: int = 0
     injected: int = 0
+    stats_sent: int = 0  # LOCAL_STATS telemetry emitted for the observer node
+    stats_dupes: int = 0
+    dupe_source_packets: int = 0
     # wall-clock time the current connection's stream began emitting packets and
     # the streamed-packet count at that instant, so status can report the
     # *achieved* stream rate (self-verifying stress tests). Reset per connection
@@ -296,9 +345,19 @@ class ReplaySession:
                 raise ValueError(f"duration must be > 0 seconds (got {params.duration})")
             if window:
                 params.rate = len(window) / params.duration
+        if params.dupe_every < 0:
+            raise ValueError(f"dupe_every must be >= 0 packets (got {params.dupe_every})")
         self.capture = capture
         self.params = params
         self.window = window
+        # Ground the observer's advertised radio load in the capture itself rather
+        # than in synthetic noise: the median of every DeviceMetrics sample in the
+        # replay window. Computed once — the window never changes.
+        self._channel_utilization, self._air_util_tx = _representative_radio_metrics(window)
+        # Guards the observer LocalStats counters. `_send_db_phase` runs on the
+        # reader thread and can re-enter on a second want_config_id while the
+        # stream thread is already emitting periodic stats + counting duplicates.
+        self._stats_lock = threading.Lock()
         self.state = _SessionState(
             id=sid,
             params=params,
@@ -603,6 +662,7 @@ class ReplaySession:
     def _send_db_phase(self, send: Any, nonce: int) -> None:
         now = int(time.time())
         send(self._observer_nodeinfo())
+        self._send_observer_stats(send)
         if self.params.node_delay > 0:
             time.sleep(self.params.node_delay)
         for n in self.capture.nodes:
@@ -614,6 +674,38 @@ class ReplaySession:
         fr = mesh_pb2.FromRadio()
         fr.config_complete_id = nonce
         send(fr)
+
+    def _send_observer_stats(self, send: Any) -> None:
+        """Publish LocalStats from the connected observer.
+
+        Called from three sites — once before the bulk node DB (so the app has a
+        stats row before a large download can stall rendering), periodically from
+        the stream loop, and once at the end of a non-looping replay. The counters
+        are real: `num_packets_rx` is what the observer has actually been fed and
+        `num_rx_dupe` is the duplicate count `dupe_every` actually produced. Radio
+        load is the median of the capture's own DeviceMetrics, not synthetic.
+        Does not touch the replay rate counters.
+        """
+        with self._stats_lock:
+            next_tx = self.state.stats_sent + 1
+            now = int(time.time())
+            telemetry = telemetry_pb2.Telemetry()
+            telemetry.time = now
+            stats = telemetry.local_stats
+            stats.uptime_seconds = max(1, now - int(self.state.started_at))
+            stats.channel_utilization = self._channel_utilization
+            stats.air_util_tx = self._air_util_tx
+            stats.num_packets_tx = next_tx
+            stats.num_packets_rx = self.state.packets_sent + self.state.stats_dupes
+            stats.num_packets_rx_bad = 0
+            stats.num_rx_dupe = self.state.stats_dupes
+            stats.num_tx_relay = 0
+            # Self-inclusive census, like a real device's own LocalStats.
+            stats.num_online_nodes = len(self.capture.nodes) + 1
+            stats.num_total_nodes = len(self.capture.nodes) + 1
+            stats.noise_floor = random.randint(-105, -92)
+            send(self._local_telemetry_fr(telemetry))
+            self.state.stats_sent = next_tx
 
     def _handle_client_packet(self, pkt: mesh_pb2.MeshPacket, send: Any) -> None:
         """Answer admin round-trips and traceroute requests from the connected client.
@@ -796,7 +888,8 @@ class ReplaySession:
 
         The app dispatches TELEMETRY_APP by `packet.from`; the connected node's
         own telemetry (`from == connectedNode`) is treated as local. A random
-        packet id keeps the two per-tick packets distinct so neither is deduped.
+        packet id keeps successive observer packets (LOCAL_STATS on its own
+        cadence, DEVICE_METRICS on another) distinct so none of them is deduped.
         """
         fr = mesh_pb2.FromRadio()
         mp = fr.packet
@@ -829,51 +922,24 @@ class ReplaySession:
         d.uptime_seconds = uptime
         return self._local_telemetry_fr(tm)
 
-    def _local_stats(self) -> mesh_pb2.FromRadio:
-        """LOCAL_STATS for the observer: the mesh/network "Local Stats" view.
-
-        Distinct from device metrics — this drives the app's live-activity stats:
-        packets rx (the observer receives the whole replay feed, so this climbs),
-        packets tx (small — it mostly listens), online/total nodes = the mesh
-        size, plus a realistic negative noise floor.
-        """
-        now = int(time.time())
-        st = self.state
-        n_nodes = len(self.capture.nodes)
-        rx = st.packets_sent & 0xFFFFFFFF  # observer received everything streamed
-        tx = (st.injected + st.local_metrics_sent * 2) & 0xFFFFFFFF  # it TXes little
-        tm = telemetry_pb2.Telemetry()
-        tm.time = now
-        ls = tm.local_stats
-        ls.uptime_seconds = max(1, now - int(st.started_at))
-        ls.channel_utilization = self._local_chutil()
-        ls.air_util_tx = round(random.uniform(0.0, 1.5), 3)
-        ls.num_packets_tx = tx
-        ls.num_packets_rx = rx
-        ls.num_packets_rx_bad = 0
-        ls.num_rx_dupe = int(rx * 0.03)  # a few duplicates, as a real mesh sees
-        ls.num_tx_relay = 0
-        ls.num_online_nodes = n_nodes
-        ls.num_total_nodes = n_nodes
-        ls.noise_floor = random.randint(-105, -92)
-        return self._local_telemetry_fr(tm)
-
     def _local_metrics_loop(self, send: Any, client: socket.socket) -> None:
-        """Emit local device metrics + local stats every `local_metrics_interval` s.
+        """Emit local DEVICE_METRICS every `local_metrics_interval` seconds.
 
-        First tick fires a few seconds after connect (so the handshake's observer
-        NodeInfo lands first), then on the interval — matching firmware, which
-        reports its own telemetry shortly after boot and periodically thereafter.
+        LOCAL_STATS is not emitted here — it has its own, much tighter cadence in
+        `_send_observer_stats`. First tick fires a few seconds after connect (so
+        the handshake's observer NodeInfo lands first), then on the interval —
+        matching firmware, which reports its own telemetry shortly after boot and
+        periodically thereafter.
         """
         iv = self.params.local_metrics_interval
         if iv <= 0:
             return
         stop = self.state.stop
         # Wait for streaming to actually start before the first tick (a big node
-        # DB can take several seconds to download) so the first LOCAL_STATS shows
-        # a real packets-rx instead of 0 — bounded by the interval so device
-        # metrics still emit even if a stream never begins. Then a short grace
-        # lets a few packets flow.
+        # DB can take several seconds to download) so the first chutil reading
+        # reflects real load instead of an idle line — bounded by the interval so
+        # device metrics still emit even if a stream never begins. Then a short
+        # grace lets a few packets flow.
         waited = 0.0
         while self.state.stream_started_at is None and waited < iv:
             if stop.wait(0.5):
@@ -884,7 +950,6 @@ class ReplaySession:
         while not stop.is_set():
             try:
                 send(self._local_device_metrics())
-                send(self._local_stats())
             except (OSError, ConnectionError):
                 self._sever(client)
                 return
@@ -1006,6 +1071,9 @@ class ReplaySession:
         # the idle gap between connections doesn't dilute the reading.
         self.state.stream_started_at = time.time()
         self.state.stream_base = self.state.packets_sent - self.state.injected
+        next_stats_at = (
+            time.time() + p.stats_interval if p.stats_interval and p.stats_interval > 0 else None
+        )
         while not stop.is_set():
             prev: int | None = None
             pass_start = time.time()
@@ -1054,7 +1122,21 @@ class ReplaySession:
                         self._sever(client)
                         return
                     self.state.packets_sent += 1
+                    if p.dupe_every > 0:
+                        with self._stats_lock:
+                            self.state.dupe_source_packets += 1
+                            if self.state.dupe_source_packets % p.dupe_every == 0:
+                                self.state.stats_dupes += 1
                 done += 1
+                if next_stats_at is not None:
+                    now = time.time()
+                    if now >= next_stats_at:
+                        try:
+                            self._send_observer_stats(send)
+                        except (OSError, ConnectionError):
+                            self._sever(client)
+                            return
+                        next_stats_at = now + p.stats_interval
                 if announce:
                     now = time.time()
                     if now - last_ann >= p.announce_interval:
@@ -1071,6 +1153,11 @@ class ReplaySession:
                 with contextlib.suppress(OSError, ConnectionError):
                     self._announce(send, f"✅ Replay complete — {total} packets", ann_idx)
             if not p.loop:
+                try:
+                    self._send_observer_stats(send)
+                except (OSError, ConnectionError):
+                    self._sever(client)
+                    return
                 self.state.ended = True
                 return
 
@@ -1168,6 +1255,8 @@ def _status_dict(sess: ReplaySession) -> dict[str, Any]:
         "packets_total": st.packets_total,
         "packets_sent": st.packets_sent,
         "injected": st.injected,
+        "stats_sent": st.stats_sent,
+        "duplicates_seen": st.stats_dupes,
         "connected": st.connected,
         "client": st.client_addr,
         "ended": st.ended,
