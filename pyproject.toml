@@ -56,6 +56,10 @@ ui = [
   "rich-pixels>=3.0",
 ]
 ui-min = ["opencv-python-headless>=4.9", "numpy>=1.26"]
+# Richer synthetic node names for the replay sim (Faker person names/usernames/
+# callsigns). Optional: the sim falls back to its built-in adjective+noun pools
+# when Faker is absent, so this only *improves* names — nothing depends on it.
+sim = ["faker>=20"]
 # macOS menu-bar controller for the FleetSuite service (start/stop/status).
 # macOS-only; the service and nightly run fine without it. See scripts/install-menubar.sh.
 menubar = ["rumps>=0.4; sys_platform == 'darwin'"]

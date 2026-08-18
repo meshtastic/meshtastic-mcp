@@ -178,6 +178,13 @@ PROFILE: dict = {
     # MESH_BEACON_APP packets, and the broadcast interval in seconds.
     "beacon_fraction": 0.4,
     "beacon_interval": 1800,
+    # Node identity flavor: fraction of (non-router) nodes whose short name is a
+    # single emoji (hugely common on real meshes); fraction of nodes running
+    # 2.8+ firmware that advertise a PKC public key (signed node data); and of
+    # those, the fraction the connected device has manually key-verified.
+    "emoji_short_fraction": 0.35,
+    "pki_fraction": 0.6,
+    "key_verified_fraction": 0.15,
     # Observer / RF gateway model (see replay/observer.py): when enabled, the
     # generated "all traffic that exists" stream is filtered + duplicated into
     # what a single gateway at the venue would have heard — RF loss with
@@ -453,6 +460,134 @@ _NOUN = [
     "Tumbleweed",
     "Hawk",
 ]
+
+# Emoji short-names — Meshtastic short names are ≤4 UTF-8 bytes, and a single
+# emoji is a hugely popular choice on real meshes. Big pool so `--nodes 1600`
+# shows real variety, not the same 4 faces.
+_EMOJI_SHORT = [
+    "🥔",
+    "🔥",
+    "⚡",
+    "📡",
+    "🛰️",
+    "🗼",
+    "🌵",
+    "🏜️",
+    "🌄",
+    "🦅",
+    "🦉",
+    "🐇",
+    "🐢",
+    "🦎",
+    "🐍",
+    "🦂",
+    "🐝",
+    "🐺",
+    "🦊",
+    "🐉",
+    "👽",
+    "🤖",
+    "💀",
+    "🎃",
+    "👾",
+    "🕹️",
+    "🎛️",
+    "🔋",
+    "🔌",
+    "📶",
+    "🛜",
+    "🧭",
+    "⛺",
+    "🚐",
+    "🚙",
+    "🏔️",
+    "🌲",
+    "☀️",
+    "🌙",
+    "⭐",
+    "✨",
+    "☄️",
+    "🌈",
+    "❄️",
+    "🌊",
+    "🎯",
+    "🚀",
+    "🛸",
+    "🔭",
+    "🧲",
+    "💡",
+    "🔦",
+    "🗝️",
+    "🦄",
+    "🐙",
+    "🦖",
+    "🦕",
+    "🐧",
+    "🍄",
+    "🌮",
+]
+
+
+def _get_faker():
+    """Return a cached Faker instance if the optional [sim] extra is installed,
+    else None. Names fall back to the built-in adjective+noun pools when absent,
+    so Faker only *improves* names and nothing depends on it."""
+    if _get_faker._cache is not _UNSET:  # type: ignore[attr-defined]
+        return _get_faker._cache  # type: ignore[attr-defined]
+    try:
+        from faker import Faker
+
+        _get_faker._cache = Faker()  # type: ignore[attr-defined]
+    except Exception:
+        _get_faker._cache = None  # type: ignore[attr-defined]
+    return _get_faker._cache  # type: ignore[attr-defined]
+
+
+_UNSET = object()
+_get_faker._cache = _UNSET  # type: ignore[attr-defined]
+
+# Ham-style callsign parts for a callsign-flavored subset (no Faker needed).
+_CALL_PREFIX = ["K", "W", "N", "A", "KJ", "KD", "KC", "WA", "AB", "AC", "AD", "AA"]
+
+
+def _gen_node_name(name_seed: int, fake) -> str:
+    """A synthetic, human-ish node long-name from a per-node seed.
+
+    Deterministic in `name_seed` (its own RNG) so the outer sim RNG stream is
+    unaffected by whether Faker is installed. With Faker: a mix of person names,
+    handles, "<name>'s <device>", and callsigns. Without: the adjective+noun
+    pools. Every value is generated — no real capture identity is used.
+    """
+    r = random.Random(name_seed)
+    if fake is not None:
+        fake.seed_instance(name_seed)
+        style = r.random()
+        if style < 0.40:
+            return fake.name()
+        if style < 0.62:
+            return f"{fake.first_name()}'s {r.choice(_NOUN)}"
+        if style < 0.80:
+            return fake.user_name()
+        if style < 0.92:
+            return _callsign(r)
+        return f"{fake.city()} {r.choice(_NOUN)}"
+    return f"{r.choice(_ADJ)} {r.choice(_NOUN)}"
+
+
+def _callsign(r: random.Random) -> str:
+    """A ham-style callsign, e.g. `KJ7ABC` (synthetic — not a real license)."""
+    suffix = "".join(r.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ") for _ in range(3))
+    return f"{r.choice(_CALL_PREFIX)}{r.randint(0, 9)}{suffix}"
+
+
+def _short_from_long(long: str) -> str:
+    """A ≤4-char alnum short name derived from a long name (initials/prefix)."""
+    words = [w for w in "".join(c if c.isalnum() or c == " " else " " for c in long).split() if w]
+    if len(words) >= 2:
+        return (words[0][:2] + words[1][:2]).title()[:4]
+    alnum = "".join(c for c in long if c.isalnum())
+    return (alnum[:4] or "NODE").title()
+
 
 _CHATTER = {
     "LongFast": [
@@ -955,6 +1090,10 @@ def _build_nodes(
     used: set[int] = set()
     cl_w = [(c, c[4]) for c in P["clusters"]]
     ridx = 0
+    fake = _get_faker()  # None unless the [sim] extra is installed
+    emoji_frac = P.get("emoji_short_fraction", 0.35)
+    pki_frac = P.get("pki_fraction", 0.6)
+    verified_frac = P.get("key_verified_fraction", 0.15)
     for i in range(nodes):
         while True:
             num = rng.randint(0x10000000, 0xEFFFFFFF)
@@ -972,8 +1111,19 @@ def _build_nodes(
             short = "".join(ch for ch in long if ch.isalnum())[:4].upper()
             ridx += 1
         else:
-            a, n = rng.choice(_ADJ), rng.choice(_NOUN)
-            long, short = f"{a} {n}", (a[:2] + n[:2]).title()
+            # per-node name seed keeps the outer rng stream identical whether or
+            # not Faker is installed (only the name string differs).
+            long = _gen_node_name(rng.getrandbits(32), fake)
+            short = (
+                rng.choice(_EMOJI_SHORT) if rng.random() < emoji_frac else _short_from_long(long)
+            )
+        # 2.8 signed node data: a public key on the ~pki_frac of nodes running
+        # 2.8+ firmware, a slice of which the connected device has verified.
+        if rng.random() < pki_frac:
+            pubkey = bytes(rng.getrandbits(8) for _ in range(32))
+            verified = rng.random() < verified_frac
+        else:
+            pubkey, verified = None, False
         lat, lon = _jitter(rng, cl[1], cl[2], cl[3])
         mobile = role == "TRACKER" or cl[0] == "Rovers"
         # Talkativeness: real meshes are heavily skewed (top ~1% of nodes carry a
@@ -1011,6 +1161,8 @@ def _build_nodes(
                 role,
                 int(lat * 1e7),
                 int(lon * 1e7),
+                public_key=pubkey,
+                key_verified=verified,
             )
         )
         meta.append(
@@ -1655,6 +1807,8 @@ def _pl_nodeinfo(nr: NodeRow):
     u.short_name = nr.short_name or nr.node_id[-4:]
     u.hw_model = _enum(mesh_pb2.HardwareModel, nr.hw_model)
     u.role = _enum(config_pb2.Config.DeviceConfig.Role, nr.role)
+    if nr.public_key:  # 2.8 nodes advertise their PKC public key in NodeInfo
+        u.public_key = nr.public_key
     return u.SerializeToString()
 
 

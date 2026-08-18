@@ -60,6 +60,10 @@ class NodeRow:
     role: str | None = None
     lat_i: int | None = None
     lon_i: int | None = None
+    # 2.8 signed node data: the node's PKC public key (32 bytes) and whether the
+    # connected device has manually verified it. None => a pre-2.8 / keyless node.
+    public_key: bytes | None = None
+    key_verified: bool = False
 
 
 @dataclass
@@ -434,6 +438,9 @@ def node_to_nodeinfo(n: NodeRow, *, last_heard: int) -> mesh_pb2.NodeInfo:
     ni.user.short_name = n.short_name or ni.user.id[-4:]
     ni.user.hw_model = _enum(mesh_pb2.HardwareModel, n.hw_model)
     ni.user.role = _enum(config_pb2.Config.DeviceConfig.Role, n.role)
+    if n.public_key:  # 2.8 signed node data: PKC key + manual-verification flag
+        ni.user.public_key = n.public_key
+        ni.is_key_manually_verified = n.key_verified
     if n.lat_i and n.lon_i:
         ni.position.latitude_i = n.lat_i
         ni.position.longitude_i = n.lon_i

@@ -267,11 +267,15 @@ def _write_sqlite(path, cap) -> None:
     conn.close()
 
 
-def test_all_sim_data_is_synthetic():
+def test_all_sim_data_is_synthetic(monkeypatch):
     # The sim is informed by *aggregate stats* from real captures, but every
     # identity/position/message must be generated. Guard the PII vectors.
     from meshtastic_mcp.replay import sim as _sim
 
+    # Force the built-in name path (Faker off) so the guard is deterministic and
+    # independent of whether the optional [sim] extra is installed. Faker names
+    # are themselves synthetic; the pool path is the one with a checkable shape.
+    monkeypatch.setattr(_sim, "_get_faker", lambda: None)
     cap = _sim.generate(nodes=80, days=1, seed=5, start=1_700_000_000)
     router_names = set(_sim._ROUTER_NAMES)
     for n in cap.nodes:
@@ -295,6 +299,81 @@ def test_all_sim_data_is_synthetic():
         if mp.decoded.portnum == 1:
             txt = mp.decoded.payload.decode("utf-8", "replace")
             assert any(txt.startswith(t) for t in templates), txt
+
+
+# ── Node identity: emoji short names + 2.8 signed node data ─────────────────
+def test_sim_emoji_shortnames_and_pki_keys():
+    """A share of nodes get emoji short names, and ~pki_fraction advertise a
+    32-byte PKC public key (2.8 signed node data) with a verified subset — and
+    both ride the NodeInfo the app downloads.
+    """
+    from meshtastic_mcp.replay import capture, sim
+
+    cap = sim.generate(nodes=300, days=1, seed=8, start=1_700_000_000)
+    emoji_pool = set(sim._EMOJI_SHORT)
+    emoji = [n for n in cap.nodes if n.short_name in emoji_pool]
+    keyed = [n for n in cap.nodes if n.public_key]
+    verified = [n for n in cap.nodes if n.key_verified]
+    assert len(emoji) > 30  # a meaningful emoji-short population
+    assert 0.4 * len(cap.nodes) < len(keyed) < 0.8 * len(cap.nodes)  # ~pki_fraction
+    assert all(len(n.public_key) == 32 for n in keyed)  # Curve25519-sized keys
+    assert verified  # some manually-verified
+    assert {n.num for n in verified}.issubset({n.num for n in keyed})  # verified ⊆ keyed
+
+    # the key + manual-verification flag reach the app via the node-DB NodeInfo
+    ni = capture.node_to_nodeinfo(keyed[0], last_heard=1)
+    assert len(ni.user.public_key) == 32
+    assert capture.node_to_nodeinfo(verified[0], last_heard=1).is_key_manually_verified is True
+    # a keyless (pre-2.8) node advertises no key and is unverified
+    keyless = next(n for n in cap.nodes if not n.public_key)
+    assert not capture.node_to_nodeinfo(keyless, last_heard=1).user.public_key
+
+
+def test_pki_and_emoji_fractions_are_tunable():
+    from meshtastic_mcp.replay import sim
+
+    prof = {"pki_fraction": 0.0, "emoji_short_fraction": 0.0}
+    cap = sim.generate(nodes=100, days=1, seed=2, start=1_700_000_000, profile=prof)
+    assert all(n.public_key is None for n in cap.nodes)  # PKI fully off
+    assert all(n.short_name not in set(sim._EMOJI_SHORT) for n in cap.nodes)
+
+
+def test_faker_name_path_used_when_available():
+    """When Faker is present, node long-names come from it (richer than the
+    adj+noun pool); the generator stays deterministic in its per-node seed.
+    """
+    from meshtastic_mcp.replay import sim
+
+    class _StubFaker:
+        def __init__(self):
+            self._n = 0
+
+        def seed_instance(self, s):
+            self._n = s
+
+        def name(self):
+            return f"Person{self._n % 1000}"
+
+        def first_name(self):
+            return "Sam"
+
+        def user_name(self):
+            return f"user{self._n % 1000}"
+
+        def city(self):
+            return "Metropolis"
+
+    seed = 123456789
+    a = sim._gen_node_name(seed, _StubFaker())
+    b = sim._gen_node_name(seed, _StubFaker())
+    assert a == b  # deterministic in the seed
+    # a Faker-flavored name is not a bare "<Adj> <Noun>" from the fallback pool
+    adj, _, noun = a.partition(" ")
+    assert not (adj in sim._ADJ and noun in sim._NOUN) or "Person" in a or "user" in a
+    # fallback (no Faker) is the adjective+noun pool
+    fb = sim._gen_node_name(seed, None)
+    fadj, _, fnoun = fb.partition(" ")
+    assert fadj in sim._ADJ and fnoun in sim._NOUN
 
 
 # ── Fuzzer ───────────────────────────────────────────────────────────────────
