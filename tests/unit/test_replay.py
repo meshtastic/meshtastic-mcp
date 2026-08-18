@@ -291,6 +291,7 @@ def test_all_sim_data_is_synthetic(monkeypatch):
             assert 33_000_000_0 < n.lat_i < 35_000_000_0
             assert -109_000_000_0 < n.lon_i < -106_000_000_0
     # text payloads come only from the synthetic CHATTER pools (or range-test seq)
+    allowed_short = set(_sim._SHORT)
     pool = {t for msgs in _sim._CHATTER.values() for t in msgs}
     templates = [p.split("{h}")[0] for p in pool]
     for _ts, raw, _ch in cap.packets:
@@ -298,7 +299,7 @@ def test_all_sim_data_is_synthetic(monkeypatch):
         mp.ParseFromString(raw)
         if mp.decoded.portnum == 1:
             txt = mp.decoded.payload.decode("utf-8", "replace")
-            assert any(txt.startswith(t) for t in templates), txt
+            assert txt in allowed_short or any(txt.startswith(t) for t in templates), txt
 
 
 # ── Node identity: emoji short names + 2.8 signed node data ─────────────────

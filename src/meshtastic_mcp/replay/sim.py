@@ -470,10 +470,10 @@ _EMOJI_SHORT = [
     "🔥",
     "⚡",
     "📡",
-    "🛰️",
+    "🛰",
     "🗼",
     "🌵",
-    "🏜️",
+    "🏜",
     "🌄",
     "🦅",
     "🦉",
@@ -491,8 +491,8 @@ _EMOJI_SHORT = [
     "💀",
     "🎃",
     "👾",
-    "🕹️",
-    "🎛️",
+    "🕹",
+    "🎛",
     "🔋",
     "🔌",
     "📶",
@@ -501,15 +501,15 @@ _EMOJI_SHORT = [
     "⛺",
     "🚐",
     "🚙",
-    "🏔️",
+    "🏔",
     "🌲",
-    "☀️",
+    "☀",
     "🌙",
     "⭐",
     "✨",
-    "☄️",
+    "☄",
     "🌈",
-    "❄️",
+    "❄",
     "🌊",
     "🎯",
     "🚀",
@@ -518,7 +518,7 @@ _EMOJI_SHORT = [
     "🧲",
     "💡",
     "🔦",
-    "🗝️",
+    "🗝",
     "🦄",
     "🐙",
     "🦖",
@@ -534,18 +534,18 @@ _EMOJI_SHORT = [
 _INFRA_EMOJI = [
     "🗼",  # tower
     "📡",  # dish / relay
-    "🛰️",  # satellite
+    "🛰",  # satellite
     "🛜",  # wireless
-    "🕸️",  # the mesh itself
+    "🕸",  # the mesh itself
     "🔀",  # a router, routing
     "🚦",  # traffic control
     "🏃",  # relay runner
     "🧭",  # always points the way
-    "🗄️",  # the server rack
+    "🗄",  # the server rack
     "🌐",  # the network
     "📶",  # full bars, always
     "⚡",  # mains-powered, never sleeps
-    "🎛️",  # the mixing board
+    "🎛",  # the mixing board
 ]
 
 
