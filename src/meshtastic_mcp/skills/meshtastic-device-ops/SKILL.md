@@ -100,6 +100,63 @@ the hub port with `uhubctl_list` / `uhubctl_power` / `uhubctl_cycle`.
 > `meshtastic-mcp doctor` — it will detect the permission issue and print
 > the exact `sudo curl … && sudo udevadm trigger` command to fix it.
 
+### BLE OTA DFU (manual — no MCP tool covers this yet)
+
+Every `flash`/`pio_flash`/`nrfutil_dfu` path above is USB (serial or UF2). There is
+no MCP tool for the *wireless* leg — the Nordic legacy BLE DFU that the Meshtastic
+Android app uses for its in-app bootloader/firmware upgrade, and that an
+Adafruit/OTAFIX-family nRF52 bootloader (e.g. `meshtastic/Adafruit_nRF52_Bootloader_OTAFIX`)
+speaks natively. To validate that path from a dev machine instead of a phone:
+
+1. **Buttonless jump from app mode.** The running Meshtastic firmware exposes a
+   Nordic Secure DFU service (`0xFE59`) with one write-only control characteristic
+   (`8ec90003-...`, or the 128-bit UUID under `0x1531` on some stacks) — write
+   `0x01` to it and the node disconnects and reboots into the bootloader,
+   advertising under a new BLE name (nRF52 OTAFIX boards use `<BOARD>_DFU`, e.g.
+   `4631_DFU` for RAK4631 — see that repo's README "BLE advertising names" table).
+2. **Legacy DFU transfer in bootloader mode.** The bootloader's GATT service is
+   the older Nordic Legacy DFU (`00001530-1212-efde-1523-785feabcd123`, control
+   point `...1531`, data `...1532`). [`recrof/nrf_dfu_py`](https://github.com/recrof/nrf_dfu_py)
+   (pure Python + `bleak`, already a transitive dep here) speaks both legs and is
+   the known-working reference: `dfu_cli.py <firmware-or-bootloader.zip> <device-name-or-addr>`.
+   Use the `*-ota.zip` release asset (not the `.uf2`/`.hex`) — that's the Nordic DFU
+   package format both legs expect.
+3. **Finding the device's BLE name is not a lookup, it's a scan-and-match.** The
+   app's advertised name is `<short_name>_<hex><hex>` where the hex suffix is the
+   last two bytes of the nRF52's FICR `DEVICEADDR` (`getDeviceName()` in
+   `firmware/src/main.cpp`) — **not** derived from `my_node_num`/`device_info`'s
+   node id in any way you can compute offline. Scan (`BleakScanner.discover`) and
+   match by the known `short_name` prefix instead of trying to predict the suffix.
+4. **`bluetooth.mode = RANDOM_PIN` needs a human or the app watching for the
+   passkey — a scripted client alone can't complete pairing.** The firmware
+   generates and logs the 6-digit passkey (`LOG_INFO("BLE pair process
+   started with passkey ...")` in `NRF52Bluetooth::onPairingPasskey`) and
+   shows it on-screen only `#if HAS_SCREEN` (most RAK4631 builds, e.g. the
+   WisMesh Pocket, have none) — otherwise it's only visible via a live debug
+   log (`set_debug_log_api`) or the Meshtastic app's own pairing UI. Neither
+   was being watched in a scripted `bleak` session, so the OS pairing prompt
+   sat with nothing to type in and the connection was dropped. This is
+   expected `RANDOM_PIN` behavior, not a bug — switch to `FIXED_PIN` (a value
+   you already know) for scripted/headless testing instead of chasing it.
+   Separately, firmware `develop` (2.8) does carry two real nRF52 BLE-pairing
+   fixes not yet in 2.7.x that are worth knowing about if pairing looks
+   flaky on a 2.7.x build: a passkey callback that wasn't restored after a
+   BT disable/re-enable cycle without a reboot (#11027), and a BLE-task
+   stack overflow that could crash the device mid-pairing on nrf52840
+   targets (#11190).
+
+**macOS-specific friction**, all one-time per machine/device pair, not per session:
+- Bluetooth must be explicitly on (Control Center) — `bleak`/CoreBluetooth error
+  clearly (`BleakBluetoothNotAvailableError: POWERED_OFF`) when it isn't, so this
+  fails fast rather than silently.
+- The terminal app driving the script needs Bluetooth permission granted
+  (System Settings → Privacy & Security → Bluetooth) — without it, scanning
+  either errors or (confusingly) just finds nothing.
+- A newly-enumerated USB device can trigger a silent macOS "accessory" permission
+  popup that hides the port from `list_devices`/`ls /dev/cu.*` until approved —
+  if a device that was just flashed or reset seems to vanish from USB entirely,
+  check for that popup before assuming a bad flash.
+
 ## Hardware UI (OLED) checks
 
 `send_input_event` drives the device's buttons; `capture_screen` grabs the OLED (camera/OCR
