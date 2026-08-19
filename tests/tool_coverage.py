@@ -98,6 +98,17 @@ _TOOL_MAP: dict[str, tuple[str, str]] = {
     "picotool_info": ("meshtastic_mcp.hw_tools", "picotool_info"),
     "picotool_load": ("meshtastic_mcp.hw_tools", "picotool_load"),
     "picotool_raw": ("meshtastic_mcp.hw_tools", "picotool_raw"),
+    # Android app-plane driving
+    "android_ui_dump": ("meshtastic_mcp.emulator.avd", "ui_dump"),
+    "android_screenshot": ("meshtastic_mcp.emulator.avd", "screenshot"),
+    "android_resolve": ("meshtastic_mcp.emulator.avd", "resolve_label"),
+    "android_tap": ("meshtastic_mcp.emulator.avd", "tap"),
+    "android_swipe": ("meshtastic_mcp.emulator.avd", "swipe"),
+    "android_type_text": ("meshtastic_mcp.emulator.avd", "type_text"),
+    "android_find_text": ("meshtastic_mcp.emulator.avd", "find_text"),
+    "android_poll_for_text": ("meshtastic_mcp.emulator.avd", "poll_for_text"),
+    "android_clear_logcat": ("meshtastic_mcp.emulator.avd", "clear_logcat"),
+    "android_read_logcat": ("meshtastic_mcp.emulator.avd", "read_logcat"),
 }
 
 

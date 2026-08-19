@@ -215,3 +215,146 @@ def test_connect_app_to_tcp_falls_back_to_ui_taps_when_deeplink_never_confirms(m
 
     ok = avd.connect_app_to_tcp(host="192.0.2.68", port=4403, confirm_timeout_s=0.01)
     assert ok is False  # UI-tap flow ran but "Add device manually" was never found
+
+
+def test_parse_uiautomator_xml_includes_bounds_and_label() -> None:
+    xml = (
+        '<?xml version="1.0"?><hierarchy>'
+        '<node text="A" bounds="[10,20][110,220]">'
+        '<node text="B" bounds="[10,20][60,70]" clickable="true"/>'
+        "</node>"
+        "</hierarchy>"
+    )
+    els = avd._parse_uiautomator_xml(xml)
+    assert els[0]["text"] == "A"
+    assert els[0]["bounds"] == [10, 20, 110, 220]
+    assert els[0]["label"] == 1
+    assert els[1]["text"] == "B"
+    assert els[1]["bounds"] == [10, 20, 60, 70]
+    assert els[1]["label"] == 2
+
+
+def test_parse_uiautomator_xml_skips_label_without_bounds() -> None:
+    xml = '<?xml version="1.0"?><hierarchy><node text="no-bounds"/></hierarchy>'
+    els = avd._parse_uiautomator_xml(xml)
+    assert "bounds" not in els[0]
+    assert "label" not in els[0]
+
+
+def test_annotate_screenshot_draws_boxes(tmp_path) -> None:
+    from PIL import Image
+
+    png_path = tmp_path / "shot.png"
+    Image.new("RGB", (200, 200), color="white").save(png_path)
+    elements = [
+        {"text": "Send", "bounds": [10, 10, 60, 40], "label": 1},
+        {"text": "no-bounds-no-label"},
+    ]
+    avd.annotate_screenshot(png_path, elements)
+    img = Image.open(png_path)
+    # The box outline was drawn in red along the top edge of element 1's bounds.
+    assert img.getpixel((10, 10))[0] > 200  # red channel high at the box corner
+    assert img.getpixel((10, 10))[1] < 100  # green channel low (not white anymore)
+
+
+@pytest.fixture(autouse=True)
+def _clear_last_annotated():
+    # _LAST_ANNOTATED is process-global cache state (keyed by serial); tests
+    # in this module set arbitrary serials, but clear before each test so a
+    # leftover key from one test can never leak into another's assertions.
+    avd._LAST_ANNOTATED.clear()
+    yield
+    avd._LAST_ANNOTATED.clear()
+
+
+def test_resolve_label_physical_uses_cached_elements(monkeypatch) -> None:
+    avd._LAST_ANNOTATED["phys-serial"] = {
+        "screenshot": "/tmp/whatever.png",
+        "elements": [{"text": "Send", "bounds": [10, 10, 60, 40], "label": 1}],
+    }
+    assert avd.resolve_label(1, serial="phys-serial") == (35, 25)
+
+
+def test_resolve_label_physical_missing_label_raises() -> None:
+    avd._LAST_ANNOTATED["phys-serial"] = {
+        "screenshot": "/tmp/whatever.png",
+        "elements": [{"text": "Send", "bounds": [10, 10, 60, 40], "label": 1}],
+    }
+    with pytest.raises(avd.EmulatorError, match="not found"):
+        avd.resolve_label(99, serial="phys-serial")
+
+
+def test_resolve_label_no_screenshot_yet_raises() -> None:
+    with pytest.raises(avd.EmulatorError, match="no annotated screenshot"):
+        avd.resolve_label(1, serial="never-captured")
+
+
+def _png_bytes() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (200, 200), color="white").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_screenshot_plain_capture_invalidates_stale_annotation_cache(monkeypatch, tmp_path) -> None:
+    # Regression: a plain (annotate=False) capture at the same path/serial must
+    # invalidate any cached annotation, or resolve_label keeps resolving against
+    # stale/wrong content after the on-disk file is no longer annotated.
+    serial = "R5CT80ABCDE"  # physical (non-emulator) serial
+    png_bytes = _png_bytes()
+
+    def fake_run(cmd, *, stdout, stderr, timeout):
+        stdout.write(png_bytes)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(avd, "_adb_bin", lambda: "adb")
+    monkeypatch.setattr(avd.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        avd,
+        "ui_dump",
+        lambda serial=None: [
+            {
+                "text": "Send",
+                "bounds": [10, 10, 60, 40],
+                "label": 1,
+                "interactions": ["clickable"],
+            }
+        ],
+    )
+
+    out_path = tmp_path / "shot.png"
+
+    avd.screenshot(out_path, serial=serial, annotate=True)
+    assert avd.resolve_label(1, serial=serial) == (35, 25)
+
+    # A subsequent plain capture at the same serial must clear the cache.
+    avd.screenshot(out_path, serial=serial, annotate=False)
+    with pytest.raises(avd.EmulatorError, match="no annotated screenshot"):
+        avd.resolve_label(1, serial=serial)
+
+
+def test_resolve_label_emulator_shells_out_to_android_resolve(monkeypatch) -> None:
+    avd._LAST_ANNOTATED["emulator-5554"] = {
+        "screenshot": "/tmp/ui.png",
+        "elements": None,
+    }
+    calls = []
+
+    def fake_android(*args, **kwargs):
+        calls.append(args)
+        return _cp("input tap 500 1000")
+
+    monkeypatch.setattr(avd, "android", fake_android)
+    coords = avd.resolve_label(5, serial="emulator-5554")
+    assert coords == (500, 1000)
+    assert calls[0] == (
+        "screen",
+        "resolve",
+        "--screenshot",
+        "/tmp/ui.png",
+        "--string",
+        "#5",
+    )

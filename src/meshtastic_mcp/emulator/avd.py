@@ -40,6 +40,11 @@ from typing import Any
 EMULATOR_HOST_ALIAS = "10.0.2.2"
 DEFAULT_TCP_PORT = 4403
 
+# Cache of the most recent annotate=True screenshot per serial (or "" for the
+# default device), keyed the same way the rest of this module keys per-device
+# state. Populated by screenshot(); read by resolve_label().
+_LAST_ANNOTATED: dict[str, dict[str, Any]] = {}
+
 # Known Meshtastic-Android applicationIds, most-specific first. The fdroid debug
 # build is preferred for e2e (no Play Services deps; TCP connect works everywhere).
 # See scripts/build_android_apk.sh's --variant default (assembleFdroidDebug).
@@ -525,9 +530,13 @@ def _parse_uiautomator_xml(xml_text: str) -> list[dict[str, Any]]:
     """Flatten uiautomator XML into the same dict schema as `android layout` JSON.
 
     Schema per element: text, interactions (list), center ([x, y]), and
-    optionally content_desc / resource_id.
+    optionally content_desc / resource_id / bounds ([x1, y1, x2, y2]) / label
+    (stable per-call int, assigned in walk order — only present alongside
+    bounds). label is a local convention for the physical-device annotation
+    path (Task 2); it has no relation to the emulator's own labeling.
     """
     nodes: list[dict[str, Any]] = []
+    next_label = [1]
 
     def _walk(node: ET.Element) -> None:
         interactions = []
@@ -539,6 +548,7 @@ def _parse_uiautomator_xml(xml_text: str) -> list[dict[str, Any]]:
             interactions.append("scrollable")
 
         center: list[int] | None = None
+        bounds_rect: list[int] | None = None
         bounds = node.get("bounds", "")
         if bounds:
             # Allow negative coords: partially off-screen views report e.g.
@@ -549,6 +559,7 @@ def _parse_uiautomator_xml(xml_text: str) -> list[dict[str, Any]]:
                 x1, y1 = int(coords[0][0]), int(coords[0][1])
                 x2, y2 = int(coords[1][0]), int(coords[1][1])
                 center = [(x1 + x2) // 2, (y1 + y2) // 2]
+                bounds_rect = [x1, y1, x2, y2]
 
         el: dict[str, Any] = {
             "text": node.get("text", ""),
@@ -556,6 +567,10 @@ def _parse_uiautomator_xml(xml_text: str) -> list[dict[str, Any]]:
         }
         if center is not None:
             el["center"] = center
+        if bounds_rect is not None:
+            el["bounds"] = bounds_rect
+            el["label"] = next_label[0]
+            next_label[0] += 1
         if cd := node.get("content-desc", ""):
             el["content_desc"] = cd
         if rid := node.get("resource-id", ""):
@@ -622,7 +637,9 @@ def screenshot(out_path: str | Path, *, serial: str | None = None, annotate: boo
     """Capture a screenshot to `out_path`.
 
     Emulator: uses ``android screen capture`` (supports --annotate).
-    Physical device: uses ``adb exec-out screencap -p`` (annotate ignored).
+    Physical device: uses ``adb exec-out screencap -p``; when annotate=True,
+    boxes are drawn ourselves via `annotate_screenshot` (the android CLI's
+    --annotate is emulator-only).
     """
     out_path = Path(out_path)
     if serial and not is_emulator(serial):
@@ -644,7 +661,21 @@ def screenshot(out_path: str | Path, *, serial: str | None = None, annotate: boo
         if proc.returncode != 0:
             tmp.unlink(missing_ok=True)
             raise EmulatorError(f"screencap failed: {proc.stderr.decode(errors='replace').strip()}")
-        os.replace(tmp, out_path)
+        if annotate:
+            elements = ui_dump(serial=serial)
+            # Annotate the temp file (not the final path) so the existing
+            # os.replace() below moves an already-annotated file into place
+            # atomically — a crash/timeout mid-save never leaves a partially
+            # annotated PNG at out_path.
+            annotate_screenshot(tmp, elements)
+            os.replace(tmp, out_path)
+            _LAST_ANNOTATED[serial or ""] = {"screenshot": out_path, "elements": elements}
+        else:
+            os.replace(tmp, out_path)
+            # A plain capture at this path/serial invalidates any cached
+            # annotation — the file on disk is no longer what _LAST_ANNOTATED
+            # describes, so resolve_label must not resolve against it.
+            _LAST_ANNOTATED.pop(serial or "", None)
         return out_path
     args = ["screen", "capture", "-o", str(out_path)]
     if annotate:
@@ -652,7 +683,93 @@ def screenshot(out_path: str | Path, *, serial: str | None = None, annotate: boo
     if serial:
         args += ["--device", serial]
     android(*args)
+    if annotate:
+        _LAST_ANNOTATED[serial or ""] = {"screenshot": out_path, "elements": None}
+    else:
+        _LAST_ANNOTATED.pop(serial or "", None)
     return out_path
+
+
+def annotate_screenshot(png_path: str | Path, elements: list[dict[str, Any]]) -> None:
+    """Draw labeled bounding boxes onto `png_path` in place.
+
+    Matches the `#<label>` convention `android screen resolve` uses on the
+    emulator path. Used for physical devices only — the emulator path gets
+    annotation for free from `android screen capture --annotate`. Requires
+    the `[ui]` extra (Pillow); raises EmulatorError if unavailable.
+
+    Only elements with visible content or interactivity — a non-empty
+    `interactions` list, non-empty `text`, or non-empty `content_desc` — get a
+    box drawn. A real uiautomator dump commonly has 50-150 elements, most of
+    them purely structural containers (layout wrappers, a full-screen root)
+    with no visible affordance; boxing all of them makes the image unreadable
+    and defeats the point of annotation. This is a rendering choice only —
+    every element with `bounds`+`label` is still labeled in the underlying
+    element list (see `_parse_uiautomator_xml`), so `resolve_label` keeps
+    working for labels whose box wasn't drawn.
+    """
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError as exc:
+        raise EmulatorError(
+            "screenshot annotation needs Pillow — install the `[ui]` extra"
+        ) from exc
+
+    img = Image.open(png_path).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    for el in elements:
+        bounds = el.get("bounds")
+        label = el.get("label")
+        if bounds is None or label is None:
+            continue
+        if not (el.get("interactions") or el.get("text") or el.get("content_desc")):
+            continue
+        x1, y1, x2, y2 = bounds
+        # Real devices can report inverted/malformed rects (e.g. partially
+        # off-screen negative coords); normalize ordering so
+        # ImageDraw.rectangle (which requires x1<=x2, y1<=y2) never raises.
+        x1, x2 = sorted((x1, x2))
+        y1, y2 = sorted((y1, y2))
+        draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
+        draw.text((x1 + 2, y1 + 2), f"#{label}", fill="red")
+    img.save(png_path, format="PNG")
+
+
+def resolve_label(label: int, serial: str | None = None) -> tuple[int, int]:
+    """Return (x, y) for a `#<label>` drawn by the most recent
+    `screenshot(..., annotate=True)` call for `serial`.
+
+    Emulator: delegates to `android screen resolve` against the cached
+    screenshot path. Physical: looks up the label in the cached element
+    list directly — no CLI round-trip, since we drew the boxes ourselves.
+    """
+    key = serial or ""
+    cached = _LAST_ANNOTATED.get(key)
+    if cached is None:
+        raise EmulatorError(
+            f"no annotated screenshot captured yet for serial={serial!r}; "
+            "call screenshot(..., annotate=True) first"
+        )
+    if serial and not is_emulator(serial):
+        for el in cached["elements"] or []:
+            if el.get("label") == label:
+                x1, y1, x2, y2 = el["bounds"]
+                return ((x1 + x2) // 2, (y1 + y2) // 2)
+        raise EmulatorError(f"label #{label} not found in last annotated screenshot")
+
+    args = [
+        "screen",
+        "resolve",
+        "--screenshot",
+        str(cached["screenshot"]),
+        "--string",
+        f"#{label}",
+    ]
+    out = android(*args).stdout.strip()
+    match = re.search(r"(-?\d+)\s+(-?\d+)\s*$", out)
+    if not match:
+        raise EmulatorError(f"could not parse coordinates from `android screen resolve`: {out!r}")
+    return (int(match.group(1)), int(match.group(2)))
 
 
 def find_text(token: str, serial: str | None = None) -> bool:
