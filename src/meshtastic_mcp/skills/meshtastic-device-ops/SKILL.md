@@ -108,25 +108,38 @@ Android app uses for its in-app bootloader/firmware upgrade, and that an
 Adafruit/OTAFIX-family nRF52 bootloader (e.g. `meshtastic/Adafruit_nRF52_Bootloader_OTAFIX`)
 speaks natively. To validate that path from a dev machine instead of a phone:
 
-1. **Buttonless jump from app mode.** The running Meshtastic firmware exposes a
-   Nordic Secure DFU service (`0xFE59`) with one write-only control characteristic
-   (`8ec90003-...`, or the 128-bit UUID under `0x1531` on some stacks) — write
-   `0x01` to it and the node disconnects and reboots into the bootloader,
-   advertising under a new BLE name (nRF52 OTAFIX boards use `<BOARD>_DFU`, e.g.
-   `4631_DFU` for RAK4631 — see that repo's README "BLE advertising names" table).
-2. **Legacy DFU transfer in bootloader mode.** The bootloader's GATT service is
-   the older Nordic Legacy DFU (`00001530-1212-efde-1523-785feabcd123`, control
-   point `...1531`, data `...1532`). [`recrof/nrf_dfu_py`](https://github.com/recrof/nrf_dfu_py)
-   (pure Python + `bleak`, already a transitive dep here) speaks both legs and is
-   the known-working reference: `dfu_cli.py <firmware-or-bootloader.zip> <device-name-or-addr>`.
-   Use the `*-ota.zip` release asset (not the `.uf2`/`.hex`) — that's the Nordic DFU
-   package format both legs expect.
-3. **Finding the device's BLE name is not a lookup, it's a scan-and-match.** The
-   app's advertised name is `<short_name>_<hex><hex>` where the hex suffix is the
+1. **Buttonless jump from app mode is one of two GATT services, chosen at compile
+   time — check which before assuming a UUID.** `NRF52Bluetooth.cpp` picks
+   `BLEDfuSecure` (Nordic Secure DFU, service `0xFE59`, control characteristic
+   `8ec90003-f315-4f60-9fb8-838830daea50`) only when the board's `variant.h`
+   defines `BLE_DFU_SECURE` — today that's `wio-t1000-s` alone. Every other
+   nRF52 board, **including RAK4631**, falls through to plain `BLEDfu`
+   (Adafruit's Bluefruit library): legacy service `00001530-...`, control
+   characteristic `00001531-...`. Either way: enable notifications/indications
+   on the control characteristic, write `0x01` to it, and the node disconnects
+   and reboots into the bootloader, advertising under a new BLE name (OTAFIX
+   boards use `<BOARD>_DFU`, e.g. `4631_DFU` for RAK4631 — see that repo's
+   README "BLE advertising names" table).
+2. **Legacy DFU transfer in bootloader mode.** The bootloader's own GATT
+   service is always the older Nordic Legacy DFU (`00001530-...`, control
+   point `...1531`, data `...1532`) regardless of which service the app used
+   to jump there. [`recrof/nrf_dfu_py`](https://github.com/recrof/nrf_dfu_py)
+   (pure Python + `bleak`) speaks it and is the known-working reference —
+   clone it, `pip install bleak`, then from that checkout:
+   `python3 dfu_cli.py --scan <firmware-or-bootloader.zip> <device-name-or-addr>`.
+   Use the `*-ota.zip` release asset (not the `.uf2`/`.hex`) — that's the format
+   this DFU protocol expects.
+3. **Finding the device's BLE name is a scan-and-match, and a name prefix can be
+   ambiguous — resolve it to exactly one device before acting.** The app's
+   advertised name is `<short_name>_<hex><hex>` where the hex suffix is the
    last two bytes of the nRF52's FICR `DEVICEADDR` (`getDeviceName()` in
    `firmware/src/main.cpp`) — **not** derived from `my_node_num`/`device_info`'s
-   node id in any way you can compute offline. Scan (`BleakScanner.discover`) and
-   match by the known `short_name` prefix instead of trying to predict the suffix.
+   node id in any way you can compute offline. Scan (`BleakScanner.discover`)
+   and match by the known `short_name` prefix, but confirm the scan turned up
+   exactly one match before connecting: `nrf_dfu_py` (and most such tools)
+   connects to the first match among the names/addresses you give it, so an
+   ambiguous prefix on a mesh with more than one device sharing it can jump or
+   flash the wrong node.
 4. **`bluetooth.mode = RANDOM_PIN` needs a human or the app watching for the
    passkey — a scripted client alone can't complete pairing.** The firmware
    generates and logs the 6-digit passkey (`LOG_INFO("BLE pair process
@@ -138,6 +151,10 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    sat with nothing to type in and the connection was dropped. This is
    expected `RANDOM_PIN` behavior, not a bug — switch to `FIXED_PIN` (a value
    you already know) for scripted/headless testing instead of chasing it.
+   `get_config`-read the current `bluetooth.mode`/`fixed_pin` *before* changing
+   anything, and restore them (`set_config` + `reboot` + `get_config` to
+   confirm) once testing is done — a device left in `FIXED_PIN` carries a
+   known, reusable pairing credential indefinitely otherwise.
    Separately, firmware `develop` (2.8) does carry two real nRF52 BLE-pairing
    fixes not yet in 2.7.x that are worth knowing about if pairing looks
    flaky on a 2.7.x build: a passkey callback that wasn't restored after a
