@@ -124,11 +124,23 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    service is always the older Nordic Legacy DFU (`00001530-...`, control
    point `...1531`, data `...1532`) regardless of which service the app used
    to jump there. [`recrof/nrf_dfu_py`](https://github.com/recrof/nrf_dfu_py)
-   (pure Python + `bleak`) speaks it and is the known-working reference —
-   clone it, `pip install bleak`, then from that checkout:
+   (pure Python + `bleak`) speaks **only** this legacy service (its
+   `DFU_SERVICE_UUID` constant is the `00001530-...` one, full stop) — it has
+   no path for a `BLE_DFU_SECURE` board like `wio-t1000-s`, so it's a match
+   for RAK4631 and most other nRF52 targets, not a universal tool. Clone it,
+   `pip install bleak`, then from that checkout:
    `python3 dfu_cli.py --scan <firmware-or-bootloader.zip> <device-name-or-addr>`.
    Use the `*-ota.zip` release asset (not the `.uf2`/`.hex`) — that's the format
-   this DFU protocol expects.
+   this DFU protocol expects. One call does both legs unassisted — its
+   `jump_to_bootloader()` sends the exact same 2-byte legacy opcode write
+   described in step 1, then it rescans and transfers — so giving it the
+   **app-mode** name/address up front is usually enough; you don't need a
+   separate manual jump. Do the jump as its own step only when you need to
+   debug the jump in isolation (its post-jump bootloader rescan matches by
+   substring against a literal `"DFU"`/MAC-increment heuristic, not the
+   board's exact advertised name, so once already in bootloader mode,
+   re-running against the bootloader's own `<BOARD>_DFU` name is the more
+   reliable retry).
 3. **Finding the device's BLE name is a scan-and-match, and a name prefix can be
    ambiguous — resolve it to exactly one device before acting.** The app's
    advertised name is `<short_name>_<hex><hex>` where the hex suffix is the
@@ -142,13 +154,19 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    flash the wrong node.
 4. **`bluetooth.mode = RANDOM_PIN` needs a human or the app watching for the
    passkey — a scripted client alone can't complete pairing.** The firmware
-   generates and logs the 6-digit passkey (`LOG_INFO("BLE pair process
-   started with passkey ...")` in `NRF52Bluetooth::onPairingPasskey`) and
-   shows it on-screen only `#if HAS_SCREEN` (most RAK4631 builds, e.g. the
-   WisMesh Pocket, have none) — otherwise it's only visible via a live debug
-   log (`set_debug_log_api`) or the Meshtastic app's own pairing UI. Neither
-   was being watched in a scripted `bleak` session, so the OS pairing prompt
-   sat with nothing to type in and the connection was dropped. This is
+   sends the 6-digit passkey to `BluetoothStatus` (the app's pairing UI reads
+   it from there) and shows it on-screen only `#if HAS_SCREEN` (most RAK4631
+   builds, e.g. the WisMesh Pocket, have none). Whether it's *also* visible in
+   a live debug log (`set_debug_log_api`) depends on the exact firmware
+   build — `onPairingPasskey`'s `LOG_INFO` included the passkey digits in
+   `v2.7.26.54e0d8d` (what this was tested against) and still does on
+   `develop`, but a firmware security fix logged only `match_request` for a
+   stretch of the 2.7.x line in between (redacting pairing secrets from
+   logs) — don't assume the log line carries it on an arbitrary build; the
+   app's pairing UI is the one path guaranteed to receive it regardless.
+   Neither was being watched in a scripted `bleak` session here, so the OS
+   pairing prompt sat with nothing to type in and the connection was
+   dropped. This is
    expected `RANDOM_PIN` behavior, not a bug — switch to `FIXED_PIN` (a value
    you already know) for scripted/headless testing instead of chasing it.
    `get_config`-read the current `bluetooth.mode`/`fixed_pin` *before* changing
