@@ -100,6 +100,106 @@ the hub port with `uhubctl_list` / `uhubctl_power` / `uhubctl_cycle`.
 > `meshtastic-mcp doctor` — it will detect the permission issue and print
 > the exact `sudo curl … && sudo udevadm trigger` command to fix it.
 
+### BLE OTA DFU (manual — no MCP tool covers this yet)
+
+Every `flash`/`pio_flash`/`nrfutil_dfu` path above is USB (serial or UF2). There is
+no MCP tool for the *wireless* leg — the Nordic legacy BLE DFU that the Meshtastic
+Android app uses for its in-app bootloader/firmware upgrade, and that an
+Adafruit/OTAFIX-family nRF52 bootloader (e.g. `meshtastic/Adafruit_nRF52_Bootloader_OTAFIX`)
+speaks natively. To validate that path from a dev machine instead of a phone:
+
+1. **Buttonless jump from app mode is one of two GATT services, chosen at compile
+   time — check which before assuming a UUID.** `NRF52Bluetooth.cpp` picks
+   `BLEDfuSecure` (Nordic Secure DFU, service `0xFE59`, control characteristic
+   `8ec90003-f315-4f60-9fb8-838830daea50`) only when the board's `variant.h`
+   defines `BLE_DFU_SECURE` — today that's `wio-t1000-s` alone. Every other
+   nRF52 board, **including RAK4631**, falls through to plain `BLEDfu`
+   (Adafruit's Bluefruit library): legacy service `00001530-...`, control
+   characteristic `00001531-...`. Either way: enable notifications/indications
+   on the control characteristic, write `0x01` to it, and the node disconnects
+   and reboots into the bootloader, advertising under a new BLE name (OTAFIX
+   boards use `<BOARD>_DFU`, e.g. `4631_DFU` for RAK4631 — see that repo's
+   README "BLE advertising names" table).
+2. **Legacy DFU transfer in bootloader mode.** The bootloader's own GATT
+   service is always the older Nordic Legacy DFU (`00001530-...`, control
+   point `...1531`, data `...1532`) regardless of which service the app used
+   to jump there. [`recrof/nrf_dfu_py`](https://github.com/recrof/nrf_dfu_py)
+   (pure Python + `bleak`) speaks **only** this legacy service (its
+   `DFU_SERVICE_UUID` constant is the `00001530-...` one, full stop) — it has
+   no path for a `BLE_DFU_SECURE` board like `wio-t1000-s`, so it's a match
+   for RAK4631 and most other nRF52 targets, not a universal tool. Clone it,
+   `pip install bleak`, then from that checkout:
+   `python3 dfu_cli.py --scan <firmware-or-bootloader.zip> <device-name-or-addr>`.
+   Use the `*-ota.zip` release asset (not the `.uf2`/`.hex`) — that's the format
+   this DFU protocol expects. One call does both legs unassisted — its
+   `jump_to_bootloader()` sends the exact same 2-byte legacy opcode write
+   described in step 1, then it rescans and transfers — so giving it the
+   **app-mode** name/address up front is usually enough; you don't need a
+   separate manual jump. Do the jump as its own step only when you need to
+   debug the jump in isolation (its post-jump bootloader rescan matches by
+   substring against a literal `"DFU"`/MAC-increment heuristic, not the
+   board's exact advertised name, so once already in bootloader mode,
+   re-running against the bootloader's own `<BOARD>_DFU` name is the more
+   reliable retry).
+3. **Finding the device's BLE name is a scan-and-match, and a name prefix can be
+   ambiguous — resolve it to exactly one device before acting.** The app's
+   advertised name is `<short_name>_<hex><hex>` where the hex suffix is the
+   last two bytes of the nRF52's FICR `DEVICEADDR` (`getDeviceName()` in
+   `firmware/src/main.cpp`) — **not** derived from `my_node_num`/`device_info`'s
+   node id in any way you can compute offline. Scan (`BleakScanner.discover`)
+   and match by the known `short_name` prefix, but confirm the scan turned up
+   exactly one match before connecting: `nrf_dfu_py` (and most such tools)
+   connects to the first match among the names/addresses you give it, so an
+   ambiguous prefix on a mesh with more than one device sharing it can jump or
+   flash the wrong node.
+4. **`bluetooth.mode = RANDOM_PIN` needs a human (or the app) watching for the
+   passkey — an unattended agent session can't complete pairing, screen or no
+   screen.** The firmware sends the 6-digit passkey to `BluetoothStatus` (the
+   app's pairing UI reads it from there) and additionally shows it on-screen
+   `#if HAS_SCREEN` — some RAK4631 builds do have one (e.g. `rak_wismesh_pocket`
+   is explicitly "rak4631 pin map + OLED" in `platformio.ini`; don't assume
+   `hw_model: RAK4631` alone tells you whether the running build has a
+   display). `capture_screen` (see *Hardware UI checks* above) can read an
+   OLED when one's present — worth reaching for on a future attempt, since
+   neither it nor a live debug log was actually checked in real time here;
+   the passkey/display behavior below is reasoned from firmware source
+   after the fact, not confirmed against what this device actually showed.
+   Whether the passkey is visible in a live debug log (`set_debug_log_api`)
+   depends on the exact firmware build — `onPairingPasskey`'s `LOG_INFO`
+   included the passkey digits in
+   `v2.7.26.54e0d8d` (what this was tested against) and still does on
+   `develop`, but a firmware security fix logged only `match_request` for a
+   stretch of the 2.7.x line in between (redacting pairing secrets from
+   logs) — don't assume the log line carries it on an arbitrary build; the
+   app's pairing UI is the one path guaranteed to receive it regardless.
+   Neither was being watched in a scripted `bleak` session here, so the OS
+   pairing prompt sat with nothing to type in and the connection was
+   dropped. This is
+   expected `RANDOM_PIN` behavior, not a bug — switch to `FIXED_PIN` (a value
+   you already know) for scripted/headless testing instead of chasing it.
+   `get_config`-read the current `bluetooth.mode`/`fixed_pin` *before* changing
+   anything, and restore them (`set_config` + `reboot` + `get_config` to
+   confirm) once testing is done — a device left in `FIXED_PIN` carries a
+   known, reusable pairing credential indefinitely otherwise.
+   Separately, firmware `develop` (2.8) does carry two real nRF52 BLE-pairing
+   fixes not yet in 2.7.x that are worth knowing about if pairing looks
+   flaky on a 2.7.x build: a passkey callback that wasn't restored after a
+   BT disable/re-enable cycle without a reboot (#11027), and a BLE-task
+   stack overflow that could crash the device mid-pairing on nrf52840
+   targets (#11190).
+
+**macOS-specific friction**, all one-time per machine/device pair, not per session:
+- Bluetooth must be explicitly on (Control Center) — `bleak`/CoreBluetooth error
+  clearly (`BleakBluetoothNotAvailableError: POWERED_OFF`) when it isn't, so this
+  fails fast rather than silently.
+- The terminal app driving the script needs Bluetooth permission granted
+  (System Settings → Privacy & Security → Bluetooth) — without it, scanning
+  either errors or (confusingly) just finds nothing.
+- A newly-enumerated USB device can trigger a silent macOS "accessory" permission
+  popup that hides the port from `list_devices`/`ls /dev/cu.*` until approved —
+  if a device that was just flashed or reset seems to vanish from USB entirely,
+  check for that popup before assuming a bad flash.
+
 ## Hardware UI (OLED) checks
 
 `send_input_event` drives the device's buttons; `capture_screen` grabs the OLED (camera/OCR
