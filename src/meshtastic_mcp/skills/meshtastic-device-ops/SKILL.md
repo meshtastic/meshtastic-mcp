@@ -152,13 +152,21 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    connects to the first match among the names/addresses you give it, so an
    ambiguous prefix on a mesh with more than one device sharing it can jump or
    flash the wrong node.
-4. **`bluetooth.mode = RANDOM_PIN` needs a human or the app watching for the
-   passkey — a scripted client alone can't complete pairing.** The firmware
-   sends the 6-digit passkey to `BluetoothStatus` (the app's pairing UI reads
-   it from there) and shows it on-screen only `#if HAS_SCREEN` (most RAK4631
-   builds, e.g. the WisMesh Pocket, have none). Whether it's *also* visible in
-   a live debug log (`set_debug_log_api`) depends on the exact firmware
-   build — `onPairingPasskey`'s `LOG_INFO` included the passkey digits in
+4. **`bluetooth.mode = RANDOM_PIN` needs a human (or the app) watching for the
+   passkey — an unattended agent session can't complete pairing, screen or no
+   screen.** The firmware sends the 6-digit passkey to `BluetoothStatus` (the
+   app's pairing UI reads it from there) and additionally shows it on-screen
+   `#if HAS_SCREEN` — some RAK4631 builds do have one (e.g. `rak_wismesh_pocket`
+   is explicitly "rak4631 pin map + OLED" in `platformio.ini`; don't assume
+   `hw_model: RAK4631` alone tells you whether the running build has a
+   display). `capture_screen` (see *Hardware UI checks* above) can read an
+   OLED when one's present — worth reaching for on a future attempt, since
+   neither it nor a live debug log was actually checked in real time here;
+   the passkey/display behavior below is reasoned from firmware source
+   after the fact, not confirmed against what this device actually showed.
+   Whether the passkey is visible in a live debug log (`set_debug_log_api`)
+   depends on the exact firmware build — `onPairingPasskey`'s `LOG_INFO`
+   included the passkey digits in
    `v2.7.26.54e0d8d` (what this was tested against) and still does on
    `develop`, but a firmware security fix logged only `match_request` for a
    stretch of the 2.7.x line in between (redacting pairing secrets from
