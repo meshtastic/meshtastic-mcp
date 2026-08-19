@@ -217,7 +217,11 @@ replay_status(); replay_stop()
   statistics of real ~1,800-node captures (Burning Man + DEF CON 33) — proportions only; every
   identity, position, and message is generated. `sim.fit_profile(capture)` derives such a profile
   from any capture. Traceroutes are emitted as request→response pairs with firmware `RouteDiscovery`
-  semantics so app traceroute logs populate.
+  semantics so app traceroute logs populate. **Node identity**: richer names via the optional
+  `[sim]` extra (Faker person names / usernames / callsigns; falls back to built-in pools),
+  `emoji_short_fraction` of nodes with single-emoji short names, and **2.8 signed node data** —
+  `pki_fraction` advertise a 32-byte `public_key`, a `key_verified_fraction` slice manually
+  verified — so the app shows keys/verification like real 2.8 firmware.
 - **BBS/bot plane** (`sim_profile={"bots": {"count": N}}`, off by default) — a meshing-around-style
   scene: auto-reply bots (ping→pong pile-ons, `cmd`/`motd`/`wx`/`joke`/games menus) egged on by
   attendees, tapback (emoji-reaction) storms incl. one legendary 100+-reaction broadcast, per-bot

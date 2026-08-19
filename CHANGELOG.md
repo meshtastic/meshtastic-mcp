@@ -6,6 +6,20 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Richer synthetic node identity** (replay sim) — three improvements to how generated nodes
+  look in the app: (1) **better names** via the optional `[sim]` extra (Faker — person names,
+  usernames, `<name>'s <device>`, ham callsigns); the sim falls back to its built-in
+  adjective+noun pools when Faker is absent, so it only *improves* names and nothing depends on
+  it. (2) **Emoji short names** — a large emoji pool with `emoji_short_fraction` (default 0.5)
+  of attendee nodes using a single emoji short-name, plus role-**pun** emoji short-names for
+  infrastructure (routers get 🗼/📡/🛜/🕸️/…). (3) **2.8 signed node data** — `pki_fraction`
+  (default 0.33) of nodes advertise a 32-byte PKC `public_key` in their NodeInfo, and
+  `key_verified_fraction` (default 0.05, i.e. verification is rare) of those carry
+  `is_key_manually_verified`; and on a **2.8+ edition** (e.g. `firmware_edition="DEFCON"`) the
+  **connected/observer node itself is signed** (advertises a stable public key), so the app shows
+  the local node signed. All seeded/deterministic and PII-free (every value generated). Node
+  identity draws from a dedicated child RNG, so tuning these cosmetic fractions never shifts the
+  simulation/traffic stream (the realism bands stay put).
 - **Replay local device metrics + local stats** (`replay_start(local_metrics_interval=…)`,
   default 300 s; CLI `--local-metrics-interval`) — the connected/observer node now emits its own
   telemetry every N seconds, like real firmware reporting itself, in **both** variants:
