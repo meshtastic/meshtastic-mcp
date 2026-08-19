@@ -49,8 +49,8 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
 decorator (`_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled tools only when
 `CAPS.firmware` is active — 60 always-on tools (includes the 3 power-meter tools, always
-registered); +4 android, +17 firmware, +2 sdr, and the apple/sdk-cli/local-model gates on top
-(≈87 with everything active). Counts drift — `doctor` and the startup log are the source of truth.
+registered); +14 android, +17 firmware, +2 sdr, and the apple/sdk-cli/local-model gates on top
+(≈97 with everything active). Counts drift — `doctor` and the startup log are the source of truth.
 
 **Provisioning:** `doctor.py` (the `doctor` MCP tool / `meshtastic-mcp doctor` CLI) probes every
 external dependency and emits the exact, platform-aware acquisition command for anything missing

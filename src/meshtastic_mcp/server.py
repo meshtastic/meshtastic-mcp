@@ -12,6 +12,7 @@ every tool post-registration (see ``_apply_tool_annotations``).
 from __future__ import annotations
 
 import logging
+import math
 import tempfile
 import time
 from datetime import UTC
@@ -444,12 +445,12 @@ def android_swipe(
 def android_type_text(text: str, serial: str | None = None) -> dict[str, Any]:
     """Type `text` into the currently focused input field.
 
-    Spaces are supported; avoid other characters `adb input text` mangles
-    (e.g. quotes) — prefer short, space-free tokens for test markers.
+    Spaces are encoded as `%s` before dispatch (`adb shell input text` doesn't
+    accept literal spaces) — avoid other characters it mangles (e.g. quotes).
     """
     from .emulator import avd
 
-    avd.type_text(text, serial=serial)
+    avd.type_text(text.replace(" ", "%s"), serial=serial)
     return {"ok": True}
 
 
@@ -478,6 +479,11 @@ def android_poll_for_text(
     returns True as soon as the text appears, False if it never does within
     `timeout`.
     """
+    if not (math.isfinite(timeout) and timeout >= 0):
+        raise ValueError(f"timeout must be finite and >= 0, got {timeout!r}")
+    if not (math.isfinite(interval) and interval > 0):
+        raise ValueError(f"interval must be finite and > 0, got {interval!r}")
+
     from .emulator import avd
 
     return avd.poll_for_text(token, serial=serial, timeout=timeout, interval=interval)

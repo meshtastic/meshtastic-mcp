@@ -76,6 +76,27 @@ def test_android_driving_tools_registered(server) -> None:
         assert tools[name].annotations.destructiveHint, f"{name} should be destructive"
 
 
+def test_android_type_text_encodes_spaces(server, monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        "meshtastic_mcp.emulator.avd.type_text",
+        lambda text, serial=None: calls.append(text),
+    )
+    server.android_type_text("hello world", serial="emulator-5554")
+    assert calls == ["hello%sworld"]
+
+
+def test_android_poll_for_text_rejects_bad_timeout_and_interval(server) -> None:
+    with pytest.raises(ValueError, match="timeout"):
+        server.android_poll_for_text("token", timeout=-1)
+    with pytest.raises(ValueError, match="timeout"):
+        server.android_poll_for_text("token", timeout=float("inf"))
+    with pytest.raises(ValueError, match="interval"):
+        server.android_poll_for_text("token", interval=0)
+    with pytest.raises(ValueError, match="interval"):
+        server.android_poll_for_text("token", interval=-0.5)
+
+
 def test_resources_registered(server) -> None:
     resources = _component_uris(server.app, "resource")
     templates = _component_uris(server.app, "template")
