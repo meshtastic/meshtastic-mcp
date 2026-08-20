@@ -106,6 +106,17 @@ def test_launch_app_without_skip_omits_extra(monkeypatch) -> None:
     assert avd.EXTRA_SKIP_ONBOARDING not in calls[0]
 
 
+def test_type_text_adb_fallback_encodes_spaces(monkeypatch) -> None:
+    # Without the [android-fast] extra, type_text uses `adb input text`, which
+    # needs spaces as %s. The encoding must happen HERE (not before the u2 fast
+    # path, which pastes verbatim and would otherwise send a literal "%s").
+    monkeypatch.setattr(avd.u2, "available", lambda: False)
+    calls = []
+    monkeypatch.setattr(avd, "adb", lambda *a, **k: calls.append(a) or _cp(""))
+    avd.type_text("hello world", serial="emulator-5554")
+    assert calls == [("shell", "input", "text", "hello%sworld")]
+
+
 def test_launch_app_raises_when_no_package(monkeypatch) -> None:
     monkeypatch.setattr(avd, "resolve_package", lambda serial=None: None)
     with pytest.raises(avd.EmulatorError):
@@ -242,6 +253,7 @@ def test_parse_uiautomator_xml_skips_label_without_bounds() -> None:
 
 
 def test_annotate_screenshot_draws_boxes(tmp_path) -> None:
+    pytest.importorskip("PIL")  # Pillow is the [ui] extra; skip when absent
     from PIL import Image
 
     png_path = tmp_path / "shot.png"
@@ -300,6 +312,7 @@ def _png_bytes() -> bytes:
 
 
 def test_screenshot_plain_capture_invalidates_stale_annotation_cache(monkeypatch, tmp_path) -> None:
+    pytest.importorskip("PIL")  # Pillow is the [ui] extra; skip when absent
     # Regression: a plain (annotate=False) capture at the same path/serial must
     # invalidate any cached annotation, or resolve_label keeps resolving against
     # stale/wrong content after the on-disk file is no longer annotated.

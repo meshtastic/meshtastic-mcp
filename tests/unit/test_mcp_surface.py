@@ -76,14 +76,17 @@ def test_android_driving_tools_registered(server) -> None:
         assert tools[name].annotations.destructiveHint, f"{name} should be destructive"
 
 
-def test_android_type_text_encodes_spaces(server, monkeypatch) -> None:
+def test_android_type_text_passes_raw(server, monkeypatch) -> None:
+    # The tool passes the raw string to avd.type_text; the `%s` space-encoding
+    # for the `adb input text` path lives inside avd.type_text's fallback branch
+    # (encoding it here would paste a literal "%s" via the uiautomator2 fast path).
     calls = []
     monkeypatch.setattr(
         "meshtastic_mcp.emulator.avd.type_text",
         lambda text, serial=None: calls.append(text),
     )
     server.android_type_text("hello world", serial="emulator-5554")
-    assert calls == ["hello%sworld"]
+    assert calls == ["hello world"]
 
 
 def test_android_poll_for_text_rejects_bad_timeout_and_interval(server) -> None:

@@ -90,11 +90,14 @@ def test_clone_avd_strips_boot_state(tmp_path: Path, monkeypatch: pytest.MonkeyP
 # alloc_console_port
 # ---------------------------------------------------------------------------
 def test_alloc_console_port_skips_busy() -> None:
-    # Occupy 5554 so index 0 must move to the next even pair.
+    # Occupy 5554 the way a real emulator does — a LISTENING socket. (A merely
+    # bound, non-listening socket with SO_REUSEADDR doesn't block _port_free's
+    # own SO_REUSEADDR bind, so it must listen to be genuinely "busy".)
     with socket.socket() as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", 5554))
+            s.listen(1)
         except OSError:
             pytest.skip("5554 already in use by a real emulator")
         assert atak.alloc_console_port(0) == 5556
