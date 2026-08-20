@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import math
 import tempfile
+import threading
 import time
 from datetime import UTC
 from pathlib import Path
@@ -26,6 +27,7 @@ from . import (
     admin,
     boards,
     capabilities,
+    config,
     connection,
     devices,
     fixtures,
@@ -212,6 +214,11 @@ _ANDROID_TOOLS = (
     "android_poll_for_text",
     "android_clear_logcat",
     "android_read_logcat",
+    "atak_fleet_up",
+    "atak_fleet_status",
+    "atak_fleet_down",
+    "atak_drive_route",
+    "atak_drive_stop",
 )
 
 # SDR-coupled tools, gated by `sdr_tool` on the sdr capability.
@@ -445,12 +452,14 @@ def android_swipe(
 def android_type_text(text: str, serial: str | None = None) -> dict[str, Any]:
     """Type `text` into the currently focused input field.
 
-    Spaces are encoded as `%s` before dispatch (`adb shell input text` doesn't
-    accept literal spaces) — avoid other characters it mangles (e.g. quotes).
+    Pass the raw string. With the `[android-fast]` extra input is Unicode-safe
+    (clipboard-paste). Without it, `adb shell input text` is used — spaces are
+    handled (encoded as `%s`) but other shell metacharacters (quotes, `&`) are
+    mangled, so keep tokens simple on the fallback path.
     """
     from .emulator import avd
 
-    avd.type_text(text.replace(" ", "%s"), serial=serial)
+    avd.type_text(text, serial=serial)
     return {"ok": True}
 
 
@@ -2902,6 +2911,297 @@ def replay_stop(session_id: str | None = None) -> dict[str, Any]:
     return get_replay_manager().stop(session_id)
 
 
+# ---------- ATAK / CoT capture + fleet ------------------------------------
+# Process-global singletons: one relay (a bound TCP listener) and one ATAK
+# emulator fleet at a time, mirroring the single-listener replay model.
+#
+# fleet_up (cold-boot + provision ~15 min) and drive_route (sleeps per fix)
+# run FAR past the ~60 s MCP client timeout, so — like build_start/build_poll —
+# they run in a background thread and the caller polls `atak_fleet_status`. State
+# for those background jobs lives here.
+_COT_RELAY: Any = None
+_COT_LOCK = threading.Lock()  # serializes relay start/stop lifecycle transitions
+_ATAK_FLEET: Any = None
+_ATAK_UP: dict[str, Any] = {"thread": None, "phase": "idle", "error": None}
+_ATAK_DRIVES: dict[str, dict[str, Any]] = {}  # serial -> {thread, stop, phase, error, waypoints}
+_ATAK_LOCK = threading.Lock()
+
+
+def _cot_data_dir() -> Path:
+    """Base dir for CoT captures (under the shared MCP data root)."""
+    return config.mcp_data_dir() / "cot_captures"
+
+
+def _safe_session_name(session: str) -> str:
+    """Validate a caller-supplied capture-session name is a single directory
+    component — no separators, no traversal, not absolute — so it can't escape
+    the capture root. Raises ValueError otherwise."""
+    if (
+        not session
+        or session in (".", "..")
+        or "/" in session
+        or "\\" in session
+        or "\x00" in session
+        or Path(session).is_absolute()
+        or Path(session).name != session
+    ):
+        raise ValueError(
+            f"invalid session name {session!r}: must be a single path component "
+            "(no separators, no '..', not absolute)"
+        )
+    return session
+
+
+@app.tool()
+def cot_relay_start(port: int = 8087, session: str | None = None) -> dict[str, Any]:
+    """Start a CoT capture + relay server for real ATAK/iTAK traffic.
+
+    Point each TAK client at `host:port` as a plain-TCP streaming input (no SSL,
+    no auth). Every `<event>` is saved to `<data_dir>/cot_captures/<session>/`
+    (numbered XML + `manifest.jsonl`) AND rebroadcast to every other connected
+    client — so two+ clients see each other as contacts (self-PLI, markers,
+    GeoChat) with no real TAK Server. Use `atak_fleet_up` to stand up the
+    clients as emulators pointed here (they reach the host at `10.0.2.2:<port>`).
+
+    One relay at a time; call `cot_relay_stop` first to rebind. `session` names
+    the capture subdir (default: a timestamp); it must be a single path
+    component (no separators or `..`).
+    """
+    global _COT_RELAY
+    from datetime import datetime
+
+    from .replay.cot_relay import CotRelay
+
+    try:
+        name = (
+            _safe_session_name(session) if session else datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+    # Hold the lifecycle lock across the None-check → bind → publish so two
+    # concurrent starts can't both bind a listener and leak one.
+    with _COT_LOCK:
+        if _COT_RELAY is not None:
+            return {
+                "error": "a relay is already running; call cot_relay_stop first",
+                **_COT_RELAY.status(),
+            }
+        relay = CotRelay(outdir=_cot_data_dir() / name, port=port)
+        try:
+            bound = relay.start()
+        except OSError as exc:
+            return {"error": f"could not bind port {port}: {exc}. Free it or pick another port."}
+        _COT_RELAY = relay
+    return {"started": True, "port": bound, **relay.status()}
+
+
+@app.tool()
+def cot_relay_status() -> dict[str, Any]:
+    """Live capture/relay state: connected peers, total events, per-CoT-type counts."""
+    if _COT_RELAY is None:
+        return {"running": False}
+    return _COT_RELAY.status()
+
+
+@app.tool()
+def cot_relay_stop() -> dict[str, Any]:
+    """Stop the CoT relay and close its capture files. Returns the final status."""
+    global _COT_RELAY
+    with _COT_LOCK:
+        if _COT_RELAY is None:
+            return {"running": False}
+        relay, _COT_RELAY = _COT_RELAY, None
+    final = relay.status()
+    relay.stop()
+    return {"stopped": True, **final}
+
+
+@android_tool()
+def atak_fleet_up(
+    count: int,
+    apk_path: str,
+    base_avd: str,
+    relay_port: int = 8087,
+    use_snapshot: bool = True,
+) -> dict[str, Any]:
+    """Bring up `count` provisioned ATAK-CIV emulators, all pointed at the relay.
+
+    Clones `base_avd` into `atak-node-<i>`, boots each on its own port, and
+    installs+provisions ATAK (or restores a provisioned snapshot keyed on the
+    APK bytes). Start `cot_relay_start` first; nodes reach it at
+    `10.0.2.2:<relay_port>`.
+
+    **Runs in the background** (cold-boot + provisioning is ~15 min; snapshot
+    restore ~60 s/node — both exceed the MCP timeout). Returns immediately;
+    poll `atak_fleet_status` for progress and the final node serials. One fleet
+    at a time.
+    """
+    global _ATAK_FLEET
+    from .emulator import atak
+
+    with _ATAK_LOCK:
+        if _ATAK_FLEET is not None:
+            return {
+                "error": "a fleet is already up; call atak_fleet_down first",
+                "nodes": [n.__dict__ for n in _ATAK_FLEET.nodes],
+            }
+        if _ATAK_UP["phase"] == "bringing_up":
+            return {"error": "a fleet bring-up is already in progress; poll atak_fleet_status"}
+        if _ATAK_UP["phase"] == "tearing_down":
+            return {
+                "error": "a fleet teardown is in progress; wait for atak_fleet_status phase=idle"
+            }
+        _ATAK_UP.update(thread=None, phase="bringing_up", error=None)
+
+    def _run() -> None:
+        global _ATAK_FLEET
+        try:
+            fleet = atak.fleet_up(
+                count,
+                apk_path,
+                base_avd=base_avd,
+                relay_port=relay_port,
+                use_snapshot=use_snapshot,
+            )
+            with _ATAK_LOCK:
+                _ATAK_FLEET = fleet
+                _ATAK_UP["phase"] = "ready"
+        except Exception as exc:
+            with _ATAK_LOCK:
+                _ATAK_UP.update(phase="error", error=str(exc))
+
+    t = threading.Thread(target=_run, daemon=True)
+    _ATAK_UP["thread"] = t
+    t.start()
+    return {"starting": True, "count": count, "poll": "atak_fleet_status"}
+
+
+@android_tool()
+def atak_fleet_status() -> dict[str, Any]:
+    """Progress of the ATAK fleet bring-up + any active GPS drives.
+
+    `phase`: idle | bringing_up | ready | error. When ready, `nodes` lists each
+    node's name/serial/port. Poll this after `atak_fleet_up` / `atak_drive_route`.
+    """
+    with _ATAK_LOCK:
+        out: dict[str, Any] = {"phase": _ATAK_UP["phase"], "error": _ATAK_UP["error"]}
+        if _ATAK_FLEET is not None:
+            out["nodes"] = [n.__dict__ for n in _ATAK_FLEET.nodes]
+        drives = {
+            s: {"phase": d["phase"], "error": d["error"], "waypoints": d["waypoints"]}
+            for s, d in _ATAK_DRIVES.items()
+        }
+    if drives:
+        out["drives"] = drives
+    return out
+
+
+@android_tool()
+def atak_fleet_down(delete_clones: bool = False, confirm: bool = False) -> dict[str, Any]:
+    """Stop the ATAK emulator fleet.
+
+    `delete_clones=True` also deletes the cloned AVDs and their provisioned
+    snapshots — irreversible (next `atak_fleet_up` re-provisions from scratch),
+    so it requires `confirm=True`.
+    """
+    global _ATAK_FLEET
+    from .emulator import atak
+
+    if delete_clones and not confirm:
+        return {
+            "error": "delete_clones=True irreversibly removes the cloned AVDs + "
+            "provisioned snapshots; pass confirm=True to proceed.",
+            "confirmation_required": True,
+        }
+    with _ATAK_LOCK:
+        if _ATAK_UP["phase"] == "bringing_up":
+            return {"error": "fleet is still bringing up; wait for atak_fleet_status phase=ready"}
+        if _ATAK_UP["phase"] == "tearing_down":
+            return {"error": "a teardown is already in progress"}
+        fleet = _ATAK_FLEET
+        if fleet is None:
+            return {"running": False}
+        # Stop any active drives first so their threads don't outlive the fleet.
+        for d in _ATAK_DRIVES.values():
+            d["stop"].set()
+        _ATAK_DRIVES.clear()
+        nodes = [n.__dict__ for n in fleet.nodes]
+        _ATAK_FLEET = None
+        # Stay non-idle until fleet_down() actually stops the emulators — else a
+        # concurrent atak_fleet_up could reuse these clone names/ports while the
+        # old teardown is still killing those serials.
+        _ATAK_UP.update(phase="tearing_down", error=None)
+    try:
+        atak.fleet_down(fleet, delete_clones=delete_clones)
+    finally:
+        with _ATAK_LOCK:
+            _ATAK_UP.update(phase="idle", error=None)
+    return {"stopped": True, "nodes": nodes, "clones_deleted": delete_clones}
+
+
+@android_tool()
+def atak_drive_route(
+    serial: str,
+    waypoints: list[list[float]],
+    speed_mps: float = 10.0,
+    step_s: float = 2.0,
+) -> dict[str, Any]:
+    """Drive an emulator's GPS along `waypoints` (each `[lat, lon]`) so its ATAK
+    self-PLI reports a live moving track (course/speed derived from the fixes).
+
+    **Runs in the background** (a route sleeps ~`step_s` per fix, easily minutes)
+    so you can capture/observe while it drives; poll `atak_fleet_status` for
+    progress and stop it with `atak_drive_stop`. Emulator serials only — a
+    physical device rejects Android mock location for self-position (anti-spoof).
+    """
+    from .emulator import atak
+
+    pts = [(float(w[0]), float(w[1])) for w in waypoints]
+    if len(pts) < 2:
+        return {"error": "drive_route needs at least 2 waypoints"}
+    with _ATAK_LOCK:
+        existing = _ATAK_DRIVES.get(serial)
+        if existing and existing["phase"] == "driving":
+            return {"error": f"{serial} is already driving; atak_drive_stop it first"}
+        stop = threading.Event()
+        state: dict[str, Any] = {
+            "thread": None,
+            "stop": stop,
+            "phase": "driving",
+            "error": None,
+            "waypoints": len(pts),
+        }
+        _ATAK_DRIVES[serial] = state
+
+    def _run() -> None:
+        try:
+            atak.drive_route(serial, pts, speed_mps=speed_mps, step_s=step_s, stop_event=stop)
+            state["phase"] = "stopped" if stop.is_set() else "done"
+        except Exception as exc:
+            state["phase"] = "error"
+            state["error"] = str(exc)
+
+    t = threading.Thread(target=_run, daemon=True)
+    state["thread"] = t
+    t.start()
+    return {"driving": True, "serial": serial, "waypoints": len(pts), "poll": "atak_fleet_status"}
+
+
+@android_tool()
+def atak_drive_stop(serial: str | None = None) -> dict[str, Any]:
+    """Stop an active GPS drive (all drives if `serial` is omitted). The self-PLI
+    holds at the last fix delivered."""
+    with _ATAK_LOCK:
+        targets = [serial] if serial else list(_ATAK_DRIVES)
+        stopped = []
+        for s in targets:
+            d = _ATAK_DRIVES.get(s)
+            if d is not None:
+                d["stop"].set()
+                stopped.append(s)
+    return {"stopped": stopped}
+
+
 def _parse_iso_epoch(s: str) -> int:
     from datetime import datetime
 
@@ -2999,6 +3299,8 @@ _READ_ONLY = {
     "events_window",
     "recorder_status",
     "replay_status",  # reads replay-session run-state; never mutates
+    "cot_relay_status",  # reads relay run-state (peers/counts); never mutates
+    "atak_fleet_status",  # reads fleet bring-up / drive progress; never mutates
     "replay_fuzz_presets",  # static catalog of fuzz presets; no state
     "capture_screen",
     "summarize_window",  # reads a recorder window, distills via local model; no mutation
@@ -3067,6 +3369,14 @@ _DESTRUCTIVE = {
     # Bind a TCP listener and serve a simulated mesh to a connecting app.
     "replay_start",
     "replay_stop",
+    # Bind a TCP listener (CoT relay) / write captures to the host filesystem.
+    "cot_relay_start",
+    "cot_relay_stop",
+    # Clone + boot emulators, install/provision ATAK, drive device GPS.
+    "atak_fleet_up",
+    "atak_fleet_down",
+    "atak_drive_route",
+    "atak_drive_stop",
     "replay_inject",  # emits packets onto the live connection
     "replay_inject_beacon",  # emits a MESH_BEACON_APP packet
     "replay_inject_fileinfo",  # emits a FileInfo FromRadio onto the live connection
@@ -3155,6 +3465,16 @@ _OPEN_WORLD = {
     "android_find_text",
     "android_poll_for_text",
     "android_resolve",
+    # Boot/drive emulators over adb (external processes/hardware). The relay's
+    # captured CoT is remote-authored TAK content (untrusted, prompt-injection
+    # leg 2 — a marker callsign or GeoChat body reaches cot_relay_status output).
+    "cot_relay_start",
+    "cot_relay_status",
+    "atak_fleet_up",
+    "atak_fleet_status",
+    "atak_fleet_down",
+    "atak_drive_route",
+    "atak_drive_stop",
 }
 
 

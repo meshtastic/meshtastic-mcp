@@ -32,6 +32,10 @@ dependencies = [
 # Channel AES-CTR frame crafting for `inject_frame` / `meshinject` (encrypted mode).
 # Lazy-imported (inject.py); decoded/ciphertext/fuzz modes work without it.
 inject = ["cryptography>=42.0"]
+# Resident uiautomator2 server for the Android UI-driving fast path (emulator/u2.py):
+# ~100x faster hierarchy dumps, Unicode-safe input, atomic find-then-tap. Import-guarded;
+# without it every driving helper falls back to plain adb.
+android-fast = ["uiautomator2>=3.0"]
 # Hardware test harness (pytest + live TUI).
 test = [
   "pytest>=8",
