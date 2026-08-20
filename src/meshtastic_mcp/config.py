@@ -98,16 +98,24 @@ def _pio_penv_python() -> Path | None:
     return p if p.is_file() and os.access(p, os.X_OK) else None
 
 
+def mcp_data_dir() -> Path:
+    """The MCP data root: ``MESHTASTIC_MCP_DATA_DIR`` → platformdirs.
+
+    The single place tool output lives (recorder logs, CoT captures, bin
+    wrappers). Never firmware-relative (core-module rule).
+    """
+    from platformdirs import user_data_dir
+
+    return Path(os.environ.get("MESHTASTIC_MCP_DATA_DIR") or user_data_dir("meshtastic-mcp"))
+
+
 def _ensure_wrapper(name: str, cmd: str) -> Path:
     """Write a thin shell wrapper to the MCP data dir and return its path.
 
     Used when a tool is available via a specific Python interpreter but not
     on the system PATH (e.g. PlatformIO's bundled esptool).
     """
-    from platformdirs import user_data_dir
-
-    data_root = os.environ.get("MESHTASTIC_MCP_DATA_DIR") or user_data_dir("meshtastic-mcp")
-    bin_dir = Path(data_root) / "bin"
+    bin_dir = mcp_data_dir() / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrapper = bin_dir / name
     wrapper.write_text(f'#!/bin/sh\nexec {cmd} "$@"\n')

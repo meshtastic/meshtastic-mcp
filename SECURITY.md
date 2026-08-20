@@ -22,7 +22,7 @@ in a full meshtastic-mcp session:
 | Leg | Tools |
 |---|---|
 | Private data | `device_info`, `list_nodes`, `get_config`, `get_channel_url` |
-| Untrusted content | `logs_window`, `packets_window` — return user-authored payloads from remote mesh nodes; `android_ui_dump`, `android_screenshot`, `android_read_logcat` — return app UI / device logcat content that can echo those same remote-node payloads (node names, text messages) |
+| Untrusted content | `logs_window`, `packets_window` — return user-authored payloads from remote mesh nodes; `android_ui_dump`, `android_screenshot`, `android_read_logcat` — return app UI / device logcat content that can echo those same remote-node payloads (node names, text messages); `cot_relay_status`, `atak_fleet_status` — surface TAK CoT content (marker callsigns, GeoChat bodies) authored by connected TAK clients |
 | Exfiltration | `send_text` — broadcasts a mesh message |
 
 A hostile node on the same mesh could embed instructions in a packet payload. If an agent
@@ -30,9 +30,10 @@ processes that payload alongside `device_info` and has `send_text` available, an
 could exfiltrate the device's channel URL or node list.
 
 **Mitigations in place:**
-- `logs_window`, `packets_window`, `android_ui_dump`, `android_screenshot`, and
-  `android_read_logcat` are classified `openWorldHint: true` so clients can
-  detect that untrusted content has entered the session.
+- `logs_window`, `packets_window`, `android_ui_dump`, `android_screenshot`,
+  `android_read_logcat`, `cot_relay_status`, and `atak_fleet_status` are
+  classified `openWorldHint: true` so clients can detect that untrusted content
+  has entered the session.
 - `send_text` is `destructiveHint: true` — clients should prompt before broadcasting.
 - The `confirm=True` gate on destructive ops adds a human-in-the-loop layer.
 

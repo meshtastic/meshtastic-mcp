@@ -36,6 +36,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from . import u2
+
 # Host-loopback alias as seen from inside the Android emulator.
 EMULATOR_HOST_ALIAS = "10.0.2.2"
 DEFAULT_TCP_PORT = 4403
@@ -615,10 +617,20 @@ def _ui_dump_physical(serial: str) -> list[dict[str, Any]]:
 def ui_dump(serial: str | None = None, diff: bool = False) -> list[dict[str, Any]]:
     """Return a parsed UI element list for the target device.
 
+    With the ``[android-fast]`` extra a resident uiautomator2 server answers in
+    tens of ms (vs seconds for a one-shot dump) and works on animating screens;
+    any failure falls back to the plain paths below. ``diff=True`` bypasses the
+    fast path (only ``android layout`` supports it).
+
     Emulator: uses ``android layout`` (supports --diff).
     Physical device: uses ``adb exec-out uiautomator dump`` (diff not supported;
     the full tree is returned and callers can diff themselves).
     """
+    if not diff and u2.available():
+        try:
+            return u2.dump(serial)
+        except Exception:
+            u2.reset(serial)
     if serial and not is_emulator(serial):
         return _ui_dump_physical(serial)
     args = ["layout"]
@@ -781,9 +793,48 @@ def tap(x: int, y: int, serial: str | None = None) -> None:
     adb("shell", "input", "tap", str(x), str(y), serial=serial)
 
 
+def tap_text(token: str, serial: str | None = None, *, timeout: float = 5.0) -> bool:
+    """Atomic find-then-tap: resolve `token`'s element at action time and click it.
+
+    Prefer this over dump-then-`tap(x, y)` across separate calls — layouts shift
+    between the dump and the tap (a soft keyboard opening is the classic case)
+    and stale coordinates land on the wrong widget. With the ``[android-fast]``
+    extra the resident server waits for the element; the fallback re-dumps once
+    and taps the element's current center. Returns False when not found.
+    """
+    if u2.available():
+        try:
+            return u2.tap_text(token, serial, timeout=timeout)
+        except Exception:
+            u2.reset(serial)
+    # Fallback: poll + _find_center (handles center as [x,y] list OR "[x,y]"
+    # string, the two forms the emulator/physical paths emit respectively).
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        c = _find_center(lambda el: el.get("text") == token, serial=serial)
+        if c is not None:
+            tap(c[0], c[1], serial=serial)
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def type_text(text: str, serial: str | None = None) -> None:
-    # adb input text uses %s for spaces; keep tokens space-free (e.g. E2E-<ts>).
-    adb("shell", "input", "text", text, serial=serial)
+    """Type `text` into the focused field.
+
+    With the ``[android-fast]`` extra this is Unicode-safe (clipboard-paste) and
+    the raw string is sent as-is. The plain-adb fallback uses `input text`,
+    which needs spaces as `%s` and mangles shell metacharacters — so the `%s`
+    encoding lives here, on the fallback branch only (encoding it before the
+    fast path would paste a literal `%s`). Callers pass the raw text either way.
+    """
+    if u2.available():
+        try:
+            u2.send_keys(text, serial)
+            return
+        except Exception:
+            u2.reset(serial)
+    adb("shell", "input", "text", text.replace(" ", "%s"), serial=serial)
 
 
 def swipe(x1: int, y1: int, x2: int, y2: int, ms: int = 400, serial: str | None = None) -> None:

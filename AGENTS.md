@@ -13,12 +13,18 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 - **core** (always registered): `devices`, `serial_session`, `registry`, `connection`
   (serial + TCP), `info`, `admin`, `recorder/` + `log_query`, `replay/` (simulated-device
   streaming + `sim` synthetic mesh + `fuzz` adversary layer), `inject` (frame injection into
-  real hardware — see below), `input_events`, `camera`/`ocr`, `uhubctl`, `hw_tools`.
+  real hardware — see below), `input_events`, `camera`/`ocr`, `uhubctl`, `hw_tools`,
+  `cot_relay/` (ATAK/iTAK CoT capture + N-way relay — `cot_relay_*`; pure stdlib, so core).
 - **firmware capability** (needs `MESHTASTIC_FIRMWARE_ROOT` + `pio`): `flash`, `boards`,
   `userprefs`, `pio`, `fixtures`.
 - **android capability** (needs `android` + `adb`): `emulator/` native-node + AVD
   orchestration, plus app-plane driving (`android_ui_dump`, `android_tap`,
-  `android_screenshot`, `android_poll_for_text`, etc.).
+  `android_screenshot`, `android_poll_for_text`, etc.) and the ATAK emulator fleet
+  (`atak_fleet_up`/`atak_fleet_down`/`atak_drive_route` — clone+provision N ATAK-CIV
+  emulators, snapshot-restore, drive GPS; see `docs/atak-cot.md`). The optional
+  `[android-fast]` extra swaps the UI-driving backend to a resident uiautomator2 server
+  (faster dumps, Unicode-safe input, `tap_text` atomic find-then-tap); import-guarded, plain
+  adb otherwise.
 - **apple capability** (needs `xcrun`; `idb` for UI): `emulator/apple_sim.py` iOS-Sim/macOS
   app-plane orchestration.
 - **local-model capability** (needs a reachable Ollama / OpenAI-compatible `llama-server`, or a
