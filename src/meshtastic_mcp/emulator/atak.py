@@ -269,8 +269,13 @@ def boot(
     except Exception:
         # The emulator process is already running; a boot-health failure here
         # would otherwise orphan it (fleet_up only records nodes that booted, so
-        # its cleanup can't reach this one). Kill it before re-raising.
-        avd.adb("emu", "kill", serial=serial, check=False)
+        # its cleanup can't reach this one). Kill it before re-raising. Suppress
+        # errors from BOTH cleanup calls: avd.adb converts a timeout to
+        # EmulatorError even with check=False, and letting that (or a terminate()
+        # error) propagate would replace the original boot failure and skip the
+        # rest of the cleanup — re-leaking the very process this guards against.
+        with contextlib.suppress(Exception):
+            avd.adb("emu", "kill", serial=serial, check=False)
         with contextlib.suppress(Exception):
             proc.terminate()
         raise
