@@ -117,6 +117,24 @@ def test_type_text_adb_fallback_encodes_spaces(monkeypatch) -> None:
     assert calls == [("shell", "input", "text", "hello%sworld")]
 
 
+def test_type_text_raises_on_fast_path_failure_no_adb_replay(monkeypatch) -> None:
+    # A uiautomator2 failure mid-type may have already inserted the text; the adb
+    # path must NOT run (double-insert). Reset + raise instead of falling back.
+    monkeypatch.setattr(avd.u2, "available", lambda: True)
+
+    def _boom(text, serial=None):
+        raise RuntimeError("u2 lost response")
+
+    monkeypatch.setattr(avd.u2, "send_keys", _boom)
+    reset_calls, adb_calls = [], []
+    monkeypatch.setattr(avd.u2, "reset", lambda serial=None: reset_calls.append(serial))
+    monkeypatch.setattr(avd, "adb", lambda *a, **k: adb_calls.append(a) or _cp(""))
+    with pytest.raises(avd.EmulatorError, match="not retried on adb"):
+        avd.type_text("secret", serial="emulator-5554")
+    assert reset_calls == ["emulator-5554"]
+    assert adb_calls == []  # never replayed
+
+
 def test_launch_app_raises_when_no_package(monkeypatch) -> None:
     monkeypatch.setattr(avd, "resolve_package", lambda serial=None: None)
     with pytest.raises(avd.EmulatorError):

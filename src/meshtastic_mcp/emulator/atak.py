@@ -43,6 +43,7 @@ assertion is the real gate.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import itertools
 import math
@@ -256,14 +257,23 @@ def boot(
     else:
         args += ["-no-snapshot-load"]
     # Detached so the emulator outlives this call.
-    subprocess.Popen(
+    proc = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
-    wait_for_boot(serial, timeout=timeout)
+    try:
+        wait_for_boot(serial, timeout=timeout)
+    except Exception:
+        # The emulator process is already running; a boot-health failure here
+        # would otherwise orphan it (fleet_up only records nodes that booted, so
+        # its cleanup can't reach this one). Kill it before re-raising.
+        avd.adb("emu", "kill", serial=serial, check=False)
+        with contextlib.suppress(Exception):
+            proc.terminate()
+        raise
     return serial
 
 
@@ -333,6 +343,12 @@ def drive_route(
     """
     if len(waypoints) < 2:
         raise AtakError("drive_route needs at least 2 waypoints")
+    # Guard the interpolation denominator: a non-positive or non-finite
+    # speed/step (caller-controlled through the MCP tool) would clamp to 1e-6
+    # and spawn ~a billion points for a normal leg — an OOM. Reject up front.
+    for name, val in (("speed_mps", speed_mps), ("step_s", step_s)):
+        if not math.isfinite(val) or val <= 0:
+            raise AtakError(f"{name} must be a positive, finite number (got {val!r})")
     for a, b in itertools.pairwise(waypoints):
         dist = _leg_meters(a, b)
         steps = max(1, int(dist / max(speed_mps * step_s, 1e-6)))
@@ -372,11 +388,14 @@ def push_stream_pref(serial: str, host: str, port: int, *, name: str = "cotcaptu
     with tempfile.NamedTemporaryFile("w", suffix=".pref", delete=False) as fh:
         fh.write(pref)
         local = fh.name
-    for dest in (
-        "/sdcard/atak/config/prefs/cotcapture.pref",
-        "/sdcard/atak/import/cotcapture.pref",
-    ):
-        avd.adb("push", local, dest, serial=serial, check=False)
+    try:
+        for dest in (
+            "/sdcard/atak/config/prefs/cotcapture.pref",
+            "/sdcard/atak/import/cotcapture.pref",
+        ):
+            avd.adb("push", local, dest, serial=serial, check=False)
+    finally:
+        Path(local).unlink(missing_ok=True)  # don't leave the temp pref on the host
 
 
 def _walk_first_run(serial: str, *, timeout: float = 90.0) -> None:

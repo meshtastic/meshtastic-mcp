@@ -799,15 +799,23 @@ def tap_text(token: str, serial: str | None = None, *, timeout: float = 5.0) -> 
     Prefer this over dump-then-`tap(x, y)` across separate calls — layouts shift
     between the dump and the tap (a soft keyboard opening is the classic case)
     and stale coordinates land on the wrong widget. With the ``[android-fast]``
-    extra the resident server waits for the element; the fallback re-dumps once
-    and taps the element's current center. Returns False when not found.
+    extra the resident server waits for the element; the plain-adb path re-dumps
+    once and taps the element's current center. Returns False when not found.
+
+    A uiautomator2 failure is NOT retried on the adb path: a lost response after
+    the device already registered the tap would double-tap (possibly a changed
+    screen). The connection is reset and the error raised for the caller to
+    decide — unlike the read-only :func:`ui_dump`, which falls back freely.
     """
     if u2.available():
         try:
             return u2.tap_text(token, serial, timeout=timeout)
-        except Exception:
+        except Exception as exc:
             u2.reset(serial)
-    # Fallback: poll + _find_center (handles center as [x,y] list OR "[x,y]"
+            raise EmulatorError(
+                f"uiautomator2 tap_text failed (not retried on adb): {exc}"
+            ) from exc
+    # No fast path: poll + _find_center (handles center as [x,y] list OR "[x,y]"
     # string, the two forms the emulator/physical paths emit respectively).
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -827,13 +835,20 @@ def type_text(text: str, serial: str | None = None) -> None:
     which needs spaces as `%s` and mangles shell metacharacters — so the `%s`
     encoding lives here, on the fallback branch only (encoding it before the
     fast path would paste a literal `%s`). Callers pass the raw text either way.
+
+    Like :func:`tap_text`, a uiautomator2 failure is not retried on the adb path
+    (a lost response could double-insert the text); the connection is reset and
+    the error raised.
     """
     if u2.available():
         try:
             u2.send_keys(text, serial)
             return
-        except Exception:
+        except Exception as exc:
             u2.reset(serial)
+            raise EmulatorError(
+                f"uiautomator2 type_text failed (not retried on adb): {exc}"
+            ) from exc
     adb("shell", "input", "text", text.replace(" ", "%s"), serial=serial)
 
 

@@ -35,6 +35,7 @@ Pure stdlib, so this is part of the always-on core (no capability gate).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import socket
@@ -43,6 +44,10 @@ import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TextIO
+
+# Capture filenames are ``NNNN_<type>.xml`` — parse the leading sequence number.
+_SEQ_RE = re.compile(r"^(\d+)_")
 
 # CoT stream framing. A client may send a bare `<event>...</event>` (the
 # canonical stream form — the repo's own tak_server.py strips the `<?xml?>`
@@ -94,7 +99,7 @@ class CotRelay:
     _thread: threading.Thread | None = field(default=None, init=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _peers: dict[int, _Peer] = field(default_factory=dict, init=False, repr=False)
-    _manifest_fp: object | None = field(default=None, init=False, repr=False)
+    _manifest_fp: TextIO | None = field(default=None, init=False, repr=False)
 
     seq: int = field(default=0, init=False)
     type_counts: dict[str, int] = field(default_factory=dict, init=False)
@@ -104,8 +109,10 @@ class CotRelay:
         """Bind, begin accepting, and open the capture files. Returns the port."""
         out = Path(self.outdir)
         out.mkdir(parents=True, exist_ok=True)
-        # Continue an existing capture dir rather than clobbering its numbering.
-        self.seq = len(list(out.glob("*.xml")))
+        # Continue an existing capture dir past its highest sequence number — the
+        # MAX, not the count, so a gap (a deleted middle file) never reuses a
+        # number and overwrites a surviving capture.
+        self.seq = _highest_seq(out)
         self._manifest_fp = (out / "manifest.jsonl").open("a", encoding="utf-8")
         self.started_at = _utc_now()
 
@@ -122,7 +129,7 @@ class CotRelay:
             # Bind failed (port in use) — close the manifest we just opened so the
             # handle doesn't leak, then let the caller surface a structured error.
             if self._manifest_fp is not None:
-                self._manifest_fp.close()  # type: ignore[attr-defined]
+                self._manifest_fp.close()
                 self._manifest_fp = None
             raise
         self.port = self._server.server_address[1]
@@ -133,14 +140,27 @@ class CotRelay:
     def stop(self) -> None:
         if self._server is not None:
             self._server.shutdown()
+            # ThreadingTCPServer.server_close() joins the non-daemon handler
+            # threads, but shutdown() does not unblock one parked in sock.recv().
+            # Close every peer socket first so those recv()s return and the
+            # handlers exit — otherwise stop() hangs until a client disconnects.
+            with self._lock:
+                for p in list(self._peers.values()):
+                    with contextlib.suppress(OSError):
+                        p.sock.shutdown(socket.SHUT_RDWR)
+                    with contextlib.suppress(OSError):
+                        p.sock.close()
             self._server.server_close()
             self._server = None
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
-        if self._manifest_fp is not None:
-            self._manifest_fp.close()  # type: ignore[attr-defined]
-            self._manifest_fp = None
+        # Close the manifest under the lock so it can't race a handler thread's
+        # in-flight write (both take _lock — see _save).
+        with self._lock:
+            if self._manifest_fp is not None:
+                self._manifest_fp.close()
+                self._manifest_fp = None
 
     def __enter__(self) -> CotRelay:
         self.start()
@@ -216,27 +236,42 @@ class CotRelay:
     def _save(self, raw: bytes, peer: _Peer) -> None:
         cot_type = _match(_TYPE_RE, raw, "unknown")
         callsign = _match(_CALLSIGN_RE, raw, "")
-        with self._lock:
-            self.seq += 1
-            n = self.seq
-            self.type_counts[cot_type] = self.type_counts.get(cot_type, 0) + 1
-            peer.events += 1
-            if callsign:  # pings carry none; keep the last real one for the status view
-                peer.callsign = callsign
-        safe_type = cot_type.replace("/", "_")
-        (Path(self.outdir) / f"{n:04d}_{safe_type}.xml").write_bytes(raw)
         rec = {
-            "seq": n,
+            "seq": 0,
             "time": _utc_now(),
             "peer": peer.addr,
             "type": cot_type,
             "callsign": callsign,
             "bytes": len(raw),
         }
-        fp = self._manifest_fp
-        if fp is not None:
-            fp.write(json.dumps(rec) + "\n")  # type: ignore[attr-defined]
-            fp.flush()  # type: ignore[attr-defined]
+        # Everything that touches shared state or the manifest happens under the
+        # lock: sequence allocation, counters, and the manifest append. Keeping
+        # the append here (not after releasing the lock) is what lets stop() close
+        # the handle safely — a concurrent write can't race the close.
+        with self._lock:
+            self.seq += 1
+            n = rec["seq"] = self.seq
+            self.type_counts[cot_type] = self.type_counts.get(cot_type, 0) + 1
+            peer.events += 1
+            if callsign:  # pings carry none; keep the last real one for the status view
+                peer.callsign = callsign
+            if self._manifest_fp is not None:
+                self._manifest_fp.write(json.dumps(rec) + "\n")
+                self._manifest_fp.flush()
+        # The per-event XML is a unique filename, so it needs no lock — write it
+        # outside the critical section to keep the lock hold short.
+        safe_type = cot_type.replace("/", "_")
+        (Path(self.outdir) / f"{n:04d}_{safe_type}.xml").write_bytes(raw)
+
+
+def _highest_seq(outdir: Path) -> int:
+    """The largest ``NNNN_`` prefix among existing captures (0 if none)."""
+    highest = 0
+    for p in outdir.glob("*.xml"):
+        m = _SEQ_RE.match(p.name)
+        if m:
+            highest = max(highest, int(m.group(1)))
+    return highest
 
 
 def _match(pattern: re.Pattern[bytes], raw: bytes, default: str) -> str:

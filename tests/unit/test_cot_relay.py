@@ -135,3 +135,17 @@ def test_capture_dir_numbering_resumes(tmp_path: Path) -> None:
         _wait(lambda: relay.seq >= 2)
         a.close()
     assert (tmp_path / "0002_t-x-c-t.xml").exists()
+
+
+def test_numbering_resumes_from_max_not_count(tmp_path: Path) -> None:
+    # A gap (deleted middle file) must not let the next event reuse a live
+    # number: with only 0003 present, count()==1 would reuse seq 2, but the
+    # highest-prefix logic continues at 4.
+    (tmp_path / "0003_a-f-G-U-C.xml").write_bytes(PLI_EVENT)
+    with CotRelay(outdir=tmp_path, port=0) as relay:
+        a = _connect(relay.port)
+        a.sendall(PING)
+        _wait(lambda: relay.seq >= 4)
+        a.close()
+    assert (tmp_path / "0004_t-x-c-t.xml").exists()
+    assert (tmp_path / "0003_a-f-G-U-C.xml").read_bytes() == PLI_EVENT  # not overwritten

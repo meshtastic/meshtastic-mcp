@@ -77,8 +77,22 @@ def tap(x: int, y: int, serial: str | None = None) -> None:
 
 def send_keys(text: str, serial: str | None = None) -> None:
     """Type into the focused field. Unicode-safe (clipboard-paste under the
-    hood) — no ``%s`` space encoding or metacharacter mangling."""
-    device(serial).send_keys(text)
+    hood) — no ``%s`` space encoding or metacharacter mangling.
+
+    When uiautomator2 falls back to its clipboard-paste path (no FastInputIME),
+    the typed text is left on the device clipboard. Clear it afterwards so
+    caller-supplied text (which may be sensitive) doesn't linger. Best-effort:
+    a clipboard-clear failure never masks a successful type."""
+    d = device(serial)
+    try:
+        d.send_keys(text)
+    finally:
+        # Wipe only the paste buffer (NOT the field — clear_text() would delete
+        # what we just typed). Best-effort across u2 versions/IME modes.
+        try:
+            d.set_clipboard("")
+        except Exception:
+            pass
 
 
 def tap_text(token: str, serial: str | None = None, *, timeout: float = 5.0) -> bool:

@@ -76,6 +76,18 @@ def test_android_driving_tools_registered(server) -> None:
         assert tools[name].annotations.destructiveHint, f"{name} should be destructive"
 
 
+@pytest.mark.parametrize("bad", ["../escape", "/abs/path", "a/b", "..", ".", "", "x\x00y"])
+def test_cot_relay_rejects_unsafe_session_names(server, bad) -> None:
+    # `session` names a subdir under the capture root; separators/traversal/
+    # absolute paths must be rejected so a capture can't be written outside it.
+    with pytest.raises(ValueError, match="invalid session"):
+        server._safe_session_name(bad)
+
+
+def test_cot_relay_accepts_plain_session_name(server) -> None:
+    assert server._safe_session_name("run-2026-08-20") == "run-2026-08-20"
+
+
 def test_android_type_text_passes_raw(server, monkeypatch) -> None:
     # The tool passes the raw string to avd.type_text; the `%s` space-encoding
     # for the `adb input text` path lives inside avd.type_text's fallback branch

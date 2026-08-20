@@ -114,10 +114,12 @@ clones and their snapshots.
 
 ## Prompt-injection note
 
-Captured CoT is remote-authored TAK content: a marker callsign or GeoChat body
-is attacker-controllable and surfaces in `cot_relay_status`. Treat it as
-untrusted (lethal-trifecta leg 2) — do not combine with `send_text` in one
-agentic task without human review. See `SECURITY.md`.
+Captured CoT is remote-authored TAK content, attacker-controllable. The full
+events (marker/GeoChat bodies included) are written to the capture files on disk;
+`cot_relay_status` itself returns only the per-peer **callsign** plus counts. Both
+the callsign it returns and the files it writes are untrusted (lethal-trifecta
+leg 2) — do not combine with `send_text` in one agentic task without human
+review. See `SECURITY.md`.
 
 ## `[android-fast]` extra (UI driving)
 

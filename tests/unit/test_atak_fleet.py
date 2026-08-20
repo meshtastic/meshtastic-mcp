@@ -148,6 +148,20 @@ def test_drive_route_requires_two_waypoints() -> None:
         atak.drive_route("emulator-5554", [(1.0, 2.0)])
 
 
+@pytest.mark.parametrize("bad", [0.0, -5.0, float("inf"), float("nan")])
+def test_drive_route_rejects_bad_speed(bad: float) -> None:
+    # A non-positive/non-finite speed would clamp the interpolation denominator
+    # to 1e-6 and spawn ~a billion points (OOM); reject before interpolation.
+    with pytest.raises(atak.AtakError, match="speed_mps"):
+        atak.drive_route("emulator-5554", [(0.0, 0.0), (0.01, 0.0)], speed_mps=bad)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("inf"), float("nan")])
+def test_drive_route_rejects_bad_step(bad: float) -> None:
+    with pytest.raises(atak.AtakError, match="step_s"):
+        atak.drive_route("emulator-5554", [(0.0, 0.0), (0.01, 0.0)], step_s=bad)
+
+
 def test_logcat_argv_filters_to_atak_tag() -> None:
     argv = atak.logcat_argv("emulator-5554")
     assert argv[:4] == ["adb", "-s", "emulator-5554", "logcat"]

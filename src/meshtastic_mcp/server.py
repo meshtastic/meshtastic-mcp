@@ -2920,6 +2920,7 @@ def replay_stop(session_id: str | None = None) -> dict[str, Any]:
 # they run in a background thread and the caller polls `atak_fleet_status`. State
 # for those background jobs lives here.
 _COT_RELAY: Any = None
+_COT_LOCK = threading.Lock()  # serializes relay start/stop lifecycle transitions
 _ATAK_FLEET: Any = None
 _ATAK_UP: dict[str, Any] = {"thread": None, "phase": "idle", "error": None}
 _ATAK_DRIVES: dict[str, dict[str, Any]] = {}  # serial -> {thread, stop, phase, error, waypoints}
@@ -2929,6 +2930,26 @@ _ATAK_LOCK = threading.Lock()
 def _cot_data_dir() -> Path:
     """Base dir for CoT captures (under the shared MCP data root)."""
     return config.mcp_data_dir() / "cot_captures"
+
+
+def _safe_session_name(session: str) -> str:
+    """Validate a caller-supplied capture-session name is a single directory
+    component — no separators, no traversal, not absolute — so it can't escape
+    the capture root. Raises ValueError otherwise."""
+    if (
+        not session
+        or session in (".", "..")
+        or "/" in session
+        or "\\" in session
+        or "\x00" in session
+        or Path(session).is_absolute()
+        or Path(session).name != session
+    ):
+        raise ValueError(
+            f"invalid session name {session!r}: must be a single path component "
+            "(no separators, no '..', not absolute)"
+        )
+    return session
 
 
 @app.tool()
@@ -2943,25 +2964,34 @@ def cot_relay_start(port: int = 8087, session: str | None = None) -> dict[str, A
     clients as emulators pointed here (they reach the host at `10.0.2.2:<port>`).
 
     One relay at a time; call `cot_relay_stop` first to rebind. `session` names
-    the capture subdir (default: a timestamp).
+    the capture subdir (default: a timestamp); it must be a single path
+    component (no separators or `..`).
     """
     global _COT_RELAY
     from datetime import datetime
 
     from .replay.cot_relay import CotRelay
 
-    if _COT_RELAY is not None:
-        return {
-            "error": "a relay is already running; call cot_relay_stop first",
-            **_COT_RELAY.status(),
-        }
-    name = session or datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    relay = CotRelay(outdir=_cot_data_dir() / name, port=port)
     try:
-        bound = relay.start()
-    except OSError as exc:
-        return {"error": f"could not bind port {port}: {exc}. Free it or pick another port."}
-    _COT_RELAY = relay
+        name = (
+            _safe_session_name(session) if session else datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+    # Hold the lifecycle lock across the None-check → bind → publish so two
+    # concurrent starts can't both bind a listener and leak one.
+    with _COT_LOCK:
+        if _COT_RELAY is not None:
+            return {
+                "error": "a relay is already running; call cot_relay_stop first",
+                **_COT_RELAY.status(),
+            }
+        relay = CotRelay(outdir=_cot_data_dir() / name, port=port)
+        try:
+            bound = relay.start()
+        except OSError as exc:
+            return {"error": f"could not bind port {port}: {exc}. Free it or pick another port."}
+        _COT_RELAY = relay
     return {"started": True, "port": bound, **relay.status()}
 
 
@@ -2977,11 +3007,12 @@ def cot_relay_status() -> dict[str, Any]:
 def cot_relay_stop() -> dict[str, Any]:
     """Stop the CoT relay and close its capture files. Returns the final status."""
     global _COT_RELAY
-    if _COT_RELAY is None:
-        return {"running": False}
-    final = _COT_RELAY.status()
-    _COT_RELAY.stop()
-    _COT_RELAY = None
+    with _COT_LOCK:
+        if _COT_RELAY is None:
+            return {"running": False}
+        relay, _COT_RELAY = _COT_RELAY, None
+    final = relay.status()
+    relay.stop()
     return {"stopped": True, **final}
 
 
@@ -3016,6 +3047,10 @@ def atak_fleet_up(
             }
         if _ATAK_UP["phase"] == "bringing_up":
             return {"error": "a fleet bring-up is already in progress; poll atak_fleet_status"}
+        if _ATAK_UP["phase"] == "tearing_down":
+            return {
+                "error": "a fleet teardown is in progress; wait for atak_fleet_status phase=idle"
+            }
         _ATAK_UP.update(thread=None, phase="bringing_up", error=None)
 
     def _run() -> None:
@@ -3081,6 +3116,8 @@ def atak_fleet_down(delete_clones: bool = False, confirm: bool = False) -> dict[
     with _ATAK_LOCK:
         if _ATAK_UP["phase"] == "bringing_up":
             return {"error": "fleet is still bringing up; wait for atak_fleet_status phase=ready"}
+        if _ATAK_UP["phase"] == "tearing_down":
+            return {"error": "a teardown is already in progress"}
         fleet = _ATAK_FLEET
         if fleet is None:
             return {"running": False}
@@ -3090,8 +3127,15 @@ def atak_fleet_down(delete_clones: bool = False, confirm: bool = False) -> dict[
         _ATAK_DRIVES.clear()
         nodes = [n.__dict__ for n in fleet.nodes]
         _ATAK_FLEET = None
-        _ATAK_UP.update(phase="idle", error=None)
-    atak.fleet_down(fleet, delete_clones=delete_clones)
+        # Stay non-idle until fleet_down() actually stops the emulators — else a
+        # concurrent atak_fleet_up could reuse these clone names/ports while the
+        # old teardown is still killing those serials.
+        _ATAK_UP.update(phase="tearing_down", error=None)
+    try:
+        atak.fleet_down(fleet, delete_clones=delete_clones)
+    finally:
+        with _ATAK_LOCK:
+            _ATAK_UP.update(phase="idle", error=None)
     return {"stopped": True, "nodes": nodes, "clones_deleted": delete_clones}
 
 
