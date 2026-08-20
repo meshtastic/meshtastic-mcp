@@ -145,6 +145,16 @@ def test_drive_route_requires_two_waypoints() -> None:
         atak.drive_route("emulator-5554", [(1.0, 2.0)])
 
 
+def test_logcat_argv_filters_to_atak_tag() -> None:
+    argv = atak.logcat_argv("emulator-5554")
+    assert argv[:4] == ["adb", "-s", "emulator-5554", "logcat"]
+    # Only the ATAK comms tag shown, everything else silenced (kills GL noise).
+    assert f"{atak.ATAK_LOG_TAG}:V" in argv
+    assert "*:S" in argv
+    assert "-d" not in argv  # follow by default
+    assert "-d" in atak.logcat_argv("emulator-5554", follow=False)
+
+
 def test_provision_tag_keyed_on_apk_bytes(tmp_path: Path) -> None:
     apk1 = tmp_path / "a.apk"
     apk2 = tmp_path / "b.apk"

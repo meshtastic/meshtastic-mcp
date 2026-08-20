@@ -39,6 +39,44 @@ immediately and you poll `atak_fleet_status`.
 A physical ATAK phone can join too: add a streaming input pointed at the host's
 LAN IP + port (plain TCP, no SSL/auth).
 
+## Tailing logs (clean, filtered)
+
+Two feeds matter: what the relay captured, and what each device's ATAK is doing.
+
+**Relay event feed** — `manifest.jsonl` is already a clean one-line-per-event
+stream (seq, time, peer, type, callsign, bytes):
+
+```bash
+tail -F "$(ls -td "${MESHTASTIC_MCP_DATA_DIR:-$HOME/.local/share/meshtastic-mcp}"/cot_captures/*/ | head -1)manifest.jsonl"
+# pretty one-liners:  … | jq -rc '"\(.time) \(.peer) \(.callsign) \(.type)"'
+```
+
+Or from an MCP session, `cot_relay_status()` — peers now show callsign, not just IP.
+
+**Fleet device logs** — raw `adb logcat` is drowned by the emulator's GL-error
+flood. Filter to ATAK's comms tag (`atak.ATAK_LOG_TAG`) so only streaming
+connect/retry/rx lines show. One node:
+
+```bash
+adb -s emulator-5554 logcat -v time CommsMapComponentCommo:V '*:S'
+```
+
+**All fleet nodes at once**, name-prefixed and multiplexed into one stream:
+
+```bash
+atak-tail() {  # tail the relay + every emulator's ATAK comms log, prefixed
+  local dir; dir="$(ls -td "${MESHTASTIC_MCP_DATA_DIR:-$HOME/.local/share/meshtastic-mcp}"/cot_captures/*/ | head -1)"
+  ( tail -F "$dir/manifest.jsonl" | sed 's/^/[relay] /' ) &
+  for s in $(adb devices | awk '/^emulator-/{print $1}'); do
+    ( adb -s "$s" logcat -v time CommsMapComponentCommo:V '*:S' | sed "s/^/[$s] /" ) &
+  done
+  wait
+}
+```
+
+`Ctrl-C` stops it; add `trap 'kill 0' INT` inside for a clean teardown of the
+backgrounded tails.
+
 ## Learnings baked in (why the tools behave as they do)
 
 - **Emulators are the primary node, not the phone.** `adb emu geo fix` feeds ATAK

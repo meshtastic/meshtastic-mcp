@@ -122,6 +122,8 @@ def test_status_counts_and_partial_frames(tmp_path: Path) -> None:
         assert st["events_captured"] == 1
         assert st["type_counts"] == {"a-f-G-U-C": 1}
         assert st["peer_count"] == 1
+        # status surfaces the peer's callsign (not just its IP) for a legible view.
+        assert st["peers"][0]["callsign"] == "EARP"
         a.close()
 
 

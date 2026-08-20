@@ -104,6 +104,29 @@ _FLEET_FLAGS = (
 # accepts the position (no "NO GPS" state). Overridable per node.
 _DEFAULT_FIX = (41.6070, -93.7690)  # (lat, lon) — central US
 
+# ATAK's network/comms logging tag. A logcat filter of "<tag>:V *:S" shows only
+# the streaming-connection lines (connect / retry / rx) and silences everything
+# else — chiefly the emulator's emuglGLESv2_enc GL-error flood, which otherwise
+# buries every useful line. This is the single source of truth for that filter.
+ATAK_LOG_TAG = "CommsMapComponentCommo"
+
+
+def logcat_argv(serial: str, *, follow: bool = True) -> list[str]:
+    """adb argv for a clean ATAK-comms logcat on ``serial`` (only ``ATAK_LOG_TAG``,
+    everything else silenced). ``follow`` streams (`-v time`); else one-shot (`-d`)."""
+    mode = [] if follow else ["-d"]
+    return [
+        "adb",
+        "-s",
+        serial,
+        "logcat",
+        *mode,
+        "-v",
+        "time",
+        f"{ATAK_LOG_TAG}:V",
+        "*:S",
+    ]
+
 
 class AtakError(RuntimeError):
     pass

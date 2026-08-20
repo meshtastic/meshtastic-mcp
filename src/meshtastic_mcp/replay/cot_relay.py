@@ -67,6 +67,7 @@ class _Peer:
     addr: str
     sock: socket.socket
     events: int = 0
+    callsign: str = ""  # last non-empty callsign seen from this peer (PLI/marker)
 
 
 @dataclass
@@ -152,7 +153,7 @@ class CotRelay:
         """Live snapshot: connected peers, total events, per-type breakdown."""
         with self._lock:
             peers = [
-                {"addr": p.addr, "events": p.events}
+                {"addr": p.addr, "callsign": p.callsign, "events": p.events}
                 for p in sorted(self._peers.values(), key=lambda q: q.ident)
             ]
             type_counts = dict(self.type_counts)
@@ -220,6 +221,8 @@ class CotRelay:
             n = self.seq
             self.type_counts[cot_type] = self.type_counts.get(cot_type, 0) + 1
             peer.events += 1
+            if callsign:  # pings carry none; keep the last real one for the status view
+                peer.callsign = callsign
         safe_type = cot_type.replace("/", "_")
         (Path(self.outdir) / f"{n:04d}_{safe_type}.xml").write_bytes(raw)
         rec = {
