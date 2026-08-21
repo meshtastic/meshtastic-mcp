@@ -32,6 +32,8 @@ location, env}) or per-role env vars: ``MESHTASTIC_UHUBCTL_LOCATION_<ROLE>`` +
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 # role -> {vid, alt_vids, location, env}. Keep this the ONLY place these four
 # facts are written down; conftest.hub_profile, conftest.pytest_generate_tests,
 # _port_discovery._ROLE_VIDS, and test_00_bake all derive from it.
@@ -155,3 +157,23 @@ def device_location(port: str) -> str | None:
     if hub is None or slot is None:
         return None
     return f"{hub}.{slot}"
+
+
+def device_locations(ports: Iterable[str]) -> dict[str, str | None]:
+    """:func:`device_location` for many ports from ONE ``comports()`` pass.
+
+    ``comports()`` walks ``/sys`` (glob + realpath per port) on Linux, so the
+    per-port variant is O(ports²) across a bench — or across the 32 ``ttyS*``
+    stubs a CI runner enumerates. Callers resolving several roles against the
+    same snapshot should use this instead."""
+    from serial.tools import list_ports
+
+    by_device: dict[str, str] = {}
+    try:
+        for p in list_ports.comports():
+            loc = getattr(p, "location", None)
+            if loc and "." in str(loc):
+                by_device[p.device] = str(loc)
+    except Exception:
+        pass
+    return {port: by_device.get(port) for port in ports}

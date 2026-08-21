@@ -527,15 +527,31 @@ def _hex_to_int(value: Any) -> int | None:
     return None
 
 
-def _match_role_port(spec: dict[str, Any], found: list[dict]) -> str | None:
+def _found_locations(found: list[dict]) -> dict[str, str | None]:
+    """port → hub-slot location for every port in a `list_devices()` snapshot,
+    from a single `comports()` pass (see `_bench.device_locations`)."""
+    return _bench.device_locations(p for d in found if (p := d.get("port")))
+
+
+def _match_role_port(
+    spec: dict[str, Any],
+    found: list[dict],
+    locations: dict[str, str | None] | None = None,
+) -> str | None:
     """Resolve one hub_profile role spec to a connected `/dev` path.
 
     Prefers the role's pinned hub-slot ``location`` (stable across the
     app↔bootloader USB PID flip and unambiguous when several boards share a
     VID); falls back to VID (+ optional ``pid_contains``) for specs with no
     location (e.g. a ``--hub-profile`` yaml). Returns None if absent.
+
+    Pass ``locations`` (from `_found_locations`) when resolving several roles
+    against the same ``found`` snapshot — otherwise each port costs a full
+    serial-port enumeration.
     """
     location = spec.get("location")
+    if location is not None and locations is None:
+        locations = _found_locations(found)
     vids = (spec["vid"], *tuple(spec.get("alt_vids", ())))
     pid_contains = spec.get("pid_contains")
     for dev in found:
@@ -545,7 +561,7 @@ def _match_role_port(spec: dict[str, Any], found: list[dict]) -> str | None:
         if location is not None:
             # Do NOT fall back to VID here — we want the board on THIS slot,
             # not any same-VID sibling.
-            if _bench.device_location(port) == location:
+            if locations is not None and locations.get(port) == location:
                 return port
             continue
         if _hex_to_int(dev.get("vid")) not in vids:
@@ -587,7 +603,7 @@ def bench_wake(hub_profile: dict[str, dict[str, Any]]) -> None:
         return
     try:
         found = devices_module.list_devices(include_unknown=True)
-        present = {_bench.device_location(p) for d in found if (p := d.get("port"))}
+        present = set(_found_locations(found).values())
         for role, spec in hub_profile.items():
             canonical = role.split("_alt", 1)[0]
             location = spec.get("location")
@@ -617,13 +633,14 @@ def hub_devices(hub_profile: dict[str, dict[str, Any]], bench_wake: None) -> dic
     # include_unknown=True so non-whitelisted VIDs (e.g. CP2102 at 0x10c4) that
     # are configured as hub roles still match.
     found = devices_module.list_devices(include_unknown=True)
+    locations = _found_locations(found)
     resolved: dict[str, str] = {}
     for role, spec in hub_profile.items():
         # Skip legacy `*_alt` aliases if a yaml profile still uses them.
         canonical = role.split("_alt", 1)[0]
         if canonical in resolved:
             continue
-        port = _match_role_port(spec, found)
+        port = _match_role_port(spec, found, locations)
         if port is not None:
             resolved[canonical] = port
     return resolved
@@ -725,15 +742,30 @@ def _reset_transmit_history_state(role: str, port: str) -> str:
     return fresh
 
 
+def _session_touches_hardware(session: pytest.Session) -> bool:
+    """False when every collected item is in the portable unit tier, so the
+    session-wide bench prep (`bench_wake`, transmit-history reset + reboot)
+    is skipped: a unit run on a bench must never power-cycle or reboot the
+    radios another session may be using."""
+    return any("/unit/" not in str(getattr(item, "fspath", item.nodeid)) for item in session.items)
+
+
 @pytest.fixture(scope="session", autouse=True)
-def _session_clear_transmit_history(hub_devices: dict[str, str]) -> None:
+def _session_clear_transmit_history(request: pytest.FixtureRequest) -> None:
     """Wipe transmit_history.dat on each device at session start.
 
     Without this, the firmware's per-portnum last-broadcast cache
     (`src/mesh/TransmitHistory.h`) carries throttle state across sessions
     and suppresses early broadcasts. Mutates `hub_devices` in place with
     post-reboot ports since nRF52 re-enumerates.
+
+    `hub_devices` is requested lazily so a unit-only session never
+    enumerates or wakes the bench.
     """
+    if not _session_touches_hardware(request.session):
+        yield
+        return
+    hub_devices: dict[str, str] = request.getfixturevalue("hub_devices")
     if not hub_devices:
         yield
         return
@@ -863,6 +895,50 @@ def baked_mesh(
     return out
 
 
+_DETECTED_ROLES_CACHE: dict[str | None, list[str]] = {}
+
+
+def _detected_roles(profile_path: str | None) -> list[str]:
+    """Bench roles to parametrize over — detected hardware, or the full
+    profile when nothing is attached. Memoized per session: the snapshot is
+    taken during collection and does not change while items are generated."""
+    if profile_path in _DETECTED_ROLES_CACHE:
+        return _DETECTED_ROLES_CACHE[profile_path]
+
+    # Resolve the role → spec map, honoring --hub-profile if passed; otherwise
+    # the reference bench from tests/_bench.py.
+    profile = _load_hub_profile(profile_path) if profile_path else _bench.hub_profile()
+
+    try:
+        found = devices_module.list_devices(include_unknown=True)
+    except Exception:
+        found = []
+    locations = _found_locations(found)
+
+    # Detect each role by its SPECIFIC board (location, or VID for yaml specs
+    # with no location) — so three same-VID nRF52 boards parametrize as three
+    # distinct roles rather than one.
+    detected: list[str] = []
+    for role, spec in profile.items():
+        canonical = role.split("_alt", 1)[0]
+        if canonical in detected:
+            continue
+        if _match_role_port(spec, found, locations) is not None:
+            detected.append(canonical)
+
+    # Fall back to the full role set when nothing is detected, so the suite
+    # still COLLECTS cleanly off-bench (each variant skips at runtime via the
+    # hub_devices presence check).
+    fallback: list[str] = []
+    for role in profile:
+        canonical = role.split("_alt", 1)[0]
+        if canonical not in fallback:
+            fallback.append(canonical)
+    roles = detected or fallback
+    _DETECTED_ROLES_CACHE[profile_path] = roles
+    return roles
+
+
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     """Auto-parametrize `baked_single` over every detected hub role, and
     `mesh_pair` over every ordered (tx, rx) pair.
@@ -880,47 +956,25 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     Honors `--hub-profile=<yaml>` for non-default hardware — when set, only
     roles defined in the YAML are parametrized. (So e.g. a yaml with only
     `esp32s3` skips every `[nrf52]` variant at collection time.)
+
+    This hook fires once per collected test function, so it must not touch
+    hardware unless the test actually takes one of the two fixtures — and
+    the bench is enumerated only once per session (`_detected_roles`).
+    Before that guard, every one of the ~830 unit tests enumerated serial
+    ports at collection time: ~38 s per file on the bench, ~8 min in CI.
     """
-    # Resolve the role → spec map, honoring --hub-profile if passed; otherwise
-    # the reference bench from tests/_bench.py.
+    wants_single = "baked_single_role" in metafunc.fixturenames
+    wants_pair = "mesh_pair_roles" in metafunc.fixturenames
+    if not (wants_single or wants_pair):
+        return
+
     profile_path = metafunc.config.getoption("--hub-profile", default=None)
-    if profile_path:
-        profile = _load_hub_profile(profile_path)
-    else:
-        profile = _bench.hub_profile()
+    roles = _detected_roles(profile_path)
 
-    try:
-        from meshtastic_mcp import devices as _dev
-
-        found = _dev.list_devices(include_unknown=True)
-    except Exception:
-        found = []
-
-    # Detect each role by its SPECIFIC board (location, or VID for yaml specs
-    # with no location) — so three same-VID nRF52 boards parametrize as three
-    # distinct roles rather than one.
-    detected: list[str] = []
-    for role, spec in profile.items():
-        canonical = role.split("_alt", 1)[0]
-        if canonical in detected:
-            continue
-        if _match_role_port(spec, found) is not None:
-            detected.append(canonical)
-
-    # Fall back to the full role set when nothing is detected, so the suite
-    # still COLLECTS cleanly off-bench (each variant skips at runtime via the
-    # hub_devices presence check).
-    fallback: list[str] = []
-    for role in profile:
-        canonical = role.split("_alt", 1)[0]
-        if canonical not in fallback:
-            fallback.append(canonical)
-    roles = detected or fallback
-
-    if "baked_single_role" in metafunc.fixturenames:
+    if wants_single:
         metafunc.parametrize("baked_single_role", roles, ids=roles, scope="function")
 
-    if "mesh_pair_roles" in metafunc.fixturenames:
+    if wants_pair:
         pairs = [(a, b) for a in roles for b in roles if a != b]
         ids = [f"{a}->{b}" for a, b in pairs]
         metafunc.parametrize("mesh_pair_roles", pairs, ids=ids, scope="function")

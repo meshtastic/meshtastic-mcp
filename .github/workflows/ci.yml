@@ -79,8 +79,13 @@ jobs:
       - name: Portable unit tier (hardware- and firmware-free)
         # All extras: the unit tier covers the web (fastapi/aiosqlite) and sdr
           # (numpy) modules too; those tests importorskip on partial installs.
+        # --durations keeps the slowest tests visible in the log so a
+          # collection/fixture regression (this tier once took 8+ min, almost
+          # all of it enumerating serial ports at collection) shows up in the
+          # numbers, not just the wall clock. Per-test timeout: tests/unit/conftest.py.
         run: uv run --python ${{ matrix.python-version }} --all-extras
-          python -m pytest tests/unit -q --cov=meshtastic_mcp --cov-report=xml
+          python -m pytest tests/unit -q --durations=20
+          --cov=meshtastic_mcp --cov-report=xml
       - name: Upload coverage
         if: matrix.python-version == '3.12'
         uses: codecov/codecov-action@v5
