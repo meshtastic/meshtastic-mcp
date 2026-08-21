@@ -29,7 +29,7 @@ Design, folding in the fleet-orchestration research:
   a ~15 min setup into a ~60 s bring-up. The snapshot is keyed on
   (APK sha, system-image build) so a stale one is re-provisioned, not errored.
 * **Headless footprint flags** and a real boot health check
-  (``sys.boot_completed`` + ``init.svc.bootanim=stopped``), matching what the CI
+  (``sys.boot_completed`` + ``init.svc.bootanim`` stopped or unstarted), matching what the CI
   emulator actions wait on.
 
 ``adb emu geo fix`` takes **longitude first** — a silent wrong-hemisphere trap
@@ -92,10 +92,12 @@ _FLEET_FLAGS = (
     "-noaudio",
     "-no-boot-anim",
     "-no-metrics",
+    # The Play image runs GMS dex2oat + Play Store after boot; at 2 cores / 2 GB
+    # the emulator ANRs through ATAK's first run.
     "-cores",
-    "2",
+    "3",
     "-memory",
-    "2048",
+    "4096",
     # ATAK-CIV is ~108 MB; the default 6 GB userdata is ~94% full out of the box.
     "-partition-size",
     "8192",
@@ -284,7 +286,7 @@ def boot(
 
 def wait_for_boot(serial: str, *, timeout: float = 300.0) -> None:
     """Block until ``serial`` reports ``sys.boot_completed=1`` AND the boot
-    animation has stopped — the health check the CI emulator actions use."""
+    animation is stopped or unstarted — the health check the CI emulator actions use."""
     deadline = time.time() + timeout
     avd.adb("wait-for-device", serial=serial, timeout=timeout, check=False)
     while time.time() < deadline:
@@ -412,6 +414,10 @@ def _walk_first_run(serial: str, *, timeout: float = 90.0) -> None:
     idx = 0
     while time.time() < deadline and idx < len(_FIRST_RUN_LABELS):
         label = _FIRST_RUN_LABELS[idx]
+        # A starved emulator throws an ANR dialog over the EULA; Wait, never Close app.
+        if avd.find_text("isn't responding", serial=serial) and _tap_label(serial, "Wait"):
+            time.sleep(1.5)
+            continue
         if _tap_label(serial, label):
             idx += 1
             time.sleep(1.5)
@@ -425,10 +431,13 @@ def _walk_first_run(serial: str, *, timeout: float = 90.0) -> None:
 def _tap_label(serial: str, label: str) -> bool:
     # avd._find_center handles center as a [x,y] list OR "[x,y]" string (the
     # emulator `android layout` path emits the latter) — don't re-unpack inline.
-    c = avd._find_center(
-        lambda el: el.get("text") == label and "clickable" in el.get("interactions", []),
-        serial=serial,
-    )
+    try:
+        c = avd._find_center(
+            lambda el: el.get("text") == label and "clickable" in el.get("interactions", []),
+            serial=serial,
+        )
+    except avd.EmulatorError:  # transient non-JSON dump mid-animation: not on screen
+        return False
     if c is None:
         return False
     avd.tap(c[0], c[1], serial=serial)
@@ -461,6 +470,17 @@ def provision(
         ATAK_PACKAGE,
         "MANAGE_EXTERNAL_STORAGE",
         "allow",
+        serial=serial,
+        check=False,
+    )
+    # Play Store background sync starves the headless emulator; ATAK needs none of it.
+    avd.adb(
+        "shell",
+        "pm",
+        "disable-user",
+        "--user",
+        "0",
+        "com.android.vending",
         serial=serial,
         check=False,
     )

@@ -214,3 +214,54 @@ def test_wait_for_boot_waits_while_anim_running(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
     with pytest.raises(atak.AtakError):
         atak.wait_for_boot("emulator-5554", timeout=0.2)
+
+
+# ---------------------------------------------------------------------------
+# first-run walk resilience
+# ---------------------------------------------------------------------------
+def test_tap_label_tolerates_bad_layout_dump(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `android layout` intermittently returns non-JSON on an animating screen;
+    # that must read as "label not on screen", not abort provisioning.
+    def boom(*_a: object, **_k: object) -> None:
+        raise atak.avd.EmulatorError("layout returned non-JSON")
+
+    monkeypatch.setattr(atak.avd, "ui_dump", boom)
+    assert atak._tap_label("emulator-5554", "I agree.") is False
+
+
+def test_walk_first_run_dismisses_anr(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A starved emulator throws "System UI isn't responding" over ATAK's EULA;
+    # the walk must tap Wait (not Close app) and carry on.
+    screen = {"texts": ["System UI isn't responding", "Close app", "Wait"]}
+    taps: list[str] = []
+
+    def ui_dump(*, serial: str | None = None, diff: bool = False) -> list[dict[str, object]]:
+        return [
+            {"text": t, "interactions": ["clickable"], "center": [1, i]}
+            for i, t in enumerate(screen["texts"])
+        ]
+
+    def tap(x: int, y: int, *, serial: str | None = None) -> None:
+        label = screen["texts"][y]
+        taps.append(label)
+        if label == "Wait":
+            screen["texts"] = ["I agree.", "Tools"]
+        elif label == "I agree.":
+            screen["texts"] = ["Tools"]
+
+    monkeypatch.setattr(atak.avd, "ui_dump", ui_dump)
+    monkeypatch.setattr(atak.avd, "tap", tap)
+    monkeypatch.setattr(
+        atak.avd, "find_text", lambda tok, *, serial=None: any(tok in t for t in screen["texts"])
+    )
+    monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+    atak._walk_first_run("emulator-5554", timeout=5)
+    assert taps == ["Wait", "I agree."]
+
+
+def test_fleet_flags_give_play_image_headroom() -> None:
+    # The Play system image runs GMS dex2oat + Play Store after boot; at 2 cores /
+    # 2 GB the emulator ANRs through ATAK's first run.
+    flags = list(atak._FLEET_FLAGS)
+    assert flags[flags.index("-cores") + 1] == "3"
+    assert flags[flags.index("-memory") + 1] == "4096"
