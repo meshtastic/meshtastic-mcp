@@ -214,3 +214,96 @@ def test_wait_for_boot_waits_while_anim_running(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
     with pytest.raises(atak.AtakError):
         atak.wait_for_boot("emulator-5554", timeout=0.2)
+
+
+# ---------------------------------------------------------------------------
+# first-run walk resilience
+# ---------------------------------------------------------------------------
+def test_tap_label_tolerates_bad_layout_dump(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `android layout` intermittently returns non-JSON on an animating screen;
+    # that must read as "label not on screen", not abort provisioning.
+    def boom(*_a: object, **_k: object) -> None:
+        raise atak.avd.EmulatorError("layout returned non-JSON")
+
+    monkeypatch.setattr(atak.avd, "ui_dump", boom)
+    assert atak._tap_label("emulator-5554", "I agree.") is False
+
+
+def test_walk_first_run_dismisses_anr(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A starved emulator throws "System UI isn't responding" over ATAK's EULA;
+    # the walk must tap Wait (not Close app) and carry on.
+    screen = {"texts": ["System UI isn't responding", "Close app", "Wait"]}
+    taps: list[str] = []
+
+    def ui_dump(*, serial: str | None = None, diff: bool = False) -> list[dict[str, object]]:
+        return [
+            {"text": t, "interactions": ["clickable"], "center": [1, i]}
+            for i, t in enumerate(screen["texts"])
+        ]
+
+    def tap(x: int, y: int, *, serial: str | None = None) -> None:
+        label = screen["texts"][y]
+        taps.append(label)
+        if label == "Wait":
+            screen["texts"] = ["I agree.", "Tools"]
+        elif label == "I agree.":
+            screen["texts"] = ["Tools"]
+
+    monkeypatch.setattr(atak.avd, "ui_dump", ui_dump)
+    monkeypatch.setattr(atak.avd, "tap", tap)
+    monkeypatch.setattr(
+        atak.avd, "find_text", lambda tok, *, serial=None: any(tok in t for t in screen["texts"])
+    )
+    monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+    atak._walk_first_run("emulator-5554", timeout=5)
+    assert taps == ["Wait", "I agree."]
+
+
+def test_fleet_flags_give_play_image_headroom() -> None:
+    # The Play system image runs GMS dex2oat + Play Store after boot; at 2 cores /
+    # 2 GB the emulator ANRs through ATAK's first run.
+    flags = list(atak._FLEET_FLAGS)
+    assert flags[flags.index("-cores") + 1] == "3"
+    assert flags[flags.index("-memory") + 1] == "4096"
+
+
+def test_push_stream_pref_writes_the_defaults_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ATAK only auto-loads config/prefs/defaults (no extension) at activity start
+    # (PreferenceControl.ingestDefaults); a .pref there is inert.
+    pushed: list[str] = []
+
+    def adb(*args: str, **kw: object) -> None:
+        if args[0] == "push":
+            pushed.append(args[2])
+
+    monkeypatch.setattr(atak.avd, "adb", adb)
+    atak.push_stream_pref("emulator-5554", "10.0.2.2", 8087)
+    assert pushed == ["/sdcard/atak/config/prefs/defaults"]
+
+
+def test_drive_route_passes_ground_speed_to_geo_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ATAK reads Location.getSpeed(); the emulator only sets it from geo fix's
+    # optional velocity (knots). Without it every PLI reports speed="0.0".
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(atak.avd, "adb", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+    atak.drive_route("emulator-5554", [(41.71, -93.69), (41.7101, -93.69)], speed_mps=1.5, step_s=2)
+    fix = next(c for c in calls if c[:3] == ("emu", "geo", "fix"))
+    assert fix[5:] == ("280", "8", "2.9")  # alt m, satellites, knots (1.5 m/s)
+
+
+def test_walk_first_run_survives_bad_dump_on_text_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The ANR / "Tools" checks run before _tap_label's own guard; a bad dump there
+    # must not abort provisioning.
+    calls = {"n": 0}
+
+    def find_text(tok: str, *, serial: str | None = None) -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise atak.avd.EmulatorError("layout returned non-JSON")
+        return tok == "Tools"
+
+    monkeypatch.setattr(atak.avd, "find_text", find_text)
+    monkeypatch.setattr(atak.avd, "ui_dump", lambda **_k: [])
+    monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+    atak._walk_first_run("emulator-5554", timeout=5)  # returns once "Tools" is seen

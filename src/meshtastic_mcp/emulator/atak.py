@@ -29,7 +29,7 @@ Design, folding in the fleet-orchestration research:
   a ~15 min setup into a ~60 s bring-up. The snapshot is keyed on
   (APK sha, system-image build) so a stale one is re-provisioned, not errored.
 * **Headless footprint flags** and a real boot health check
-  (``sys.boot_completed`` + ``init.svc.bootanim=stopped``), matching what the CI
+  (``sys.boot_completed`` + ``init.svc.bootanim`` stopped or unstarted), matching what the CI
   emulator actions wait on.
 
 ``adb emu geo fix`` takes **longitude first** — a silent wrong-hemisphere trap
@@ -92,10 +92,12 @@ _FLEET_FLAGS = (
     "-noaudio",
     "-no-boot-anim",
     "-no-metrics",
+    # The Play image runs GMS dex2oat + Play Store after boot; at 2 cores / 2 GB
+    # the emulator ANRs through ATAK's first run.
     "-cores",
-    "2",
+    "3",
     "-memory",
-    "2048",
+    "4096",
     # ATAK-CIV is ~108 MB; the default 6 GB userdata is ~94% full out of the box.
     "-partition-size",
     "8192",
@@ -284,7 +286,7 @@ def boot(
 
 def wait_for_boot(serial: str, *, timeout: float = 300.0) -> None:
     """Block until ``serial`` reports ``sys.boot_completed=1`` AND the boot
-    animation has stopped — the health check the CI emulator actions use."""
+    animation is stopped or unstarted — the health check the CI emulator actions use."""
     deadline = time.time() + timeout
     avd.adb("wait-for-device", serial=serial, timeout=timeout, check=False)
     while time.time() < deadline:
@@ -305,10 +307,20 @@ def wait_for_boot(serial: str, *, timeout: float = 300.0) -> None:
 # ---------------------------------------------------------------------------
 # GPS / movement (emulator console)
 # ---------------------------------------------------------------------------
-def set_position(serial: str, lat: float, lon: float) -> None:
+def set_position(serial: str, lat: float, lon: float, *, speed_mps: float | None = None) -> None:
     """Set the emulator's GPS fix. Args are (lat, lon) in map order; the console
-    `geo fix` wants longitude first, swapped here."""
-    avd.adb("emu", "geo", "fix", f"{lon:.7f}", f"{lat:.7f}", serial=serial, check=False)
+    `geo fix` wants longitude first, swapped here.
+
+    ``speed_mps`` rides along as geo fix's optional velocity (knots) — ATAK
+    reads ``Location.getSpeed()`` and never derives speed from successive
+    fixes, so without it every PLI reports ``speed="0.0"``. Bearing has no
+    geo fix parameter (and ``geo nmea`` is ignored by current emulators), so
+    ``<track course>`` still reflects the virtual compass, not the route.
+    """
+    args = ["emu", "geo", "fix", f"{lon:.7f}", f"{lat:.7f}"]
+    if speed_mps is not None:
+        args += ["280", "8", f"{speed_mps * 1.943844:.1f}"]  # alt m, satellites, knots
+    avd.adb(*args, serial=serial, check=False)
 
 
 def set_battery(serial: str, percent: int) -> None:
@@ -343,8 +355,9 @@ def drive_route(
     """Feed a moving GPS track along ``waypoints`` (each ``(lat, lon)``).
 
     Emits a fix every ``step_s`` seconds, spacing points so ground speed is
-    ~``speed_mps``, so ATAK derives a live course/speed from consecutive
-    positions (the emulator test provider reports only position, not velocity).
+    ~``speed_mps``, and stamps that speed on each fix so ATAK's PLI carries
+    it (ATAK does not derive speed from consecutive positions; course still
+    comes from the virtual compass — see ``set_position``).
     Blocks until the route completes or ``stop_event`` is set. Emulator-only —
     a physical device rejects mock location for self-PLI.
     """
@@ -362,9 +375,9 @@ def drive_route(
         for lat, lon in _interp(a, b, steps):
             if stop_event is not None and stop_event.is_set():
                 return
-            set_position(serial, lat, lon)
+            set_position(serial, lat, lon, speed_mps=speed_mps)
             time.sleep(step_s)
-    set_position(serial, *waypoints[-1])
+    set_position(serial, *waypoints[-1], speed_mps=0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +401,12 @@ def stream_pref(host: str, port: int, *, name: str = "cotcapture") -> str:
 
 
 def push_stream_pref(serial: str, host: str, port: int, *, name: str = "cotcapture") -> None:
-    """Write the streaming-input pref into ATAK's config + import dirs."""
+    """Write the streaming-input pref where ATAK auto-loads it.
+
+    Only ``config/prefs/defaults`` (no extension) is ingested — once, at
+    ``ATAKActivity`` start, then deleted (``PreferenceControl.ingestDefaults``).
+    A ``.pref`` dropped there or in ``import/`` is never read.
+    """
     import tempfile
 
     pref = stream_pref(host, port, name=name)
@@ -396,13 +414,17 @@ def push_stream_pref(serial: str, host: str, port: int, *, name: str = "cotcaptu
         fh.write(pref)
         local = fh.name
     try:
-        for dest in (
-            "/sdcard/atak/config/prefs/cotcapture.pref",
-            "/sdcard/atak/import/cotcapture.pref",
-        ):
-            avd.adb("push", local, dest, serial=serial, check=False)
+        avd.adb("push", local, "/sdcard/atak/config/prefs/defaults", serial=serial, check=False)
     finally:
         Path(local).unlink(missing_ok=True)  # don't leave the temp pref on the host
+
+
+def _has_text(serial: str, token: str) -> bool:
+    """``avd.find_text`` that reads a transient bad layout dump as "not on screen"."""
+    try:
+        return avd.find_text(token, serial=serial)
+    except avd.EmulatorError:
+        return False
 
 
 def _walk_first_run(serial: str, *, timeout: float = 90.0) -> None:
@@ -412,23 +434,30 @@ def _walk_first_run(serial: str, *, timeout: float = 90.0) -> None:
     idx = 0
     while time.time() < deadline and idx < len(_FIRST_RUN_LABELS):
         label = _FIRST_RUN_LABELS[idx]
+        # A starved emulator throws an ANR dialog over the EULA; Wait, never Close app.
+        if _has_text(serial, "isn't responding") and _tap_label(serial, "Wait"):
+            time.sleep(1.5)
+            continue
         if _tap_label(serial, label):
             idx += 1
             time.sleep(1.5)
         else:
             time.sleep(1.0)
         # Bail once the map toolbar is up (nav menu button present).
-        if avd.find_text("Tools", serial=serial):
+        if _has_text(serial, "Tools"):
             return
 
 
 def _tap_label(serial: str, label: str) -> bool:
     # avd._find_center handles center as a [x,y] list OR "[x,y]" string (the
     # emulator `android layout` path emits the latter) — don't re-unpack inline.
-    c = avd._find_center(
-        lambda el: el.get("text") == label and "clickable" in el.get("interactions", []),
-        serial=serial,
-    )
+    try:
+        c = avd._find_center(
+            lambda el: el.get("text") == label and "clickable" in el.get("interactions", []),
+            serial=serial,
+        )
+    except avd.EmulatorError:  # transient non-JSON dump mid-animation: not on screen
+        return False
     if c is None:
         return False
     avd.tap(c[0], c[1], serial=serial)
@@ -461,6 +490,17 @@ def provision(
         ATAK_PACKAGE,
         "MANAGE_EXTERNAL_STORAGE",
         "allow",
+        serial=serial,
+        check=False,
+    )
+    # Play Store background sync starves the headless emulator; ATAK needs none of it.
+    avd.adb(
+        "shell",
+        "pm",
+        "disable-user",
+        "--user",
+        "0",
+        "com.android.vending",
         serial=serial,
         check=False,
     )

@@ -149,3 +149,28 @@ def test_numbering_resumes_from_max_not_count(tmp_path: Path) -> None:
         a.close()
     assert (tmp_path / "0004_t-x-c-t.xml").exists()
     assert (tmp_path / "0003_a-f-G-U-C.xml").read_bytes() == PLI_EVENT  # not overwritten
+
+
+CHAT = (
+    b'<event version="2.0" uid="GeoChat.ANDROID-1.ANDROID-2.m1" type="b-t-f" '
+    b'time="2026-08-20T14:00:00Z" start="2026-08-20T14:00:00Z" stale="2026-08-21T14:00:00Z" how="h-g-i-g-o">'
+    b'<point lat="41.6" lon="-93.7" hae="250.0" ce="5.0" le="9999999.0"/>'
+    b'<detail><__chat chatroom="WYATT" id="ANDROID-2" senderCallsign="EARP"/>'
+    b'<remarks source="BAO.F.ATAK.ANDROID-1" to="ANDROID-2">howdy</remarks>'
+    b'<marti><dest callsign="WYATT"/></marti></detail></event>'
+)
+
+
+def test_chat_callsign_is_the_sender_not_the_marti_dest(tmp_path: Path) -> None:
+    # Real ATAK GeoChat carries the *recipient* in <marti><dest callsign> and the
+    # sender only as senderCallsign; a bare callsign= match attributes the event
+    # (and the peer's status row) to the wrong station.
+    with CotRelay(outdir=tmp_path, port=0) as relay:
+        a = _connect(relay.port)
+        a.sendall(PLI + CHAT)
+        _wait(lambda: relay.seq >= 2)
+        st = relay.status()
+        a.close()
+    records = [json.loads(ln) for ln in (tmp_path / "manifest.jsonl").read_text().splitlines()]
+    assert records[1]["callsign"] == "EARP"
+    assert st["peers"][0]["callsign"] == "EARP"
