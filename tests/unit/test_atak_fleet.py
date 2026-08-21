@@ -181,3 +181,36 @@ def test_provision_tag_keyed_on_apk_bytes(tmp_path: Path) -> None:
     assert t1 != t2
     assert t1.startswith("provisioned_")
     assert t1 == atak.provision_tag(str(apk1))  # stable
+
+
+# ---------------------------------------------------------------------------
+# wait_for_boot
+# ---------------------------------------------------------------------------
+class _Adb:
+    def __init__(self, props: dict[str, str]) -> None:
+        self.props = props
+
+    def __call__(self, *args: str, **kw: object) -> object:
+        class R:
+            stdout = ""
+
+        r = R()
+        if args[:2] == ("shell", "getprop"):
+            r.stdout = self.props.get(args[2], "")
+        return r
+
+
+def test_wait_for_boot_accepts_no_boot_anim(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `-no-boot-anim` (a fleet flag) means the bootanim service never starts,
+    # so the prop is empty rather than "stopped" — must still count as booted.
+    monkeypatch.setattr(atak.avd, "adb", _Adb({"sys.boot_completed": "1"}))
+    atak.wait_for_boot("emulator-5554", timeout=1)
+
+
+def test_wait_for_boot_waits_while_anim_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        atak.avd, "adb", _Adb({"sys.boot_completed": "1", "init.svc.bootanim": "running"})
+    )
+    monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+    with pytest.raises(atak.AtakError):
+        atak.wait_for_boot("emulator-5554", timeout=0.2)
