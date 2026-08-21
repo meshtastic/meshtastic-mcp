@@ -307,10 +307,20 @@ def wait_for_boot(serial: str, *, timeout: float = 300.0) -> None:
 # ---------------------------------------------------------------------------
 # GPS / movement (emulator console)
 # ---------------------------------------------------------------------------
-def set_position(serial: str, lat: float, lon: float) -> None:
+def set_position(serial: str, lat: float, lon: float, *, speed_mps: float | None = None) -> None:
     """Set the emulator's GPS fix. Args are (lat, lon) in map order; the console
-    `geo fix` wants longitude first, swapped here."""
-    avd.adb("emu", "geo", "fix", f"{lon:.7f}", f"{lat:.7f}", serial=serial, check=False)
+    `geo fix` wants longitude first, swapped here.
+
+    ``speed_mps`` rides along as geo fix's optional velocity (knots) — ATAK
+    reads ``Location.getSpeed()`` and never derives speed from successive
+    fixes, so without it every PLI reports ``speed="0.0"``. Bearing has no
+    geo fix parameter (and ``geo nmea`` is ignored by current emulators), so
+    ``<track course>`` still reflects the virtual compass, not the route.
+    """
+    args = ["emu", "geo", "fix", f"{lon:.7f}", f"{lat:.7f}"]
+    if speed_mps is not None:
+        args += ["280", "8", f"{speed_mps * 1.943844:.1f}"]  # alt m, satellites, knots
+    avd.adb(*args, serial=serial, check=False)
 
 
 def set_battery(serial: str, percent: int) -> None:
@@ -345,8 +355,9 @@ def drive_route(
     """Feed a moving GPS track along ``waypoints`` (each ``(lat, lon)``).
 
     Emits a fix every ``step_s`` seconds, spacing points so ground speed is
-    ~``speed_mps``, so ATAK derives a live course/speed from consecutive
-    positions (the emulator test provider reports only position, not velocity).
+    ~``speed_mps``, and stamps that speed on each fix so ATAK's PLI carries
+    it (ATAK does not derive speed from consecutive positions; course still
+    comes from the virtual compass — see ``set_position``).
     Blocks until the route completes or ``stop_event`` is set. Emulator-only —
     a physical device rejects mock location for self-PLI.
     """
@@ -364,9 +375,9 @@ def drive_route(
         for lat, lon in _interp(a, b, steps):
             if stop_event is not None and stop_event.is_set():
                 return
-            set_position(serial, lat, lon)
+            set_position(serial, lat, lon, speed_mps=speed_mps)
             time.sleep(step_s)
-    set_position(serial, *waypoints[-1])
+    set_position(serial, *waypoints[-1], speed_mps=0.0)
 
 
 # ---------------------------------------------------------------------------

@@ -279,3 +279,14 @@ def test_push_stream_pref_writes_the_defaults_file(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(atak.avd, "adb", adb)
     atak.push_stream_pref("emulator-5554", "10.0.2.2", 8087)
     assert pushed == ["/sdcard/atak/config/prefs/defaults"]
+
+
+def test_drive_route_passes_ground_speed_to_geo_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ATAK reads Location.getSpeed(); the emulator only sets it from geo fix's
+    # optional velocity (knots). Without it every PLI reports speed="0.0".
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(atak.avd, "adb", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+    atak.drive_route("emulator-5554", [(41.71, -93.69), (41.7101, -93.69)], speed_mps=1.5, step_s=2)
+    fix = next(c for c in calls if c[:3] == ("emu", "geo", "fix"))
+    assert fix[5:] == ("280", "8", "2.9")  # alt m, satellites, knots (1.5 m/s)
