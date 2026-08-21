@@ -79,6 +79,9 @@ backgrounded tails.
 
 ## Learnings baked in (why the tools behave as they do)
 
+What ATAK emits, when, and which types it never emits (so a scenario knows
+what must be host-injected) is in [`atak-cot-emission.md`](./atak-cot-emission.md).
+
 - **Emulators are the primary node, not the phone.** `adb emu geo fix` feeds ATAK
   a *genuine* GPS fix. A physical device **rejects Android's mock-location
   provider** for self-position (anti-spoof: `Location.isFromMockProvider()`), so
