@@ -294,7 +294,9 @@ def wait_for_boot(serial: str, *, timeout: float = 300.0) -> None:
         anim = avd.adb(
             "shell", "getprop", "init.svc.bootanim", serial=serial, check=False
         ).stdout.strip()
-        if booted == "1" and anim == "stopped":
+        # `-no-boot-anim` (a fleet flag) leaves the bootanim service unstarted,
+        # so the prop is empty rather than "stopped".
+        if booted == "1" and anim in ("stopped", ""):
             return
         time.sleep(2)
     raise AtakError(f"{serial} did not finish booting within {timeout}s")
