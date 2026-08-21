@@ -219,6 +219,7 @@ _ANDROID_TOOLS = (
     "atak_fleet_down",
     "atak_drive_route",
     "atak_drive_stop",
+    "atak_share_item",
 )
 
 # SDR-coupled tools, gated by `sdr_tool` on the sdr capability.
@@ -3188,6 +3189,21 @@ def atak_drive_route(
 
 
 @android_tool()
+def atak_share_item(serial: str, name: str) -> dict[str, Any]:
+    """Broadcast an existing ATAK map item (marker, shape, route, R&B, bullseye)
+    named `name` to all contacts, driving the UI by view-hierarchy resource-ids:
+    Overlay Manager → search → details → send → Broadcast. Blocks ~10-20 s.
+    Returns `{"shared": true, "name", "via": <send control resource-id>}`, or
+    `{"error": ...}` when the item isn't found / has no send control."""
+    from .emulator import atak
+
+    try:
+        return atak.share_item(serial, name)
+    except atak.AtakError as exc:
+        return {"error": str(exc)}
+
+
+@android_tool()
 def atak_drive_stop(serial: str | None = None) -> dict[str, Any]:
     """Stop an active GPS drive (all drives if `serial` is omitted). The self-PLI
     holds at the last fix delivered."""
@@ -3377,6 +3393,7 @@ _DESTRUCTIVE = {
     "atak_fleet_down",
     "atak_drive_route",
     "atak_drive_stop",
+    "atak_share_item",  # drives ATAK UI; broadcasts CoT to every connected peer
     "replay_inject",  # emits packets onto the live connection
     "replay_inject_beacon",  # emits a MESH_BEACON_APP packet
     "replay_inject_fileinfo",  # emits a FileInfo FromRadio onto the live connection
@@ -3475,6 +3492,7 @@ _OPEN_WORLD = {
     "atak_fleet_down",
     "atak_drive_route",
     "atak_drive_stop",
+    "atak_share_item",
 }
 
 
