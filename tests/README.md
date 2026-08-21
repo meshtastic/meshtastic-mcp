@@ -14,6 +14,7 @@ concerns rather than generic "unit vs hardware".
 | `telemetry/`    | 2 devices, shared bake  | Is telemetry reporting? Is position broadcast correct?                |
 | `monitor/`      | 1 device, shared bake   | Is the boot log clean (no panics)?                                    |
 | `fleet/`        | varies                  | Are my CI runs isolated from each other? Are reflashes idempotent?    |
+| `atak/`         | 1 Android emulator      | Does a provisioned ATAK node actually reach the CoT relay? (`MESHTASTIC_MCP_ATAK_APK`) |
 
 ## Quick start
 

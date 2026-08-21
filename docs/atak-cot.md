@@ -39,6 +39,47 @@ immediately and you poll `atak_fleet_status`.
 A physical ATAK phone can join too: add a streaming input pointed at the host's
 LAN IP + port (plain TCP, no SSL/auth).
 
+## CLI (`meshtastic-mcp-atak`)
+
+The same library from bash, no MCP server in the loop — so an edit to
+`emulator/atak.py` is live on the next command (the MCP server needs a
+reconnect to pick it up). Foreground commands stop on Ctrl-C; failures exit 1
+with the `AtakError` message.
+
+```bash
+meshtastic-mcp-atak relay start --port 8087 --session s1   # prints outdir; peers + type counts every 30 s
+meshtastic-mcp-atak fleet up --count 2 --apk ATAK-CIV.apk --base-avd medium_phone [--relay-port 8087] [--no-snapshot]
+                                                            # synchronous; prints the nodes as JSON
+meshtastic-mcp-atak provision emulator-5554 --apk ATAK-CIV.apk [--relay-port 8087]
+meshtastic-mcp-atak position emulator-5554 41.60 -93.77 [--speed 3]
+meshtastic-mcp-atak drive emulator-5554 --speed 12 --step 2 41.60,-93.77 41.61,-93.75
+meshtastic-mcp-atak fleet down [--delete-clones]           # finds running atak-node-* emulators itself
+```
+
+`fleet down` is stateless: it kills every running emulator whose AVD name
+starts with `atak-node-` (never a foreign emulator on the same adb server) and,
+with `--delete-clones`, also removes stopped clones from disk.
+
+### Bring-up test (`tests/atak/`)
+
+`tests/atak/test_single_node_relay.py` boots one clone against a relay on an
+ephemeral port and requires a peer with a callsign within 3 minutes — the gate
+the fleet tools originally shipped without. It is `atak`-marked and auto-skips
+unless:
+
+| env var | meaning |
+| --- | --- |
+| `MESHTASTIC_MCP_ATAK_APK` | path to the ATAK-CIV APK (required; unset → skip) |
+| `MESHTASTIC_MCP_ATAK_BASE_AVD` | AVD to clone (default `medium_phone`; missing → skip) |
+
+```bash
+MESHTASTIC_MCP_ATAK_APK=~/ATAK-CIV.apk pytest tests/atak -v
+```
+
+It always provisions (no snapshot restore — the snapshot's pref would point at
+a stale port), so budget ~15 min, and it needs a free console port pair from
+5554 upward alongside any emulators already running.
+
 ## Tailing logs (clean, filtered)
 
 Two feeds matter: what the relay captured, and what each device's ATAK is doing.

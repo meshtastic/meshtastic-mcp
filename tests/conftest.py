@@ -264,6 +264,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         for item in items:
             if item.get_closest_marker("firmware"):
                 item.add_marker(skip_fw)
+    # `atak`-marked tests boot a real ATAK emulator; they need the APK path.
+    if not os.environ.get("MESHTASTIC_MCP_ATAK_APK"):
+        skip_atak = pytest.mark.skip(reason="atak tier: MESHTASTIC_MCP_ATAK_APK not set")
+        for item in items:
+            if item.get_closest_marker("atak"):
+                item.add_marker(skip_atak)
 
 
 # ---------- Session-scoped fixtures ---------------------------------------
