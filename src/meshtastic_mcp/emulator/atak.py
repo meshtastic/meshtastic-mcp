@@ -390,7 +390,12 @@ def stream_pref(host: str, port: int, *, name: str = "cotcapture") -> str:
 
 
 def push_stream_pref(serial: str, host: str, port: int, *, name: str = "cotcapture") -> None:
-    """Write the streaming-input pref into ATAK's config + import dirs."""
+    """Write the streaming-input pref where ATAK auto-loads it.
+
+    Only ``config/prefs/defaults`` (no extension) is ingested — once, at
+    ``ATAKActivity`` start, then deleted (``PreferenceControl.ingestDefaults``).
+    A ``.pref`` dropped there or in ``import/`` is never read.
+    """
     import tempfile
 
     pref = stream_pref(host, port, name=name)
@@ -398,11 +403,7 @@ def push_stream_pref(serial: str, host: str, port: int, *, name: str = "cotcaptu
         fh.write(pref)
         local = fh.name
     try:
-        for dest in (
-            "/sdcard/atak/config/prefs/cotcapture.pref",
-            "/sdcard/atak/import/cotcapture.pref",
-        ):
-            avd.adb("push", local, dest, serial=serial, check=False)
+        avd.adb("push", local, "/sdcard/atak/config/prefs/defaults", serial=serial, check=False)
     finally:
         Path(local).unlink(missing_ok=True)  # don't leave the temp pref on the host
 

@@ -265,3 +265,17 @@ def test_fleet_flags_give_play_image_headroom() -> None:
     flags = list(atak._FLEET_FLAGS)
     assert flags[flags.index("-cores") + 1] == "3"
     assert flags[flags.index("-memory") + 1] == "4096"
+
+
+def test_push_stream_pref_writes_the_defaults_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ATAK only auto-loads config/prefs/defaults (no extension) at activity start
+    # (PreferenceControl.ingestDefaults); a .pref there is inert.
+    pushed: list[str] = []
+
+    def adb(*args: str, **kw: object) -> None:
+        if args[0] == "push":
+            pushed.append(args[2])
+
+    monkeypatch.setattr(atak.avd, "adb", adb)
+    atak.push_stream_pref("emulator-5554", "10.0.2.2", 8087)
+    assert pushed == ["/sdcard/atak/config/prefs/defaults"]
