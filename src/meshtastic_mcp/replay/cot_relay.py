@@ -59,7 +59,13 @@ _SEQ_RE = re.compile(r"^(\d+)_")
 _EVENT_START = b"<event"
 _EVENT_END = b"</event>"
 _TYPE_RE = re.compile(rb'\btype="([^"]+)"')
-_CALLSIGN_RE = re.compile(rb'\bcallsign="([^"]+)"')
+# Station identity, in order of trust: the <contact> element (PLI, markers),
+# then GeoChat's senderCallsign. A bare callsign= would also match
+# <marti><dest callsign> — the *recipient* — and mislabel chat events.
+_CALLSIGN_RES = (
+    re.compile(rb'<contact\b[^>]*\bcallsign="([^"]+)"'),
+    re.compile(rb'\bsenderCallsign="([^"]+)"'),
+)
 
 # A single event above this size is almost certainly a framing error (unbounded
 # buffer growth from a client that never closes an <event>); cap defensively.
@@ -235,7 +241,7 @@ class CotRelay:
 
     def _save(self, raw: bytes, peer: _Peer) -> None:
         cot_type = _match(_TYPE_RE, raw, "unknown")
-        callsign = _match(_CALLSIGN_RE, raw, "")
+        callsign = next((m for m in (_match(r, raw, "") for r in _CALLSIGN_RES) if m), "")
         rec = {
             "seq": 0,
             "time": _utc_now(),
