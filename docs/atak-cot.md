@@ -90,6 +90,25 @@ backgrounded tails.
 - **GeoChat needs ≥2 relayed clients.** Broadcast GeoChat to "All Chat Rooms" on
   a lone client stays local and never hits the wire — the relay (or a real peer)
   is what makes `b-t-f` chat transmit. This is why the relay rebroadcasts.
+- **Prefs go in `config/prefs/defaults` — no extension.** That is the only
+  file ATAK ingests (`PreferenceControl.ingestDefaults`, once at
+  `ATAKActivity` start, then deleted). A `.pref` in `config/prefs/` or
+  `import/` is never read. `provision()` uses it for the stream; the same
+  file sets `locationCallsign`, `locationTeam`, `atakRoleType` (e.g. `K9`),
+  and `locationReportingStrategy=Constant` (capitalised; `constant` is
+  silently ignored and you stay on the 180 s stationary default).
+- **Emulators on one host share a LAN** (`10.0.2.x`, ping works), so ATAK
+  learns peers' direct `ip:4242:tcp` endpoints and sends GeoChat
+  point-to-point — **bypassing the relay**. Set
+  `autoDisableMeshSAWhenStreaming=true` (`CommsMapComponent.setPreferStreamEndpoint`)
+  so chat + receipts go via the stream and get captured.
+- **Nothing but PLI auto-shares.** Markers, shapes, routes and R&B need an
+  explicit Send (details pane → Send → Broadcast); only SPI (5 s) and
+  "broadcast"-toggled markers repeat. 911 is one-shot per toggle in 5.6.
+  `t-x-d-d` is receive-only — inject it. See `atak-cot-emission.md`.
+- **Self-PLI speed comes only from the fix.** `drive_route` stamps
+  velocity on each `geo fix`; course still reflects the virtual compass
+  (no bearing parameter; `geo nmea` is ignored by current emulators).
 - **`t-x-c-t` is a real, undocumented type.** ATAK emits a client keepalive ping
   every few seconds; it is **not** in the TAKPacket-SDK fixture corpus.
 - **Lone-client reconnect cycle.** A single silent client is dropped by ATAK's
