@@ -419,6 +419,14 @@ def push_stream_pref(serial: str, host: str, port: int, *, name: str = "cotcaptu
         Path(local).unlink(missing_ok=True)  # don't leave the temp pref on the host
 
 
+def _has_text(serial: str, token: str) -> bool:
+    """``avd.find_text`` that reads a transient bad layout dump as "not on screen"."""
+    try:
+        return avd.find_text(token, serial=serial)
+    except avd.EmulatorError:
+        return False
+
+
 def _walk_first_run(serial: str, *, timeout: float = 90.0) -> None:
     """Best-effort tap through ATAK's first-run dialogs (EULA → rationale →
     permission grants → device setup → battery)."""
@@ -427,7 +435,7 @@ def _walk_first_run(serial: str, *, timeout: float = 90.0) -> None:
     while time.time() < deadline and idx < len(_FIRST_RUN_LABELS):
         label = _FIRST_RUN_LABELS[idx]
         # A starved emulator throws an ANR dialog over the EULA; Wait, never Close app.
-        if avd.find_text("isn't responding", serial=serial) and _tap_label(serial, "Wait"):
+        if _has_text(serial, "isn't responding") and _tap_label(serial, "Wait"):
             time.sleep(1.5)
             continue
         if _tap_label(serial, label):
@@ -436,7 +444,7 @@ def _walk_first_run(serial: str, *, timeout: float = 90.0) -> None:
         else:
             time.sleep(1.0)
         # Bail once the map toolbar is up (nav menu button present).
-        if avd.find_text("Tools", serial=serial):
+        if _has_text(serial, "Tools"):
             return
 
 

@@ -290,3 +290,20 @@ def test_drive_route_passes_ground_speed_to_geo_fix(monkeypatch: pytest.MonkeyPa
     atak.drive_route("emulator-5554", [(41.71, -93.69), (41.7101, -93.69)], speed_mps=1.5, step_s=2)
     fix = next(c for c in calls if c[:3] == ("emu", "geo", "fix"))
     assert fix[5:] == ("280", "8", "2.9")  # alt m, satellites, knots (1.5 m/s)
+
+
+def test_walk_first_run_survives_bad_dump_on_text_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The ANR / "Tools" checks run before _tap_label's own guard; a bad dump there
+    # must not abort provisioning.
+    calls = {"n": 0}
+
+    def find_text(tok: str, *, serial: str | None = None) -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise atak.avd.EmulatorError("layout returned non-JSON")
+        return tok == "Tools"
+
+    monkeypatch.setattr(atak.avd, "find_text", find_text)
+    monkeypatch.setattr(atak.avd, "ui_dump", lambda **_k: [])
+    monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+    atak._walk_first_run("emulator-5554", timeout=5)  # returns once "Tools" is seen
