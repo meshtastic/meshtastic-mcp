@@ -134,6 +134,17 @@ def has_sdk_cli() -> bool:
     return sdk_cli.available()
 
 
+def has_discord() -> bool:
+    """True when a Discord bot token resolves (``$DISCORD_BOT_TOKEN`` or the token file).
+
+    Gates the read-only Discord source tools (``discord_*``). No network probe —
+    a bad token surfaces on first call (and in ``doctor``). See ``docs/discord.md``.
+    """
+    from . import discord
+
+    return discord.available()
+
+
 @dataclass(frozen=True)
 class Capabilities:
     firmware: bool
@@ -146,6 +157,7 @@ class Capabilities:
     power_meter: bool
     tak: bool
     sdk_cli: bool
+    discord: bool
 
     def summary(self) -> str:
         active = [
@@ -161,6 +173,7 @@ class Capabilities:
                 ("power_meter", self.power_meter),
                 ("tak", self.tak),
                 ("sdk_cli", self.sdk_cli),
+                ("discord", self.discord),
             )
             if on
         ]
@@ -179,4 +192,5 @@ def detect() -> Capabilities:
         power_meter=has_power_meter(),
         tak=has_tak(),
         sdk_cli=has_sdk_cli(),
+        discord=has_discord(),
     )

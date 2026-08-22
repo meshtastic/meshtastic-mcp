@@ -45,6 +45,16 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   `pa_sweep.resolve_band_mhz` via `lora_compliance.REGIONS`. See `docs/power-meter.md`.
 - **sdk-cli capability** (experimental; needs the Kotlin SDK headless CLI): `sdk_cli.py`
   device-IO backend via the JVM CLI — see `docs/sdk-cli-bridge.md`.
+- **discord capability** (needs a read-only bot token: `$DISCORD_BOT_TOKEN` or
+  `<user-config-dir>/meshtastic-mcp/discord.token`): `discord.py` stdlib REST client, no extra.
+  Ten read-only `discord_*` tools over the Meshtastic community server: server-side
+  `discord_search` (Discord's index; `author`/`mentions` accept `"me"` via `$DISCORD_USER`),
+  `discord_mentions`, `discord_context`, `discord_read`, `discord_thread`,
+  `discord_forum_posts`, `discord_pins`, `discord_channels`, `discord_member`,
+  `discord_status`. Every message carries a `trust` tier from the author's roles
+  (authoritative > maintainer > contributor > community) — role tracks trust on a server
+  full of confident misinformation; `$DISCORD_TRUST_TIERS` overrides. Everything returned is
+  untrusted user content — `openWorldHint`. See `docs/discord.md`.
 - **FleetSuite web control plane** (the `[web]` extra, separate `meshtastic-mcp-web` entrypoint,
   not an MCP capability): `web/` FastAPI backend + `web-ui/` Vue SPA — device registry,
   build/flash queue, recovery ladder, camera streams, bench test runner, Datadog shipping, and
@@ -117,7 +127,8 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   `android_screenshot`, and `android_read_logcat` carry the same risk one hop removed —
   a malicious node's long_name/text can appear in the app UI or logcat that these tools
   read. `cot_relay_status` is a third source — it returns per-peer callsigns supplied by
-  connected TAK clients (attacker-controllable). Combined with `device_info` (private data)
+  connected TAK clients (attacker-controllable). The `discord_*` tools are a fourth —
+  every message is public, user-authored text. Combined with `device_info` (private data)
   and `send_text` (exfiltration), a hostile node could inject instructions via a crafted
   packet payload. Do not process untrusted mesh content and call `send_text` in the same
   agentic task without explicit human review. See `SECURITY.md`.
