@@ -6,6 +6,15 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Discord read-only source** (`discord` capability) — `discord_status` / `discord_channels` /
+  `discord_read` / `discord_search` / `discord_thread` read the Meshtastic community server
+  (channels + categories, newest-first history with paging, whole threads, and a bounded
+  client-side search that reports the horizon it covered). Gated on a bot token
+  (`$DISCORD_BOT_TOKEN` or `<user-config-dir>/meshtastic-mcp/discord.token`); stdlib `urllib`
+  against the REST API, no new dependency, no gateway, no write endpoint. The bot needs only
+  `View Channels` + `Read Message History`. All five tools are `readOnlyHint` + `openWorldHint`
+  (public user-authored content — see `SECURITY.md`). `doctor` validates the token with one
+  guild lookup. Setup and the shared-org-bot (Developer Team) model: `docs/discord.md`.
 - **Richer synthetic node identity** (replay sim) — three improvements to how generated nodes
   look in the app: (1) **better names** via the optional `[sim]` extra (Faker — person names,
   usernames, `<name>'s <device>`, ham callsigns); the sim falls back to its built-in

@@ -45,6 +45,12 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   `pa_sweep.resolve_band_mhz` via `lora_compliance.REGIONS`. See `docs/power-meter.md`.
 - **sdk-cli capability** (experimental; needs the Kotlin SDK headless CLI): `sdk_cli.py`
   device-IO backend via the JVM CLI — see `docs/sdk-cli-bridge.md`.
+- **discord capability** (needs a read-only bot token: `$DISCORD_BOT_TOKEN` or
+  `<user-config-dir>/meshtastic-mcp/discord.token`): `discord.py` stdlib REST client, no extra.
+  Read-only source tools (`discord_status` / `discord_channels` / `discord_read` /
+  `discord_search` / `discord_thread`) over the Meshtastic community server; search is
+  client-side and bounded (`max_scan`). Everything returned is untrusted user content —
+  `openWorldHint`. See `docs/discord.md` for token setup and the shared-org-bot model.
 - **FleetSuite web control plane** (the `[web]` extra, separate `meshtastic-mcp-web` entrypoint,
   not an MCP capability): `web/` FastAPI backend + `web-ui/` Vue SPA — device registry,
   build/flash queue, recovery ladder, camera streams, bench test runner, Datadog shipping, and
@@ -117,7 +123,8 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   `android_screenshot`, and `android_read_logcat` carry the same risk one hop removed —
   a malicious node's long_name/text can appear in the app UI or logcat that these tools
   read. `cot_relay_status` is a third source — it returns per-peer callsigns supplied by
-  connected TAK clients (attacker-controllable). Combined with `device_info` (private data)
+  connected TAK clients (attacker-controllable). The `discord_*` tools are a fourth —
+  every message is public, user-authored text. Combined with `device_info` (private data)
   and `send_text` (exfiltration), a hostile node could inject instructions via a crafted
   packet payload. Do not process untrusted mesh content and call `send_text` in the same
   agentic task without explicit human review. See `SECURITY.md`.

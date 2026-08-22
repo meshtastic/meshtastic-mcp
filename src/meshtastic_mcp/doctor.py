@@ -333,6 +333,54 @@ def _sdk_cli_check() -> Check:
     )
 
 
+def _discord_check() -> Check:
+    """Read-only Discord source (`discord_*` tools): needs a bot token via
+    $DISCORD_BOT_TOKEN or the token file. Validated with one GET /users/@me/guilds.
+    """
+    from . import discord
+
+    needed = (
+        "read-only Discord source (discord_channels / discord_read / discord_search / "
+        "discord_thread)"
+    )
+    if not discord.available():
+        return Check(
+            "discord",
+            "discord",
+            STATUS_MISSING,
+            needed,
+            detail="no bot token",
+            fix=(
+                f"save a read-only bot token to {discord.token_path()} (chmod 600) "
+                f"or export {discord.TOKEN_ENV} — see docs/discord.md"
+            ),
+            env_override=discord.TOKEN_ENV,
+        )
+    rep = discord.status()
+    if not rep.get("ok"):
+        return Check(
+            "discord",
+            "discord",
+            STATUS_DEGRADED,
+            needed,
+            detail=str(rep.get("error", "")),
+            fix=(
+                "reset the token in the Discord Developer Portal, or have a server admin "
+                "invite the bot"
+            ),
+            env_override=discord.TOKEN_ENV,
+        )
+    guilds = ", ".join(g["name"] for g in rep.get("guilds", [])) or "(no guild)"
+    return Check(
+        "discord",
+        "discord",
+        STATUS_OK,
+        needed,
+        detail=f"{rep['token_source']} → {guilds}",
+        env_override=discord.TOKEN_ENV,
+    )
+
+
 # Headers the Portduino `native` / `native-macos` meshtasticd build needs. The env's build_flags in
 #   variants/native/portduino/platformio.ini already point at the Homebrew prefixes, so the only
 #   failure mode is the package not being installed — which surfaces as a bare `fatal error: 'x.h'
@@ -903,6 +951,8 @@ def run() -> DoctorReport:
         _tak_check(),
         # sdk capability (experimental Kotlin-SDK device-IO bridge)
         _sdk_cli_check(),
+        # discord capability (read-only community-server source)
+        _discord_check(),
     ]
     return DoctorReport(
         platform=f"{platform.system()} {platform.machine()} / Python {platform.python_version()}",
