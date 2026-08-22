@@ -279,6 +279,7 @@ def test_left_server_author(client) -> None:
 
 def test_operator_resolves_me(monkeypatch, client) -> None:
     monkeypatch.setenv(discord.USER_ENV, "OLM3C")
+    monkeypatch.setenv(discord.TOKEN_ENV, "t")  # CI has no token file
     assert client.resolve_user("me") == "u-olm"
     assert discord.status(client)["operator"]["trust"] == "authoritative"
 
