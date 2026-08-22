@@ -433,15 +433,32 @@ def test_status_never_leaks_token(monkeypatch) -> None:
 @pytest.fixture(autouse=True)
 def _clean_buckets():
     discord._buckets.clear()
+    discord._path_bucket.clear()
     yield
     discord._buckets.clear()
+    discord._path_bucket.clear()
 
 
 def test_record_bucket_tracks_remaining_and_reset(monkeypatch) -> None:
+    # No X-RateLimit-Bucket header (e.g. an error response) — falls back to path.
     monkeypatch.setattr(discord.time, "monotonic", lambda: 100.0)
     headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset-After": "2.5"}
     discord._record_bucket("/channels/10/messages", headers)
     assert discord._buckets["/channels/10/messages"] == (0.0, 102.5)
+    assert "/channels/10/messages" not in discord._path_bucket
+
+
+def test_record_bucket_learns_the_real_bucket_hash(monkeypatch) -> None:
+    monkeypatch.setattr(discord.time, "monotonic", lambda: 100.0)
+    headers = {
+        "X-RateLimit-Bucket": "abc123",
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset-After": "2.5",
+    }
+    discord._record_bucket("/channels/10/messages", headers)
+    assert discord._path_bucket["/channels/10/messages"] == "abc123"
+    assert discord._buckets["abc123"] == (0.0, 102.5)
+    assert "/channels/10/messages" not in discord._buckets
 
 
 def test_record_bucket_ignores_responses_with_no_rate_limit_headers() -> None:
@@ -487,10 +504,49 @@ def test_throttle_caps_the_wait_at_ten_seconds(monkeypatch) -> None:
     assert slept == [10.0]
 
 
-def test_throttle_is_per_path() -> None:
+def test_throttle_is_per_path_before_a_bucket_hash_is_known() -> None:
     discord._buckets["/channels/10/messages"] = (0.0, 999.0)
-    # A different route/channel is a different bucket — untouched.
-    discord._throttle("/channels/20/messages")  # no state recorded, no exception
+    # A different route/channel, with no learned bucket mapping yet, is its
+    # own (untouched) key — no state recorded, no exception.
+    discord._throttle("/channels/20/messages")
+
+
+def test_throttle_shares_pacing_across_routes_with_the_same_bucket_hash(monkeypatch) -> None:
+    # Discord's X-RateLimit-Bucket hash can be shared by distinct routes.
+    # Once both paths have revealed they share a hash, exhausting the bucket
+    # via one route must pace the other too — pure path-keying would miss this.
+    monkeypatch.setattr(discord.time, "monotonic", lambda: 100.0)
+    discord._record_bucket(
+        "/channels/10/messages",
+        {
+            "X-RateLimit-Bucket": "shared",
+            "X-RateLimit-Remaining": "1",
+            "X-RateLimit-Reset-After": "5",
+        },
+    )
+    discord._record_bucket(
+        "/channels/10/threads/archived/public",
+        {
+            "X-RateLimit-Bucket": "shared",
+            "X-RateLimit-Remaining": "1",
+            "X-RateLimit-Reset-After": "5",
+        },
+    )
+    # The channel-messages call exhausts the shared bucket...
+    discord._record_bucket(
+        "/channels/10/messages",
+        {
+            "X-RateLimit-Bucket": "shared",
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset-After": "5",
+        },
+    )
+    slept = []
+    monkeypatch.setattr(discord.time, "sleep", lambda s: slept.append(s))
+    # ...and the archived-threads route, despite never seeing that response
+    # itself, is paced because it shares the same bucket key.
+    discord._throttle("/channels/10/threads/archived/public")
+    assert slept == [5.0]
 
 
 class _FakeResp:

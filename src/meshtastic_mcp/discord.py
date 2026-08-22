@@ -272,33 +272,46 @@ def _retry_after(body: str) -> float:
 
 # Proactive bucket pacing. The retry loop in _http() only reacts once a 429 has
 # already landed — fine for an agent's occasional lookup, not for walking many
-# channels/threads back-to-back. Discord ties real buckets to a hashed
-# X-RateLimit-Bucket header (sometimes shared across routes); keying on the
-# request path instead — concrete IDs and all — is a simpler approximation
-# that matches Discord's per-route/per-major-parameter scoping closely enough:
-# worst case it throttles a request that could have proceeded, never the
-# reverse. path -> (remaining, reset time.monotonic()).
+# channels/threads back-to-back. Discord's real buckets are identified by the
+# hashed X-RateLimit-Bucket header, and that hash CAN be shared across distinct
+# routes/major-parameters — so two different paths tracked independently by
+# path alone can each look fresh while actually drawing on one already-empty
+# shared bucket. _path_bucket learns each path's real bucket hash from its
+# responses; _buckets is keyed by that hash once known (falling back to the
+# bare path before the mapping is learned — there's no way to know a route
+# shares a bucket before its first response reveals the hash).
+_path_bucket: dict[str, str] = {}
 _buckets: dict[str, tuple[float, float]] = {}
 
 
+def _bucket_key(path: str) -> str:
+    return _path_bucket.get(path, path)
+
+
 def _throttle(path: str) -> None:
-    remaining, reset_at = _buckets.get(path, (1.0, 0.0))
+    key = _bucket_key(path)
+    remaining, reset_at = _buckets.get(key, (1.0, 0.0))
     if remaining > 0:
         return
     wait = reset_at - time.monotonic()
     if wait > 0:
         wait = min(wait, 10.0)
-        log.info("discord: pacing %s ahead of an exhausted bucket (%.1fs)", path, wait)
+        log.info(
+            "discord: pacing %s (bucket %s) ahead of an exhausted bucket (%.1fs)", path, key, wait
+        )
         time.sleep(wait)
 
 
 def _record_bucket(path: str, headers: Any) -> None:
+    bucket = headers.get("X-RateLimit-Bucket")
+    if bucket:
+        _path_bucket[path] = bucket
     remaining = headers.get("X-RateLimit-Remaining")
     reset_after = headers.get("X-RateLimit-Reset-After")
     if remaining is None or reset_after is None:
         return
     try:
-        _buckets[path] = (float(remaining), time.monotonic() + float(reset_after))
+        _buckets[bucket or path] = (float(remaining), time.monotonic() + float(reset_after))
     except ValueError:
         pass
 
