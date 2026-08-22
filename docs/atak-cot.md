@@ -175,6 +175,20 @@ snapshot is keyed on the APK bytes, so a new ATAK build re-provisions instead of
 restoring a stale image. `atak_fleet_down(delete_clones=True)` discards the
 clones and their snapshots.
 
+Provisioning stages one `config/prefs/defaults` file (the only path ATAK
+auto-ingests, once, at start): the relay stream plus `atak.hint.*` = false for
+the battery-optimization, On-Screen-Hints and Point-Dropper dialogs and
+`plugins.emergency.beacon.enabled` = false, and exempts ATAK from Doze so the
+"run in background?" system dialog never fires. ATAK keeps two emitters alive
+across its own restarts — a pinned SPI / Digital Pointer (re-sent every 5 s
+from the StateSaver DB) and the 911 beacon — so `atak.quiesce(serial)`
+force-stops ATAK, deletes `Databases/statesaver2.sqlite` and re-stages the
+beacon-off default. `provision()` runs it before the snapshot is saved.
+`fleet_down` does not: a snapshot boot is `-no-snapshot-save` and a cold boot
+`-wipe-data`, so nothing survives the next `fleet_up` anyway, and teardown
+stays free of unconfirmed destructive steps. Call `quiesce` yourself when you
+restart ATAK in place on a live node and want a clean slate.
+
 ## Prompt-injection note
 
 Captured CoT is remote-authored TAK content, attacker-controllable. The full

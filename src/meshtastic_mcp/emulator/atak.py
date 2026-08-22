@@ -24,8 +24,8 @@ Design, folding in the fleet-orchestration research:
   socket-probe a port before claiming it and always address ``adb -s`` — never
   bare ``adb devices``.
 * **Provision once, snapshot, restore.** Cold-boot → install ATAK → grant perms
-  → push the stream pref → walk first-run → ``adb emu avd snapshot save
-  provisioned``. Later boots load that snapshot (``-no-snapshot-save``), turning
+  → stage the defaults → walk first-run → quiesce → ``adb emu avd snapshot
+  save provisioned``. Later boots load that snapshot (``-no-snapshot-save``), turning
   a ~15 min setup into a ~60 s bring-up. The snapshot is keyed on
   (APK sha, system-image build) so a stale one is re-provisioned, not errored.
 * **Headless footprint flags** and a real boot health check
@@ -54,6 +54,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from . import avd
 
@@ -384,40 +385,139 @@ def drive_route(
 # ---------------------------------------------------------------------------
 # Provisioning (install + perms + stream pref + first-run walk)
 # ---------------------------------------------------------------------------
+# ATAK's default SharedPreferences file (``PreferenceControl.DEFAULT_PREFERENCES_NAME``
+# = package + "_preferences"); the ``<preference name>`` that hint/beacon keys live in.
+DEFAULT_PREFS_NAME = f"{ATAK_PACKAGE}_preferences"
+
+# Every ATAK start re-raises these unless the ``atak.hint.<id>`` pref is false
+# (``HintDialogHelper.showHint``): the "Disabling Battery Optimization" hint
+# (``DozeManagement``, whose postHint also launches the system "Let app always
+# run in background?" dialog), "On Screen Hints" (``TextContainer``) and
+# "Point Dropper Hints" (``EnterLocationDropDownReceiver``). All three sit over
+# the map and break scripted UI driving.
+QUIET_PREFS: dict[str, object] = {
+    "atak.hint.batoptimization.issue": False,
+    "atak.hint.textContainer.osd": False,
+    "atak.hint.iconset": False,
+}
+
+# The 911 beacon (``EmergencyConstants.PREFERENCES_KEY_BEACON_ENABLED``) is
+# re-announced on every start while this pref is true.
+BEACON_OFF_PREFS: dict[str, object] = {"plugins.emergency.beacon.enabled": False}
+
+# Pinned SPI / Digital Pointer markers persist through the StateSaver
+# (``SpiButtonTool.sendCot`` → ``Marker.persist``) into this SQLCipher DB, which
+# a non-rooted emulator can only delete — the same file ATAK's own
+# "Clear Content" removes. Sidecars are listed so no journal outlives it.
+_STATESAVER_DB = "/sdcard/atak/Databases/statesaver2.sqlite"
+_STATESAVER_FILES = (
+    _STATESAVER_DB,
+    f"{_STATESAVER_DB}-journal",
+    f"{_STATESAVER_DB}-wal",
+    f"{_STATESAVER_DB}-shm",
+)
+
+# Only this path (no extension) is auto-loaded: ``PreferenceControl.ingestDefaults``
+# reads it once at ``ATAKActivity`` start, then deletes it.
+_DEFAULTS_PATH = "/sdcard/atak/config/prefs/defaults"
+
+
+def _pref_class(value: object) -> tuple[str, str]:
+    if isinstance(value, bool):
+        return "java.lang.Boolean", "true" if value else "false"
+    if isinstance(value, int):
+        return "java.lang.Integer", str(value)
+    if isinstance(value, str):
+        return "java.lang.String", value
+    raise AtakError(f"unsupported pref value type {type(value).__name__}")
+
+
+def _attr(value: str) -> str:
+    """Escape for a double-quoted XML attribute."""
+    return escape(value, {'"': "&quot;"})
+
+
+def prefs_xml(groups: dict[str, dict[str, object]]) -> str:
+    """ATAK ``.pref`` XML: ``{<preference name>: {key: value}}``. Python bool /
+    int / str map to the Java ``class`` attribute ATAK's loader switches on."""
+    out = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        "<preferences>",
+    ]
+    for name, entries in groups.items():
+        out.append(f'  <preference version="1" name="{_attr(name)}">')
+        for key, value in entries.items():
+            cls, text = _pref_class(value)
+            out.append(f'    <entry key="{_attr(key)}" class="class {cls}">{escape(text)}</entry>')
+        out.append("  </preference>")
+    out.append("</preferences>")
+    return "\n".join(out) + "\n"
+
+
+def stream_entries(host: str, port: int, *, name: str = "cotcapture") -> dict[str, object]:
+    """The ``cot_streams`` entries for one plain-TCP streaming input at host:port."""
+    return {
+        "count": 1,
+        "description0": name,
+        "connectString0": f"{host}:{port}:tcp",
+        "enabled0": True,
+        "useAuth0": False,
+    }
+
+
 def stream_pref(host: str, port: int, *, name: str = "cotcapture") -> str:
     """An ATAK ``cot_streams`` .pref (plain-TCP streaming input) at host:port."""
-    conn = f"{host}:{port}:tcp"
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-        "<preferences>\n"
-        '  <preference version="1" name="cot_streams">\n'
-        '    <entry key="count" class="class java.lang.Integer">1</entry>\n'
-        f'    <entry key="description0" class="class java.lang.String">{name}</entry>\n'
-        f'    <entry key="connectString0" class="class java.lang.String">{conn}</entry>\n'
-        '    <entry key="enabled0" class="class java.lang.Boolean">true</entry>\n'
-        '    <entry key="useAuth0" class="class java.lang.Boolean">false</entry>\n'
-        "  </preference>\n"
-        "</preferences>\n"
-    )
+    return prefs_xml({"cot_streams": stream_entries(host, port, name=name)})
+
+
+def push_defaults(serial: str, groups: dict[str, dict[str, object]]) -> None:
+    """Stage ``groups`` (see :func:`prefs_xml`) as ATAK's ``config/prefs/defaults``,
+    applied on the next ATAK start. Overwrites any not-yet-ingested file."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".pref", delete=False) as fh:
+        fh.write(prefs_xml(groups))
+        local = fh.name
+    try:
+        # A silently failed push is exactly how a node ends up never connecting.
+        avd.adb("push", local, _DEFAULTS_PATH, serial=serial, check=True)
+    except avd.EmulatorError as exc:
+        raise AtakError(f"{serial}: could not stage {_DEFAULTS_PATH}: {exc}") from exc
+    finally:
+        Path(local).unlink(missing_ok=True)  # don't leave the temp pref on the host
 
 
 def push_stream_pref(serial: str, host: str, port: int, *, name: str = "cotcapture") -> None:
-    """Write the streaming-input pref where ATAK auto-loads it.
+    """Stage just the streaming-input pref (see :func:`push_defaults`)."""
+    push_defaults(serial, {"cot_streams": stream_entries(host, port, name=name)})
 
-    Only ``config/prefs/defaults`` (no extension) is ingested — once, at
-    ``ATAKActivity`` start, then deleted (``PreferenceControl.ingestDefaults``).
-    A ``.pref`` dropped there or in ``import/`` is never read.
+
+def quiesce(serial: str) -> None:
+    """Force-stop ATAK and clear the state that would otherwise self-sustain
+    across its next start: the StateSaver DB (pinned SPI / Digital Pointer,
+    re-sent every 5 s forever) and the 911 beacon pref.
+
+    Deleting the StateSaver drops *every* persisted map item, which is the
+    point for a scripted fleet node. The beacon pref can only be reached via
+    ``defaults``, so it is cleared on the next start rather than immediately.
     """
-    import tempfile
+    avd.adb("shell", "am", "force-stop", ATAK_PACKAGE, serial=serial, check=False)
+    avd.adb("shell", "rm", "-f", *_STATESAVER_FILES, serial=serial, check=False)
+    push_defaults(serial, {DEFAULT_PREFS_NAME: BEACON_OFF_PREFS})
 
-    pref = stream_pref(host, port, name=name)
-    with tempfile.NamedTemporaryFile("w", suffix=".pref", delete=False) as fh:
-        fh.write(pref)
-        local = fh.name
-    try:
-        avd.adb("push", local, "/sdcard/atak/config/prefs/defaults", serial=serial, check=False)
-    finally:
-        Path(local).unlink(missing_ok=True)  # don't leave the temp pref on the host
+
+def launch(serial: str, *, timeout: float = 60.0) -> None:
+    """Start ATAK's main activity and wait for the map toolbar; raise if it
+    never appears — a snapshot taken of a half-started ATAK is worthless."""
+    avd.adb(
+        "shell", "am", "start", "-n", f"{ATAK_PACKAGE}/{ATAK_ACTIVITY}", serial=serial, check=False
+    )
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _has_text(serial, "Tools"):
+            return
+        time.sleep(2)
+    raise AtakError(f"{serial}: ATAK did not reach the map toolbar within {timeout:.0f}s")
 
 
 def _has_text(serial: str, token: str) -> bool:
@@ -473,8 +573,9 @@ def provision(
     relay_port: int = 8087,
     fix: tuple[float, float] = _DEFAULT_FIX,
 ) -> None:
-    """Install ATAK, grant perms, set a GPS fix, push the stream pref, and walk
-    first-run. Leaves ATAK on the map connected to the relay.
+    """Install ATAK, grant perms, set a GPS fix, stage the defaults (stream +
+    hint suppression + beacon off), walk first-run, then :func:`quiesce` and
+    relaunch so the snapshot taken next holds a clean, running ATAK.
 
     ``relay_host`` defaults to ``10.0.2.2`` (host loopback from inside the AVD);
     pass the LAN IP for a physical device.
@@ -505,14 +606,34 @@ def provision(
         serial=serial,
         check=False,
     )
+    # Doze whitelist: DozeManagement.checkDoze skips both the battery hint and
+    # the system "run in background?" dialog once the package is exempt.
+    avd.adb(
+        "shell",
+        "dumpsys",
+        "deviceidle",
+        "whitelist",
+        f"+{ATAK_PACKAGE}",
+        serial=serial,
+        check=False,
+    )
     set_position(serial, *fix)
-    push_stream_pref(serial, relay_host, relay_port)
+    push_defaults(
+        serial,
+        {
+            "cot_streams": stream_entries(relay_host, relay_port),
+            DEFAULT_PREFS_NAME: {**QUIET_PREFS, **BEACON_OFF_PREFS},
+        },
+    )
     avd.adb("shell", "am", "force-stop", ATAK_PACKAGE, serial=serial, check=False)
     avd.adb(
         "shell", "am", "start", "-n", f"{ATAK_PACKAGE}/{ATAK_ACTIVITY}", serial=serial, check=False
     )
     time.sleep(4)
     _walk_first_run(serial)
+    # First-run may already have persisted map state; snapshot a clean ATAK.
+    quiesce(serial)
+    launch(serial)
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +716,14 @@ def _has_snapshot(avd_name: str, tag: str) -> bool:
 
 
 def fleet_down(fleet: Fleet, *, delete_clones: bool = False) -> None:
-    """Stop every node; optionally delete the cloned AVDs."""
+    """Stop every node; optionally delete the cloned AVDs.
+
+    No quiesce here: a snapshot boot is ``-no-snapshot-save`` and a cold boot
+    is ``-wipe-data``, so nothing ATAK persisted survives the next ``fleet_up``
+    anyway — and deleting ATAK's state on teardown would be a destructive step
+    with no confirmation. :func:`quiesce` runs in :func:`provision`, before the
+    snapshot is saved, which is where it matters.
+    """
     for node in fleet.nodes:
         avd.adb("emu", "kill", serial=node.serial, check=False)
     if delete_clones:

@@ -307,3 +307,149 @@ def test_walk_first_run_survives_bad_dump_on_text_check(monkeypatch: pytest.Monk
     monkeypatch.setattr(atak.avd, "ui_dump", lambda **_k: [])
     monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
     atak._walk_first_run("emulator-5554", timeout=5)  # returns once "Tools" is seen
+
+
+# defaults / quiesce / fleet_down + provision ordering
+# ---------------------------------------------------------------------------
+class _AdbLog:
+    """Records every adb argv; captures the content of any pushed local file
+    (the temp pref is unlinked right after the push, so read it now)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+        self.pushed: list[tuple[str, str]] = []  # (dest, content)
+
+    def __call__(self, *args: str, **kw: object) -> object:
+        self.calls.append(args)
+        if args[:1] == ("push",):
+            self.pushed.append((args[2], Path(args[1]).read_text()))
+
+        class R:
+            stdout = ""
+
+        return R()
+
+
+def _entries(xml: str, name: str) -> dict[str | None, tuple[str | None, str | None]]:
+    root = ET.fromstring(xml)
+    for pref in root.findall("preference"):
+        if pref.get("name") == name:
+            return {e.get("key"): (e.get("class"), e.text) for e in pref.findall("entry")}
+    raise AssertionError(f"no <preference name={name!r}> in {xml}")
+
+
+def test_prefs_xml_types_and_groups() -> None:
+    xml = atak.prefs_xml({"g": {"b": True, "f": False, "i": 5, "s": "Constant"}})
+    got = _entries(xml, "g")
+    assert got["b"] == ("class java.lang.Boolean", "true")
+    assert got["f"] == ("class java.lang.Boolean", "false")
+    assert got["i"] == ("class java.lang.Integer", "5")
+    assert got["s"] == ("class java.lang.String", "Constant")
+    with pytest.raises(atak.AtakError, match="unsupported"):
+        atak.prefs_xml({"g": {"x": 1.5}})
+
+
+def test_push_defaults_writes_single_defaults_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    adb = _AdbLog()
+    monkeypatch.setattr(atak.avd, "adb", adb)
+    atak.push_defaults("emulator-5554", {"cot_streams": atak.stream_entries("10.0.2.2", 8087)})
+    assert [d for d, _ in adb.pushed] == ["/sdcard/atak/config/prefs/defaults"]
+    assert _entries(adb.pushed[0][1], "cot_streams")["connectString0"][1] == "10.0.2.2:8087:tcp"
+    assert adb.calls[0][:2] == ("push", adb.calls[0][1])  # local temp path
+    assert not Path(adb.calls[0][1]).exists()  # temp pref cleaned up
+
+
+def test_push_stream_pref_matches_stream_pref(monkeypatch: pytest.MonkeyPatch) -> None:
+    adb = _AdbLog()
+    monkeypatch.setattr(atak.avd, "adb", adb)
+    atak.push_stream_pref("emulator-5554", "10.0.2.2", 8087)
+    assert adb.pushed[0][1] == atak.stream_pref("10.0.2.2", 8087)
+
+
+def test_quiesce_stops_clears_statesaver_and_disables_beacon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adb = _AdbLog()
+    monkeypatch.setattr(atak.avd, "adb", adb)
+    atak.quiesce("emulator-5556")
+
+    assert adb.calls[0] == ("shell", "am", "force-stop", atak.ATAK_PACKAGE)
+    assert adb.calls[1][:3] == ("shell", "rm", "-f")
+    assert "/sdcard/atak/Databases/statesaver2.sqlite" in adb.calls[1]
+    assert adb.calls[2][0] == "push"
+    dest, xml = adb.pushed[0]
+    assert dest == "/sdcard/atak/config/prefs/defaults"
+    got = _entries(xml, "com.atakmap.app.civ_preferences")
+    assert got["plugins.emergency.beacon.enabled"] == ("class java.lang.Boolean", "false")
+
+
+def test_provision_stages_defaults_once_then_quiesces_before_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adb = _AdbLog()
+    order: list[str] = []
+    monkeypatch.setattr(atak.avd, "adb", adb)
+    monkeypatch.setattr(atak.avd, "is_app_installed", lambda pkg, serial=None: True)
+    monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(atak, "_walk_first_run", lambda serial, **kw: order.append("first_run"))
+    monkeypatch.setattr(atak, "quiesce", lambda serial: order.append("quiesce"))
+    monkeypatch.setattr(atak, "launch", lambda serial, **kw: order.append("launch"))
+
+    atak.provision("emulator-5554", "/nonexistent.apk", relay_port=8087)
+
+    assert order == ["first_run", "quiesce", "launch"]
+    # One defaults file carrying the stream AND the hint/beacon suppression.
+    assert [d for d, _ in adb.pushed] == ["/sdcard/atak/config/prefs/defaults"]
+    xml = adb.pushed[0][1]
+    assert _entries(xml, "cot_streams")["connectString0"][1] == "10.0.2.2:8087:tcp"
+    quiet = _entries(xml, "com.atakmap.app.civ_preferences")
+    for key in (
+        "atak.hint.batoptimization.issue",
+        "atak.hint.textContainer.osd",
+        "atak.hint.iconset",
+        "plugins.emergency.beacon.enabled",
+    ):
+        assert quiet[key] == ("class java.lang.Boolean", "false")
+    # Doze whitelist precedes ATAK start, so the first launch never asks.
+    whitelist = adb.calls.index(
+        ("shell", "dumpsys", "deviceidle", "whitelist", "+com.atakmap.app.civ")
+    )
+    start = next(i for i, c in enumerate(adb.calls) if c[:3] == ("shell", "am", "start"))
+    assert whitelist < start
+
+
+def test_fleet_down_only_kills(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Nothing ATAK persisted survives the next fleet_up (snapshot boots are
+    # -no-snapshot-save, cold boots -wipe-data), so teardown must not reach into
+    # ATAK's state — that would be a destructive step with no confirmation.
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(atak.avd, "adb", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(atak, "quiesce", lambda serial: calls.append(("quiesce", serial)))
+    fleet = atak.Fleet()
+    fleet.nodes.append(atak.FleetNode(name="atak-node-0", serial="emulator-5554", port=5554))
+    atak.fleet_down(fleet)
+    assert calls == [("emu", "kill")]
+
+
+def test_prefs_xml_escapes_values() -> None:
+    xml = atak.prefs_xml({'g"1': {"locationCallsign": "K9 & <REX>"}})
+    assert 'name="g&quot;1"' in xml
+    assert ">K9 &amp; &lt;REX&gt;</entry>" in xml
+
+
+def test_push_defaults_raises_when_push_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def adb(*args: str, **kw: object) -> None:
+        if args[0] == "push":
+            raise atak.avd.EmulatorError("adb: device offline")
+
+    monkeypatch.setattr(atak.avd, "adb", adb)
+    with pytest.raises(atak.AtakError, match="could not stage"):
+        atak.push_defaults("emulator-5554", {"cot_streams": {"count": 1}})
+
+
+def test_launch_raises_when_map_never_appears(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(atak.avd, "adb", lambda *a, **k: None)
+    monkeypatch.setattr(atak.avd, "find_text", lambda tok, *, serial=None: False)
+    monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+    with pytest.raises(atak.AtakError, match="map toolbar"):
+        atak.launch("emulator-5554", timeout=0.01)
