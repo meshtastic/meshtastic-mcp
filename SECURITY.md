@@ -22,7 +22,7 @@ in a full meshtastic-mcp session:
 | Leg | Tools |
 |---|---|
 | Private data | `device_info`, `list_nodes`, `get_config`, `get_channel_url` |
-| Untrusted content | `logs_window`, `packets_window` — return user-authored payloads from remote mesh nodes; `android_ui_dump`, `android_screenshot`, `android_read_logcat` — return app UI / device logcat content that can echo those same remote-node payloads (node names, text messages); `cot_relay_status` — surfaces per-peer **callsigns** supplied by connected TAK clients (the full CoT events, incl. GeoChat bodies, are written to capture files on disk, not returned by this tool); `discord_read`, `discord_search`, `discord_thread`, `discord_channels` — return messages / channel topics authored by anyone on the public Meshtastic Discord server |
+| Untrusted content | `logs_window`, `packets_window` — return user-authored payloads from remote mesh nodes; `android_ui_dump`, `android_screenshot`, `android_read_logcat` — return app UI / device logcat content that can echo those same remote-node payloads (node names, text messages); `cot_relay_status` — surfaces per-peer **callsigns** supplied by connected TAK clients (the full CoT events, incl. GeoChat bodies, are written to capture files on disk, not returned by this tool); the `discord_*` tools — return messages / channel topics / member names authored by anyone on the public Meshtastic Discord server (the per-message `trust` tier is derived from public roles and is a reading aid, not authentication) |
 | Exfiltration | `send_text` — broadcasts a mesh message |
 
 A hostile node on the same mesh could embed instructions in a packet payload. If an agent

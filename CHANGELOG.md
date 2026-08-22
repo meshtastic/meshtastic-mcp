@@ -6,15 +6,23 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
-- **Discord read-only source** (`discord` capability) — `discord_status` / `discord_channels` /
-  `discord_read` / `discord_search` / `discord_thread` read the Meshtastic community server
-  (channels + categories, newest-first history with paging, whole threads, and a bounded
-  client-side search that reports the horizon it covered). Gated on a bot token
-  (`$DISCORD_BOT_TOKEN` or `<user-config-dir>/meshtastic-mcp/discord.token`); stdlib `urllib`
-  against the REST API, no new dependency, no gateway, no write endpoint. The bot needs only
-  `View Channels` + `Read Message History`. All five tools are `readOnlyHint` + `openWorldHint`
-  (public user-authored content — see `SECURITY.md`). `doctor` validates the token with one
-  guild lookup. Setup and the shared-org-bot (Developer Team) model: `docs/discord.md`.
+- **Discord read-only source** (`discord` capability) — ten `discord_*` tools read the
+  Meshtastic community server: server-side `discord_search` (Discord's own index, full
+  history; channel / author / mentions / has / date / pinned filters, `offset` paging, `"me"`
+  alias), `discord_mentions`, `discord_context` (conversation around a hit or jump link),
+  `discord_read` (chronological, `after=<ISO>`), `discord_thread` (bounded, honest
+  `truncated`), `discord_forum_posts` (active + archived, tags), `discord_pins`,
+  `discord_channels`, `discord_member`, `discord_status`. Every message carries the author's
+  top roles and a **`trust` tier** (authoritative / maintainer / contributor / community / bot)
+  derived from the guild's role ladder — overridable via `$DISCORD_TRUST_TIERS` — because
+  role tracks trust on a community server full of confident misinformation. Operator
+  identity (`$DISCORD_USER` / `discord.user`) makes `author="me"` / `mentions="me"` resolve.
+  Gated on a bot token (`$DISCORD_BOT_TOKEN` or `<user-config-dir>/meshtastic-mcp/
+  discord.token`); stdlib `urllib` against the REST API, no new dependency, no gateway, no
+  write endpoint; the bot needs only `View Channels` + `Read Message History`. All tools are
+  `readOnlyHint` + `openWorldHint` (public user-authored content — see `SECURITY.md`).
+  `doctor` validates the token with one guild lookup. Setup, restricted channels, and the
+  shared-org-bot (Developer Team) model: `docs/discord.md`.
 - **Richer synthetic node identity** (replay sim) — three improvements to how generated nodes
   look in the app: (1) **better names** via the optional `[sim]` extra (Faker — person names,
   usernames, `<name>'s <device>`, ham callsigns); the sim falls back to its built-in

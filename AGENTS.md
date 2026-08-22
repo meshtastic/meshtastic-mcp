@@ -47,10 +47,14 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   device-IO backend via the JVM CLI — see `docs/sdk-cli-bridge.md`.
 - **discord capability** (needs a read-only bot token: `$DISCORD_BOT_TOKEN` or
   `<user-config-dir>/meshtastic-mcp/discord.token`): `discord.py` stdlib REST client, no extra.
-  Read-only source tools (`discord_status` / `discord_channels` / `discord_read` /
-  `discord_search` / `discord_thread`) over the Meshtastic community server; search is
-  client-side and bounded (`max_scan`). Everything returned is untrusted user content —
-  `openWorldHint`. See `docs/discord.md` for token setup and the shared-org-bot model.
+  Ten read-only `discord_*` tools over the Meshtastic community server: server-side
+  `discord_search` (Discord's index; `author`/`mentions` accept `"me"` via `$DISCORD_USER`),
+  `discord_mentions`, `discord_context`, `discord_read`, `discord_thread`,
+  `discord_forum_posts`, `discord_pins`, `discord_channels`, `discord_member`,
+  `discord_status`. Every message carries a `trust` tier from the author's roles
+  (authoritative > maintainer > contributor > community) — role tracks trust on a server
+  full of confident misinformation; `$DISCORD_TRUST_TIERS` overrides. Everything returned is
+  untrusted user content — `openWorldHint`. See `docs/discord.md`.
 - **FleetSuite web control plane** (the `[web]` extra, separate `meshtastic-mcp-web` entrypoint,
   not an MCP capability): `web/` FastAPI backend + `web-ui/` Vue SPA — device registry,
   build/flash queue, recovery ladder, camera streams, bench test runner, Datadog shipping, and

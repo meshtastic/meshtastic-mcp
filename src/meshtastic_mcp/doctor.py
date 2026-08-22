@@ -339,10 +339,7 @@ def _discord_check() -> Check:
     """
     from . import discord
 
-    needed = (
-        "read-only Discord source (discord_channels / discord_read / discord_search / "
-        "discord_thread)"
-    )
+    needed = "read-only Discord source (discord_search / discord_read / discord_thread / …)"
     if not discord.available():
         return Check(
             "discord",
@@ -371,12 +368,16 @@ def _discord_check() -> Check:
             env_override=discord.TOKEN_ENV,
         )
     guilds = ", ".join(g["name"] for g in rep.get("guilds", [])) or "(no guild)"
+    op = rep.get("operator")
+    who = f" · operator {op['username']}" if op else " · no operator (set DISCORD_USER for 'me')"
+    if rep.get("warning"):
+        who = f" · {rep['warning']}"
     return Check(
         "discord",
         "discord",
         STATUS_OK,
         needed,
-        detail=f"{rep['token_source']} → {guilds}",
+        detail=f"{rep['token_source']} → {guilds}{who}",
         env_override=discord.TOKEN_ENV,
     )
 
