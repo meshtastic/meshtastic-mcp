@@ -369,7 +369,12 @@ def _discord_check() -> Check:
         )
     guilds = ", ".join(g["name"] for g in rep.get("guilds", [])) or "(no guild)"
     op = rep.get("operator")
-    who = f" · operator {op['username']}" if op else " · no operator (set DISCORD_USER for 'me')"
+    who = (
+        f" · operator {op['username']}"
+        if op
+        else f" · no operator (set ${discord.USER_ENV} or save one to "
+        f"{discord.user_path()} for 'me')"
+    )
     if rep.get("warning"):
         who = f" · {rep['warning']}"
     return Check(

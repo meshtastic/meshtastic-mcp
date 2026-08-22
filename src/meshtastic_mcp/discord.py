@@ -216,16 +216,29 @@ def _http(method: str, path: str, query: dict[str, Any] | None = None) -> Any:
     )
     # Retries: 429 (rate limit) and 202/110000 (search index warming), each with
     # Discord's own retry_after. Read-only + low volume, so one or two waits almost
-    # always clear it; anything worse is surfaced to the caller.
+    # always clear it; anything worse is surfaced to the caller. _throttle() below
+    # additionally paces ahead of a known-empty bucket so a caller walking many
+    # channels/threads mostly avoids landing here at all.
     for attempt in range(3):
+        _throttle(path)
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 raw = resp.read().decode("utf-8")
                 status = resp.status
+                _record_bucket(path, resp.headers)
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", "replace")
+            _record_bucket(path, exc.headers)
             if exc.code == 429 and attempt < 2:
-                time.sleep(min(_retry_after(body), 10.0))
+                wait = min(_retry_after(body), 10.0)
+                log.warning(
+                    "discord: 429 on %s %s (attempt %d/3), retrying in %.1fs",
+                    method,
+                    path,
+                    attempt + 1,
+                    wait,
+                )
+                time.sleep(wait)
                 continue
             hint = ""
             if exc.code == 401:
@@ -242,7 +255,9 @@ def _http(method: str, path: str, query: dict[str, Any] | None = None) -> Any:
         except ValueError as exc:
             raise DiscordError(f"discord {method} {path}: malformed JSON ({exc})") from exc
         if status == 202 and isinstance(data, dict) and data.get("code") == 110000 and attempt < 2:
-            time.sleep(min(float(data.get("retry_after", 1.0)), 10.0))
+            wait = min(float(data.get("retry_after", 1.0)), 10.0)
+            log.debug("discord: search index still warming on %s, retrying in %.1fs", path, wait)
+            time.sleep(wait)
             continue
         return data
     raise DiscordError(f"discord {method} {path}: still rate-limited / indexing after retries")
@@ -253,6 +268,52 @@ def _retry_after(body: str) -> float:
         return float(json.loads(body).get("retry_after", 1.0))
     except (ValueError, AttributeError, TypeError):
         return 1.0
+
+
+# Proactive bucket pacing. The retry loop in _http() only reacts once a 429 has
+# already landed — fine for an agent's occasional lookup, not for walking many
+# channels/threads back-to-back. Discord's real buckets are identified by the
+# hashed X-RateLimit-Bucket header, and that hash CAN be shared across distinct
+# routes/major-parameters — so two different paths tracked independently by
+# path alone can each look fresh while actually drawing on one already-empty
+# shared bucket. _path_bucket learns each path's real bucket hash from its
+# responses; _buckets is keyed by that hash once known (falling back to the
+# bare path before the mapping is learned — there's no way to know a route
+# shares a bucket before its first response reveals the hash).
+_path_bucket: dict[str, str] = {}
+_buckets: dict[str, tuple[float, float]] = {}
+
+
+def _bucket_key(path: str) -> str:
+    return _path_bucket.get(path, path)
+
+
+def _throttle(path: str) -> None:
+    key = _bucket_key(path)
+    remaining, reset_at = _buckets.get(key, (1.0, 0.0))
+    if remaining > 0:
+        return
+    wait = reset_at - time.monotonic()
+    if wait > 0:
+        wait = min(wait, 10.0)
+        log.info(
+            "discord: pacing %s (bucket %s) ahead of an exhausted bucket (%.1fs)", path, key, wait
+        )
+        time.sleep(wait)
+
+
+def _record_bucket(path: str, headers: Any) -> None:
+    bucket = headers.get("X-RateLimit-Bucket")
+    if bucket:
+        _path_bucket[path] = bucket
+    remaining = headers.get("X-RateLimit-Remaining")
+    reset_after = headers.get("X-RateLimit-Reset-After")
+    if remaining is None or reset_after is None:
+        return
+    try:
+        _buckets[bucket or path] = (float(remaining), time.monotonic() + float(reset_after))
+    except ValueError:
+        pass
 
 
 # ---------- client ------------------------------------------------------------

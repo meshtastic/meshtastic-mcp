@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import io
+import urllib.error
 from typing import Any
 
 import pytest
@@ -418,6 +420,178 @@ def test_status_never_leaks_token(monkeypatch) -> None:
     rep = discord.status(discord.Client(transport=FakeTransport()))
     assert rep["ok"] and rep["guilds"] == [{"id": GUILD, "name": "Meshtastic"}]
     assert "SECRET123" not in repr(rep)
+
+
+# -- proactive rate-limit pacing ----------------------------------------------
+#
+# _http()'s retry loop only reacts once Discord has already returned a 429.
+# _throttle()/_record_bucket() pace ahead of that so a caller walking many
+# channels/threads mostly never lands there. Exercised directly since they're
+# plain functions over the module-level _buckets dict — no network needed.
+
+
+@pytest.fixture(autouse=True)
+def _clean_buckets():
+    discord._buckets.clear()
+    discord._path_bucket.clear()
+    yield
+    discord._buckets.clear()
+    discord._path_bucket.clear()
+
+
+def test_record_bucket_tracks_remaining_and_reset(monkeypatch) -> None:
+    # No X-RateLimit-Bucket header (e.g. an error response) — falls back to path.
+    monkeypatch.setattr(discord.time, "monotonic", lambda: 100.0)
+    headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset-After": "2.5"}
+    discord._record_bucket("/channels/10/messages", headers)
+    assert discord._buckets["/channels/10/messages"] == (0.0, 102.5)
+    assert "/channels/10/messages" not in discord._path_bucket
+
+
+def test_record_bucket_learns_the_real_bucket_hash(monkeypatch) -> None:
+    monkeypatch.setattr(discord.time, "monotonic", lambda: 100.0)
+    headers = {
+        "X-RateLimit-Bucket": "abc123",
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset-After": "2.5",
+    }
+    discord._record_bucket("/channels/10/messages", headers)
+    assert discord._path_bucket["/channels/10/messages"] == "abc123"
+    assert discord._buckets["abc123"] == (0.0, 102.5)
+    assert "/channels/10/messages" not in discord._buckets
+
+
+def test_record_bucket_ignores_responses_with_no_rate_limit_headers() -> None:
+    discord._record_bucket("/channels/10/messages", {})
+    assert "/channels/10/messages" not in discord._buckets
+
+
+def test_throttle_skips_when_bucket_has_headroom(monkeypatch) -> None:
+    discord._buckets["/channels/10/messages"] = (3.0, 999.0)
+    slept = []
+    monkeypatch.setattr(discord.time, "sleep", lambda s: slept.append(s))
+    discord._throttle("/channels/10/messages")
+    assert slept == []
+
+
+def test_throttle_waits_out_an_exhausted_bucket(monkeypatch) -> None:
+    monkeypatch.setattr(discord.time, "monotonic", lambda: 100.0)
+    discord._buckets["/channels/10/messages"] = (0.0, 103.0)
+    slept = []
+    monkeypatch.setattr(discord.time, "sleep", lambda s: slept.append(s))
+    discord._throttle("/channels/10/messages")
+    assert slept == [3.0]
+
+
+def test_throttle_logs_when_it_actually_paces(monkeypatch, caplog) -> None:
+    # The "did we hit rate limits?" question was previously unanswerable after
+    # the fact — pacing and retries were silent. This is now visible in logs.
+    monkeypatch.setattr(discord.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(discord.time, "sleep", lambda s: None)
+    discord._buckets["/channels/10/messages"] = (0.0, 103.0)
+    with caplog.at_level("INFO", logger=discord.log.name):
+        discord._throttle("/channels/10/messages")
+    assert "/channels/10/messages" in caplog.text
+    assert "pacing" in caplog.text
+
+
+def test_throttle_caps_the_wait_at_ten_seconds(monkeypatch) -> None:
+    monkeypatch.setattr(discord.time, "monotonic", lambda: 100.0)
+    discord._buckets["/channels/10/messages"] = (0.0, 999.0)
+    slept = []
+    monkeypatch.setattr(discord.time, "sleep", lambda s: slept.append(s))
+    discord._throttle("/channels/10/messages")
+    assert slept == [10.0]
+
+
+def test_throttle_is_per_path_before_a_bucket_hash_is_known() -> None:
+    discord._buckets["/channels/10/messages"] = (0.0, 999.0)
+    # A different route/channel, with no learned bucket mapping yet, is its
+    # own (untouched) key — no state recorded, no exception.
+    discord._throttle("/channels/20/messages")
+
+
+def test_throttle_shares_pacing_across_routes_with_the_same_bucket_hash(monkeypatch) -> None:
+    # Discord's X-RateLimit-Bucket hash can be shared by distinct routes.
+    # Once both paths have revealed they share a hash, exhausting the bucket
+    # via one route must pace the other too — pure path-keying would miss this.
+    monkeypatch.setattr(discord.time, "monotonic", lambda: 100.0)
+    discord._record_bucket(
+        "/channels/10/messages",
+        {
+            "X-RateLimit-Bucket": "shared",
+            "X-RateLimit-Remaining": "1",
+            "X-RateLimit-Reset-After": "5",
+        },
+    )
+    discord._record_bucket(
+        "/channels/10/threads/archived/public",
+        {
+            "X-RateLimit-Bucket": "shared",
+            "X-RateLimit-Remaining": "1",
+            "X-RateLimit-Reset-After": "5",
+        },
+    )
+    # The channel-messages call exhausts the shared bucket...
+    discord._record_bucket(
+        "/channels/10/messages",
+        {
+            "X-RateLimit-Bucket": "shared",
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset-After": "5",
+        },
+    )
+    slept = []
+    monkeypatch.setattr(discord.time, "sleep", lambda s: slept.append(s))
+    # ...and the archived-threads route, despite never seeing that response
+    # itself, is paced because it shares the same bucket key.
+    discord._throttle("/channels/10/threads/archived/public")
+    assert slept == [5.0]
+
+
+class _FakeResp:
+    def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
+        self._body = body
+        self.status = 200
+        self.headers = headers or {}
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _FakeResp:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def test_http_retries_a_real_429_and_logs_it(monkeypatch, caplog) -> None:
+    # A genuine 429 (bucket state unknown ahead of time) still has to be
+    # survivable and, per the mining session's report, visible after the
+    # fact — previously this retry was completely silent.
+    monkeypatch.setenv(discord.TOKEN_ENV, "t")
+    calls = {"n": 0}
+
+    def fake_urlopen(req, timeout=20):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError(
+                req.full_url,
+                429,
+                "Too Many Requests",
+                {"Retry-After": "0"},
+                io.BytesIO(b'{"retry_after": 0.0}'),
+            )
+        return _FakeResp(b"{}")
+
+    monkeypatch.setattr(discord.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(discord.time, "sleep", lambda s: None)
+    with caplog.at_level("WARNING", logger=discord.log.name):
+        result = discord._http("GET", "/channels/10/messages")
+    assert result == {}
+    assert calls["n"] == 2
+    assert "429" in caplog.text
+    assert "/channels/10/messages" in caplog.text
 
 
 # -- server surface ----------------------------------------------------------
