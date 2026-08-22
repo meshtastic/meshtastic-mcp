@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -832,9 +833,10 @@ def type_text(text: str, serial: str | None = None) -> None:
 
     With the ``[android-fast]`` extra this is Unicode-safe (clipboard-paste) and
     the raw string is sent as-is. The plain-adb fallback uses `input text`,
-    which needs spaces as `%s` and mangles shell metacharacters — so the `%s`
-    encoding lives here, on the fallback branch only (encoding it before the
-    fast path would paste a literal `%s`). Callers pass the raw text either way.
+    which needs spaces as `%s` and runs through the device shell (so `&`, `;`,
+    quotes etc. must be shell-quoted) — that encoding lives here, on the
+    fallback branch only (encoding it before the fast path would paste a
+    literal `%s`). Callers pass the raw text either way.
 
     Like :func:`tap_text`, a uiautomator2 failure is not retried on the adb path
     (a lost response could double-insert the text); the connection is reset and
@@ -849,7 +851,7 @@ def type_text(text: str, serial: str | None = None) -> None:
             raise EmulatorError(
                 f"uiautomator2 type_text failed (not retried on adb): {exc}"
             ) from exc
-    adb("shell", "input", "text", text.replace(" ", "%s"), serial=serial)
+    adb("shell", "input", "text", shlex.quote(text.replace(" ", "%s")), serial=serial)
 
 
 def swipe(x1: int, y1: int, x2: int, y2: int, ms: int = 400, serial: str | None = None) -> None:

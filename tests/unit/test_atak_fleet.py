@@ -324,6 +324,99 @@ class _AdbLog:
         if args[:1] == ("push",):
             self.pushed.append((args[2], Path(args[1]).read_text()))
 
+
+# ---------------------------------------------------------------------------
+# share_item — scripted ATAK screens, driven purely by resource-id dumps
+# ---------------------------------------------------------------------------
+def _el(rid: str, x: int, y: int, text: str = "", *, clickable: bool = True) -> dict[str, object]:
+    # Emulator `android layout` schema: hyphenated key, "[x,y]" string center.
+    el: dict[str, object] = {"text": text, "center": f"[{x},{y}]", "interactions": []}
+    if clickable:
+        el["interactions"] = ["clickable", "focusable"]
+    if rid:
+        el["resource-id"] = rid
+    return el
+
+
+_MAP = [
+    _el("", 1515, 126),
+    _el("", 1652, 126),  # Overlay Manager (2nd unnamed nav button)
+    _el("", 1789, 126),
+    _el("tak_nav_menu_button", 2337, 126),
+    _el("tak_nav_zoom", 63, 456),
+    _el("compass", 63, 133),
+    _el("tak_nav_center", 63, 267),
+]
+_OM = [*_MAP, _el("hierarchy_search_btn", 2353, 246), _el("close_hmv", 2358, 975)]
+_DETAILS = [*_MAP, _el("drawingCircleNameEdit", 1985, 236, "Drawing Circle 1")]
+_CONTACTS = [*_MAP, _el("contact_list_button_send_to_all", 2160, 975, "Broadcast")]
+
+
+class _Atak:
+    """A tiny ATAK state machine: the screen advances on the taps we expect."""
+
+    def __init__(self, items: list[str], *, route: bool = False, start: str = "map") -> None:
+        self.items, self.route, self.screen = items, route, start
+        self.taps: list[tuple[int, int]] = []
+        self.adb: list[tuple[str, ...]] = []
+        self.typed: list[str] = []
+
+    def ui_dump(self, serial: str | None = None, diff: bool = False) -> list[dict[str, object]]:
+        if self.screen == "map":
+            return _MAP
+        if self.screen == "details":  # a pane in the right half → BACK closes it
+            return [*_DETAILS, _el("drawingCircleSendButton", 1635, 969)]
+        if self.screen == "om":
+            return _OM
+        if self.screen == "search":
+            hits = [n for n in self.items if self.typed and self.typed[-1] in n]
+            rows = [
+                _el("hierarchy_manager_list_item_title", 1821, 361 + 140 * i, n, clickable=False)
+                for i, n in enumerate(hits)
+            ]
+            if (
+                self.route
+                and self.screen == "search"
+                and self.taps
+                and self.taps[-1] == (1821, 361)
+            ):
+                rows.append(_el("route_manager_send_button", 1623, 493))
+            return [*_OM, *rows]
+        if self.screen == "radial":  # radial menu is NOT in the hierarchy
+            return _OM
+        if self.screen == "contacts":
+            return _CONTACTS
+        raise AssertionError(self.screen)
+
+    def tap(self, x: int, y: int, serial: str | None = None) -> None:
+        self.taps.append((x, y))
+        if self.screen == "map" and (x, y) == (1652, 126):
+            self.screen = "om"
+        elif self.screen == "om" and (x, y) == (2353, 246):
+            self.screen = "search"
+        elif self.screen == "radial" and (x, y) == (599 + 115, 602 + 136):
+            self.screen = "details"
+        elif self.screen in ("details", "search") and y in (969, 493):
+            self.screen = "contacts"
+        elif self.screen == "contacts" and (x, y) == (2160, 975):
+            self.screen = "map"
+
+    def swipe(
+        self, x1: int, y1: int, x2: int, y2: int, ms: int = 400, serial: str | None = None
+    ) -> None:
+        assert (x1, y1) == (x2, y2) and ms >= 1000, "long-press expected"
+        self.taps.append((x1, y1))
+        if not self.route:
+            self.screen = "radial"
+
+    def type_text(self, text: str, serial: str | None = None) -> None:
+        self.typed.append(text)
+
+    def adb_cmd(self, *args: str, serial: str | None = None, **kw: object) -> object:
+        self.adb.append(args)
+        if args[-1] == "KEYCODE_BACK" and self.screen == "details":
+            self.screen = "map"
+
         class R:
             stdout = ""
 
@@ -453,3 +546,69 @@ def test_launch_raises_when_map_never_appears(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
     with pytest.raises(atak.AtakError, match="map toolbar"):
         atak.launch("emulator-5554", timeout=0.01)
+
+
+@pytest.fixture
+def fake_atak(monkeypatch: pytest.MonkeyPatch):
+    def _make(*a: object, **kw: object) -> _Atak:
+        fake = _Atak(*a, **kw)  # type: ignore[arg-type]
+        monkeypatch.setattr(atak.avd, "ui_dump", fake.ui_dump)
+        monkeypatch.setattr(atak.avd, "tap", fake.tap)
+        monkeypatch.setattr(atak.avd, "swipe", fake.swipe)
+        monkeypatch.setattr(atak.avd, "type_text", fake.type_text)
+        monkeypatch.setattr(atak.avd, "adb", fake.adb_cmd)
+        monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+        return fake
+
+    return _make
+
+
+def test_share_item_shape_via_radial_details(fake_atak) -> None:
+    fake = fake_atak(["Drawing Circle 1", "Rectangle 1"])
+    out = atak.share_item("emulator-5556", "Drawing Circle 1")
+    assert out == {"shared": True, "name": "Drawing Circle 1", "via": "drawingCircleSendButton"}
+    assert fake.typed == ["Drawing Circle 1"]
+    assert fake.screen == "map"
+    # Overlay Manager was opened from the nav row, not a hard-coded pixel.
+    assert fake.taps[0] == (1652, 126)
+
+
+def test_share_item_route_uses_row_send_button(fake_atak) -> None:
+    fake = fake_atak(["Route 1"], route=True)
+    out = atak.share_item("emulator-5556", "Route 1")
+    assert out["via"] == "route_manager_send_button"
+    assert (599 + 115, 602 + 136) not in fake.taps  # no radial fallback needed
+
+
+def test_share_item_backs_out_of_open_pane_first(fake_atak) -> None:
+    fake = fake_atak(["Drawing Circle 1"], start="details")
+    atak.share_item("emulator-5556", "Drawing Circle 1")
+    assert ("shell", "input", "keyevent", "KEYCODE_BACK") in fake.adb
+
+
+def test_share_item_exact_title_match_only(fake_atak) -> None:
+    # The search is a substring filter; the row we long-press must be the
+    # exact title, not the first hit.
+    fake = fake_atak(["R 10", "R 1"])
+    atak.share_item("emulator-5556", "R 1")
+    assert (1821, 501) in fake.taps  # second row — the exact match
+    assert (1821, 361) not in fake.taps
+
+
+def test_share_item_missing_item_raises_and_closes_om(fake_atak) -> None:
+    fake = fake_atak(["Route 1"])
+    with pytest.raises(atak.AtakError, match="no Overlay Manager item named 'Nope'"):
+        atak.share_item("emulator-5556", "Nope", timeout=0)
+    assert (2358, 975) in fake.taps  # close_hmv
+
+
+def test_share_item_rejects_empty_name(fake_atak) -> None:
+    fake_atak([])
+    with pytest.raises(atak.AtakError):
+        atak.share_item("emulator-5556", "  ")
+
+
+def test_rid_handles_both_dump_schemas() -> None:
+    assert atak._rid({"resource-id": "foo"}) == "foo"
+    assert atak._rid({"resource_id": "com.atakmap.app.civ:id/foo"}) == "foo"
+    assert atak._rid({}) == ""

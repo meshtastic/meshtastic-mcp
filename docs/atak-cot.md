@@ -17,6 +17,12 @@ this captures what the app actually emits.
   ATAK-CIV emulators pointed at the relay (android capability).
 - **`atak_drive_route`** — feed an emulator a moving GPS track so its self-PLI
   reports a live course/speed.
+- **`atak_share_item`** — broadcast an existing map item (marker, shape, route,
+  R&B, bullseye) by name to every contact, so the relay captures its CoT shape
+  (`u-d-c-c` for a circle, `b-m-r` for a route, …). Drives ATAK by
+  view-hierarchy resource-ids (Overlay Manager → search → details → send →
+  Broadcast); the one pixel tap is the radial menu's "details" slot, which
+  ATAK draws on the GL surface and never exposes to a dump.
 
 ## Quick start
 

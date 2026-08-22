@@ -762,3 +762,208 @@ def discover_fleet() -> Fleet:
         port = int(serial.rsplit("-", 1)[1])
         fleet.nodes.append(FleetNode(name=name, serial=serial, port=port))
     return fleet
+
+
+# ---------------------------------------------------------------------------
+# Share an existing map item (Overlay Manager → details → send → Broadcast)
+# ---------------------------------------------------------------------------
+# Everything below navigates by view-hierarchy resource-ids (never screen
+# pixels), with one documented exception: the radial menu, which ATAK draws on
+# the GL map surface and so never appears in any dump — see _tap_radial_details.
+# Resource-ids were verified on ATAK-CIV 5.6.
+
+# Suffixes (lower-cased) of the send control in an item's details pane. Each
+# item type has its own: routes `share_route` (and `route_manager_send_button`
+# in Overlay Manager's expanded row actions), R&B/bullseye `sendLayout`,
+# markers `lastPointSend`, drawing circle `drawingCircleSendButton`, ellipse
+# `sendButton`, casevac `med_sendBtn`.
+_SEND_ID_SUFFIXES = (
+    "sendbutton",
+    "send_button",
+    "sendlayout",
+    "share_route",
+    "lastpointsend",
+    "med_sendbtn",
+)
+_BROADCAST_ID = "contact_list_button_send_to_all"
+_OM_SEARCH_BTN = "hierarchy_search_btn"
+_OM_ROW_TITLE = "hierarchy_manager_list_item_title"
+_NAV_MENU = "tak_nav_menu_button"
+# Map chrome that is present on every screen; anything else with a resource-id
+# in the right-hand pane means a drop-down/details pane is open.
+_MAP_CHROME_IDS = frozenset({_NAV_MENU, "tak_nav_zoom", "tak_nav_center", "compass"})
+
+
+def _rid(el: dict) -> str:
+    """Short resource-id of a dumped element, either dump schema.
+
+    The emulator ``android layout`` path emits ``resource-id`` (hyphen) with
+    the package prefix already stripped; the uiautomator path emits
+    ``resource_id`` as ``pkg:id/name``. Normalise to the bare name.
+    """
+    rid = el.get("resource-id") or el.get("resource_id") or ""
+    return str(rid).rsplit("/", 1)[-1]
+
+
+def _center(el: dict) -> tuple[int, int] | None:
+    c = el.get("center")
+    if isinstance(c, str):  # "[x,y]" (emulator layout path)
+        x, y = (int(v) for v in c.strip("[]").split(","))
+        return x, y
+    if isinstance(c, (list, tuple)) and len(c) == 2:
+        return int(c[0]), int(c[1])
+    return None
+
+
+def _find_id(serial: str, rid: str, *, timeout: float = 0.0) -> tuple[int, int] | None:
+    """Center of the element whose short resource-id == ``rid``; polls up to ``timeout``."""
+    deadline = time.time() + timeout
+    while True:
+        for el in avd.ui_dump(serial=serial):
+            if _rid(el) == rid and (c := _center(el)) is not None:
+                return c
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.5)
+
+
+def _tap_id(serial: str, rid: str, *, timeout: float = 5.0) -> bool:
+    c = _find_id(serial, rid, timeout=timeout)
+    if c is None:
+        return False
+    avd.tap(c[0], c[1], serial=serial)
+    return True
+
+
+def _find_send_control(serial: str) -> tuple[str, tuple[int, int]] | None:
+    """(resource-id, center) of the first send control on screen, if any."""
+    for el in avd.ui_dump(serial=serial):
+        rid = _rid(el)
+        if rid.lower().endswith(_SEND_ID_SUFFIXES) and (c := _center(el)) is not None:
+            return rid, c
+    return None
+
+
+def _keyboard_shown(serial: str) -> bool:
+    # The soft keyboard is not part of the app hierarchy, so a dump cannot tell
+    # us it is covering the list — ask the input-method service instead.
+    out = avd.adb("shell", "dumpsys", "input_method", serial=serial, check=False).stdout
+    return "mInputShown=true" in out
+
+
+def _ensure_map_foreground(serial: str, *, max_back: int = 3) -> None:
+    """BACK out of any open drop-down/details pane until only the map chrome is left."""
+    for _ in range(max_back + 1):
+        els = avd.ui_dump(serial=serial)
+        menu = next((c for el in els if _rid(el) == _NAV_MENU and (c := _center(el))), None)
+        if menu is None:
+            raise AtakError(f"{serial}: ATAK map is not in the foreground ({_NAV_MENU} missing)")
+        # The side pane sits in the right half below the nav bar; the nav bar
+        # and drawing toolbars are not panes and don't block Overlay Manager.
+        pane_open = any(
+            _rid(el) not in _MAP_CHROME_IDS
+            and (c := _center(el)) is not None
+            and c[0] > menu[0] // 2
+            and c[1] > menu[1] + 100
+            for el in els
+            if _rid(el)
+        )
+        if not pane_open:
+            return
+        avd.adb("shell", "input", "keyevent", "KEYCODE_BACK", serial=serial)
+        time.sleep(1.0)
+
+
+def _open_overlay_manager(serial: str) -> None:
+    """Tap the layers (Overlay Manager) nav button.
+
+    The nav toolbar buttons carry no text or resource-id — only
+    ``tak_nav_menu_button`` (rightmost) is named — so we pick the toolbar's
+    unnamed clickable buttons on the same row as the menu button and take the
+    second from the left, which is Overlay Manager in the default layout.
+    """
+    els = avd.ui_dump(serial=serial)
+    menu = next((c for el in els if _rid(el) == _NAV_MENU and (c := _center(el))), None)
+    if menu is None:
+        raise AtakError(f"{serial}: {_NAV_MENU} not found")
+    row = sorted(
+        c
+        for el in els
+        if not _rid(el)
+        and "clickable" in el.get("interactions", [])
+        and (c := _center(el)) is not None
+        and abs(c[1] - menu[1]) <= 10
+        and c[0] < menu[0]
+    )
+    if len(row) < 2:
+        raise AtakError(f"{serial}: nav toolbar buttons not found next to {_NAV_MENU}")
+    avd.tap(row[1][0], row[1][1], serial=serial)
+    if _find_id(serial, _OM_SEARCH_BTN, timeout=5.0) is None:
+        raise AtakError(f"{serial}: Overlay Manager did not open ({_OM_SEARCH_BTN} missing)")
+
+
+def _search_overlay_manager(serial: str, name: str, *, timeout: float) -> tuple[int, int]:
+    """Search Overlay Manager for ``name``; return the matching row's center."""
+    if not _tap_id(serial, _OM_SEARCH_BTN):
+        raise AtakError(f"{serial}: {_OM_SEARCH_BTN} not found")
+    time.sleep(0.5)
+    avd.type_text(name, serial=serial)
+    if _keyboard_shown(serial):
+        avd.adb("shell", "input", "keyevent", "KEYCODE_BACK", serial=serial)
+    deadline = time.time() + timeout
+    while True:
+        for el in avd.ui_dump(serial=serial):
+            if _rid(el) == _OM_ROW_TITLE and el.get("text") == name and (c := _center(el)):
+                return c
+        if time.time() >= deadline:
+            _tap_id(serial, "close_hmv", timeout=0.0)
+            raise AtakError(f"{serial}: no Overlay Manager item named {name!r}")
+        time.sleep(0.5)
+
+
+# Radial-menu geometry, measured on the 2400x1080 fleet AVD with Overlay
+# Manager open: long-pressing a row pans the item to the map pane's focus point
+# (the left half) and opens the radial menu there; its "details" slot is the
+# bottom-right item. The radial is drawn on the map surface and is absent from
+# every hierarchy dump, so this is the one place we tap by pixel.
+_RADIAL_CENTER = (599, 602)
+_RADIAL_DETAILS_OFFSET = (115, 136)
+
+
+def _tap_radial_details(serial: str) -> None:
+    x = _RADIAL_CENTER[0] + _RADIAL_DETAILS_OFFSET[0]
+    y = _RADIAL_CENTER[1] + _RADIAL_DETAILS_OFFSET[1]
+    avd.tap(x, y, serial=serial)
+
+
+def share_item(serial: str, name: str, *, timeout: float = 5.0) -> dict:
+    """Broadcast the existing ATAK map item named ``name`` to all contacts.
+
+    Overlay Manager → search → long-press the row (pans, selects, opens the
+    radial menu — or, for routes, expands the row's action buttons) → details
+    → send → Broadcast. Raises :class:`AtakError` when the item is not found or
+    the details pane exposes no send control. ``timeout`` bounds each wait
+    for a screen to appear.
+    """
+    if not name.strip():
+        raise AtakError("share_item needs a non-empty item name")
+    _ensure_map_foreground(serial)
+    _open_overlay_manager(serial)
+    row = _search_overlay_manager(serial, name, timeout=timeout)
+    avd.swipe(row[0], row[1], row[0], row[1], 1200, serial=serial)  # long-press
+    time.sleep(1.5)
+    send = _find_send_control(serial)
+    if send is None:
+        _tap_radial_details(serial)
+        deadline = time.time() + timeout
+        while send is None and time.time() < deadline:
+            time.sleep(0.5)
+            send = _find_send_control(serial)
+    if send is None:
+        raise AtakError(f"{serial}: no send control found in the details pane for {name!r}")
+    via, (x, y) = send
+    avd.tap(x, y, serial=serial)
+    if not _tap_id(serial, _BROADCAST_ID, timeout=timeout):
+        raise AtakError(f"{serial}: {_BROADCAST_ID} did not appear after tapping {via}")
+    time.sleep(1.0)
+    return {"shared": True, "name": name, "via": via}
