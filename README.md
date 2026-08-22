@@ -102,7 +102,7 @@ with no firmware checkout. Optional capabilities activate when their prerequisit
 | **local-model** | a reachable Ollama or OpenAI-compatible `llama-server` (or a `llama` binary to start one) | offload tools that push token-heavy work onto a local GPU — summarize/triage recorder windows, e2e-failure first pass, and an offline **vision oracle**; see [docs/local-models.md](docs/local-models.md) |
 | **sdr** | `[sdr]` extra (bundles `pyrtlsdrlib`, a prebuilt librtlsdr) + an RTL-SDR dongle | RF-compliance oracle: `rf_scan` occupancy checks and `rf_confirm_tx` on-air verification, no second radio needed. *macOS/Homebrew note:* a system `librtlsdr` from Homebrew is the osmocom fork and lacks `rtlsdr_set_dithering`, so `import rtlsdr` fails — the bundled `pyrtlsdrlib` avoids this and is preferred by pyrtlsdr's loader. |
 | **sdk-cli** *(experimental)* | Kotlin SDK headless CLI | alternate device-IO backend over the JVM CLI; see [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md) |
-| **discord** | a read-only bot token (`$DISCORD_BOT_TOKEN` or `~/.config/meshtastic-mcp/discord.token`) | read the Meshtastic Discord server — channels, history, threads, bounded search (`discord_*`); stdlib only, never posts; see [docs/discord.md](docs/discord.md) |
+| **discord** | a read-only bot token (`$DISCORD_BOT_TOKEN` or `<user-config-dir>/meshtastic-mcp/discord.token` — `doctor` prints the path) | read the Meshtastic Discord server — channels, history, threads, bounded search (`discord_*`); stdlib only, never posts; see [docs/discord.md](docs/discord.md) |
 
 The active set is logged at startup (`meshtastic-mcp capabilities active: …`).
 
