@@ -58,6 +58,7 @@ from pathlib import Path
 from . import avd
 
 ATAK_PACKAGE = "com.atakmap.app.civ"
+FLEET_NODE_PREFIX = "atak-node-"
 ATAK_ACTIVITY = "com.atakmap.app.ATAKActivity"
 
 # Runtime permissions ATAK needs; pre-granting pre-accepts its dialogs. Superset
@@ -568,7 +569,7 @@ def fleet_up(
     fleet = Fleet()
     try:
         for i in range(count):
-            name = f"atak-node-{i}"
+            name = f"{FLEET_NODE_PREFIX}{i}"
             clone_avd(base_avd, name)
             port = alloc_console_port(i)
             have_snap = use_snapshot and _has_snapshot(name, tag)
@@ -600,5 +601,36 @@ def fleet_down(fleet: Fleet, *, delete_clones: bool = False) -> None:
     if delete_clones:
         time.sleep(2)
         for node in fleet.nodes:
-            shutil.rmtree(_avd_home() / f"{node.name}.avd", ignore_errors=True)
-            (_avd_home() / f"{node.name}.ini").unlink(missing_ok=True)
+            delete_clone_avd(node.name)
+
+
+def delete_clone_avd(name: str) -> None:
+    """Remove a cloned AVD (dir + ini) from disk. No-op if absent."""
+    shutil.rmtree(_avd_home() / f"{name}.avd", ignore_errors=True)
+    (_avd_home() / f"{name}.ini").unlink(missing_ok=True)
+
+
+def list_clone_avds() -> list[str]:
+    """Names of every ``atak-node-*`` clone on disk (running or not)."""
+    return sorted(p.stem for p in _avd_home().glob(f"{FLEET_NODE_PREFIX}*.ini"))
+
+
+def discover_fleet() -> Fleet:
+    """Rebuild a :class:`Fleet` from the running ``atak-node-*`` emulators.
+
+    Stateless counterpart to the handle :func:`fleet_up` returns, so a separate
+    process (the CLI) can tear down a fleet it did not start. Only emulators
+    whose AVD name carries the fleet prefix are included — a foreign emulator
+    on the same adb server is never touched.
+    """
+    fleet = Fleet()
+    for serial, state in avd.list_devices():
+        if state != "device" or not avd.is_emulator(serial):
+            continue
+        out = avd.adb("emu", "avd", "name", serial=serial, check=False, timeout=10).stdout
+        name = next((ln.strip() for ln in out.splitlines() if ln.strip() not in ("", "OK")), "")
+        if not name.startswith(FLEET_NODE_PREFIX):
+            continue
+        port = int(serial.rsplit("-", 1)[1])
+        fleet.nodes.append(FleetNode(name=name, serial=serial, port=port))
+    return fleet
