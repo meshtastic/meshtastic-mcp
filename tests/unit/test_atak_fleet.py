@@ -383,39 +383,6 @@ def test_quiesce_stops_clears_statesaver_and_disables_beacon(
     assert got["plugins.emergency.beacon.enabled"] == ("class java.lang.Boolean", "false")
 
 
-def test_fleet_down_quiesces_each_node_before_kill(monkeypatch: pytest.MonkeyPatch) -> None:
-    order: list[tuple[str, str]] = []
-    monkeypatch.setattr(atak, "quiesce", lambda serial: order.append(("quiesce", serial)))
-    monkeypatch.setattr(
-        atak.avd, "adb", lambda *a, serial=None, **kw: order.append((" ".join(a), serial))
-    )
-    fleet = atak.Fleet(
-        nodes=[
-            atak.FleetNode(name="atak-node-0", serial="emulator-5554", port=5554),
-            atak.FleetNode(name="atak-node-1", serial="emulator-5556", port=5556),
-        ]
-    )
-    atak.fleet_down(fleet)
-    assert order == [
-        ("quiesce", "emulator-5554"),
-        ("emu kill", "emulator-5554"),
-        ("quiesce", "emulator-5556"),
-        ("emu kill", "emulator-5556"),
-    ]
-
-
-def test_fleet_down_kills_even_if_quiesce_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    killed: list[str | None] = []
-
-    def boom(serial: str) -> None:
-        raise RuntimeError("adb wedged")
-
-    monkeypatch.setattr(atak, "quiesce", boom)
-    monkeypatch.setattr(atak.avd, "adb", lambda *a, serial=None, **kw: killed.append(serial))
-    atak.fleet_down(atak.Fleet(nodes=[atak.FleetNode(name="n", serial="emulator-5554", port=5554)]))
-    assert killed == ["emulator-5554"]
-
-
 def test_provision_stages_defaults_once_then_quiesces_before_return(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -449,3 +416,40 @@ def test_provision_stages_defaults_once_then_quiesces_before_return(
     )
     start = next(i for i, c in enumerate(adb.calls) if c[:3] == ("shell", "am", "start"))
     assert whitelist < start
+
+
+def test_fleet_down_only_kills(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Nothing ATAK persisted survives the next fleet_up (snapshot boots are
+    # -no-snapshot-save, cold boots -wipe-data), so teardown must not reach into
+    # ATAK's state — that would be a destructive step with no confirmation.
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(atak.avd, "adb", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(atak, "quiesce", lambda serial: calls.append(("quiesce", serial)))
+    fleet = atak.Fleet()
+    fleet.nodes.append(atak.FleetNode(name="atak-node-0", serial="emulator-5554", port=5554))
+    atak.fleet_down(fleet)
+    assert calls == [("emu", "kill")]
+
+
+def test_prefs_xml_escapes_values() -> None:
+    xml = atak.prefs_xml({'g"1': {"locationCallsign": "K9 & <REX>"}})
+    assert 'name="g&quot;1"' in xml
+    assert ">K9 &amp; &lt;REX&gt;</entry>" in xml
+
+
+def test_push_defaults_raises_when_push_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def adb(*args: str, **kw: object) -> None:
+        if args[0] == "push":
+            raise atak.avd.EmulatorError("adb: device offline")
+
+    monkeypatch.setattr(atak.avd, "adb", adb)
+    with pytest.raises(atak.AtakError, match="could not stage"):
+        atak.push_defaults("emulator-5554", {"cot_streams": {"count": 1}})
+
+
+def test_launch_raises_when_map_never_appears(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(atak.avd, "adb", lambda *a, **k: None)
+    monkeypatch.setattr(atak.avd, "find_text", lambda tok, *, serial=None: False)
+    monkeypatch.setattr(atak.time, "sleep", lambda _s: None)
+    with pytest.raises(atak.AtakError, match="map toolbar"):
+        atak.launch("emulator-5554", timeout=0.01)

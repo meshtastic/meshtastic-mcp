@@ -183,9 +183,11 @@ the battery-optimization, On-Screen-Hints and Point-Dropper dialogs and
 across its own restarts — a pinned SPI / Digital Pointer (re-sent every 5 s
 from the StateSaver DB) and the 911 beacon — so `atak.quiesce(serial)`
 force-stops ATAK, deletes `Databases/statesaver2.sqlite` and re-stages the
-beacon-off default. `provision()` runs it before the snapshot and
-`fleet_down` before each kill. A snapshot boot discards its disk on exit
-anyway; quiesce is what matters when ATAK is restarted in place on a live node.
+beacon-off default. `provision()` runs it before the snapshot is saved.
+`fleet_down` does not: a snapshot boot is `-no-snapshot-save` and a cold boot
+`-wipe-data`, so nothing survives the next `fleet_up` anyway, and teardown
+stays free of unconfirmed destructive steps. Call `quiesce` yourself when you
+restart ATAK in place on a live node and want a clean slate.
 
 ## Prompt-injection note
 

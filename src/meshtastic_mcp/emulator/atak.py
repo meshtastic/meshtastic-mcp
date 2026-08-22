@@ -54,6 +54,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from . import avd
 
@@ -431,6 +432,11 @@ def _pref_class(value: object) -> tuple[str, str]:
     raise AtakError(f"unsupported pref value type {type(value).__name__}")
 
 
+def _attr(value: str) -> str:
+    """Escape for a double-quoted XML attribute."""
+    return escape(value, {'"': "&quot;"})
+
+
 def prefs_xml(groups: dict[str, dict[str, object]]) -> str:
     """ATAK ``.pref`` XML: ``{<preference name>: {key: value}}``. Python bool /
     int / str map to the Java ``class`` attribute ATAK's loader switches on."""
@@ -439,10 +445,10 @@ def prefs_xml(groups: dict[str, dict[str, object]]) -> str:
         "<preferences>",
     ]
     for name, entries in groups.items():
-        out.append(f'  <preference version="1" name="{name}">')
+        out.append(f'  <preference version="1" name="{_attr(name)}">')
         for key, value in entries.items():
             cls, text = _pref_class(value)
-            out.append(f'    <entry key="{key}" class="class {cls}">{text}</entry>')
+            out.append(f'    <entry key="{_attr(key)}" class="class {cls}">{escape(text)}</entry>')
         out.append("  </preference>")
     out.append("</preferences>")
     return "\n".join(out) + "\n"
@@ -473,7 +479,10 @@ def push_defaults(serial: str, groups: dict[str, dict[str, object]]) -> None:
         fh.write(prefs_xml(groups))
         local = fh.name
     try:
-        avd.adb("push", local, _DEFAULTS_PATH, serial=serial, check=False)
+        # A silently failed push is exactly how a node ends up never connecting.
+        avd.adb("push", local, _DEFAULTS_PATH, serial=serial, check=True)
+    except avd.EmulatorError as exc:
+        raise AtakError(f"{serial}: could not stage {_DEFAULTS_PATH}: {exc}") from exc
     finally:
         Path(local).unlink(missing_ok=True)  # don't leave the temp pref on the host
 
@@ -498,7 +507,8 @@ def quiesce(serial: str) -> None:
 
 
 def launch(serial: str, *, timeout: float = 60.0) -> None:
-    """Start ATAK's main activity and wait (best-effort) for the map toolbar."""
+    """Start ATAK's main activity and wait for the map toolbar; raise if it
+    never appears — a snapshot taken of a half-started ATAK is worthless."""
     avd.adb(
         "shell", "am", "start", "-n", f"{ATAK_PACKAGE}/{ATAK_ACTIVITY}", serial=serial, check=False
     )
@@ -507,6 +517,7 @@ def launch(serial: str, *, timeout: float = 60.0) -> None:
         if _has_text(serial, "Tools"):
             return
         time.sleep(2)
+    raise AtakError(f"{serial}: ATAK did not reach the map toolbar within {timeout:.0f}s")
 
 
 def _has_text(serial: str, token: str) -> bool:
@@ -705,16 +716,15 @@ def _has_snapshot(avd_name: str, tag: str) -> bool:
 
 
 def fleet_down(fleet: Fleet, *, delete_clones: bool = False) -> None:
-    """Quiesce ATAK then stop every node; optionally delete the cloned AVDs.
+    """Stop every node; optionally delete the cloned AVDs.
 
-    A snapshot boot is ``-no-snapshot-save`` so its disk state is discarded
-    anyway; quiescing matters for a node whose ATAK is restarted in place, and
-    keeps teardown honest regardless of how the node was booted. Quiesce
-    failures (a wedged adb) must not stop the kill.
+    No quiesce here: a snapshot boot is ``-no-snapshot-save`` and a cold boot
+    is ``-wipe-data``, so nothing ATAK persisted survives the next ``fleet_up``
+    anyway — and deleting ATAK's state on teardown would be a destructive step
+    with no confirmation. :func:`quiesce` runs in :func:`provision`, before the
+    snapshot is saved, which is where it matters.
     """
     for node in fleet.nodes:
-        with contextlib.suppress(Exception):
-            quiesce(node.serial)
         avd.adb("emu", "kill", serial=node.serial, check=False)
     if delete_clones:
         time.sleep(2)
