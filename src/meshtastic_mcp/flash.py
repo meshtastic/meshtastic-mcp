@@ -13,6 +13,7 @@ artifacts to exist, so these tools build first if needed.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import threading
 import time
@@ -49,6 +50,75 @@ def _require_confirm(confirm: bool, operation: str) -> None:
             f"{operation} is destructive and requires confirm=True. "
             "This will overwrite firmware on the device."
         )
+
+
+def _require_port(port: str, operation: str) -> None:
+    """Reject a port value PlatformIO would silently turn into auto-detection.
+
+    `pio run --upload-port ""` drops the option entirely (click passes the
+    empty string, the run processor treats it as unset), and a glob pattern
+    makes PlatformIO pick whatever port matches — either way the upload can
+    land on a DIFFERENT device than the caller intended. Fail fast instead.
+    """
+    if not port or not port.strip():
+        raise FlashError(
+            f"{operation} requires an explicit non-empty port. An empty port "
+            "makes PlatformIO auto-detect and flash whatever device it finds."
+        )
+    if set("*?[]") & set(port):
+        raise FlashError(
+            f"{operation} got a glob pattern for port ({port!r}). Pass the "
+            "exact device path so the upload cannot land on another device."
+        )
+
+
+def _upload_port_env(port: str, build_flags: dict[str, Any] | None) -> dict[str, str]:
+    """Subprocess env for an upload: build flags + `PLATFORMIO_UPLOAD_PORT`.
+
+    `--upload-port` alone is NOT enough to pin the upload to `port`:
+    pioarduino's Hybrid-Compile pass (triggered by a custom sdkconfig — the
+    "*** Compile Arduino IDF libs ***" stage) re-invokes a child
+    `pio run -e <env> -t upload` that forwards targets but no CLI options, so
+    the child auto-detects a port and can flash a different device (2026-08-25:
+    a meshnology_w10 16MB image landed on a Heltec Wireless Tracker V2 that
+    auto-detect found first, boot-looping it). `PLATFORMIO_UPLOAD_PORT` sets
+    the `upload_port` project option through the process environment, which
+    the child run inherits — closing that hole. The CLI flag still wins in
+    the outer run when both are present (same value here).
+    """
+    out = _build_flags_env(build_flags) if build_flags else {}
+    out["PLATFORMIO_UPLOAD_PORT"] = port
+    return out
+
+
+# Ports the upload output claims to have used. "Auto-detected:"/"Using
+# manually specified:" are printed by PlatformIO's AutodetectUploadPort;
+# "Serial port <port>:" by esptool v5 (also via device-install/update.sh).
+_USED_PORT_RE = re.compile(
+    r"^(?:Auto-detected: |Using manually specified: |Serial port )(\S+?):?\s*$",
+    re.MULTILINE,
+)
+
+
+def _verify_upload_port(requested: str, stdout: str | None, stderr: str | None) -> str | None:
+    """Return an error message if the upload reported using a different port.
+
+    Post-flash assertion backing up `_upload_port_env`: if any path drops the
+    requested port (a future PlatformIO/pioarduino regression, a script that
+    ignores `-p`), the tool result must fail loudly instead of reporting a
+    successful flash of the wrong device. Returns None when the output names
+    no port at all (e.g. nrfutil DFU output) or only the requested one.
+    """
+    blob = f"{stdout or ''}\n{stderr or ''}"
+    used = {m.rstrip(":") for m in _USED_PORT_RE.findall(blob)}
+    wrong = sorted(p for p in used if p != requested)
+    if not wrong:
+        return None
+    return (
+        f"upload used port {', '.join(wrong)} instead of the requested "
+        f"{requested} — the WRONG DEVICE may have been flashed. Check every "
+        "device on the bench before trusting this flash."
+    )
 
 
 def _reject_native_env(env: str, operation: str) -> None:
@@ -232,6 +302,7 @@ def flash(
     """
     _require_confirm(confirm, "flash")
     _reject_native_env(env, "flash")
+    _require_port(port, "flash")
     connection.reject_if_tcp(port, "flash")
     # Pre-flight: a held or wedged port can't be flashed. ensure_port_free waits
     # out a transient holder and, if the device is genuinely wedged (hung
@@ -244,7 +315,7 @@ def flash(
         raise FlashError(
             f"cannot flash {env!r}: serial port {port} could not be made usable ({exc})"
         ) from exc
-    extra_env = _build_flags_env(build_flags) if build_flags else None
+    extra_env = _upload_port_env(port, build_flags)
     with userprefs.temporary_overrides(userprefs_overrides) as effective:
         result = pio.run(
             ["run", "-e", env, "-t", "upload", "--upload-port", port],
@@ -254,10 +325,12 @@ def flash(
             line_cb=progress_cb,
         )
     upload_error = _detect_upload_failure(result.stdout, result.stderr)
+    port_mismatch = _verify_upload_port(port, result.stdout, result.stderr)
     exit_code = result.returncode
-    if upload_error and exit_code == 0:
-        # pio masked a silent DFU failure as success — surface it as non-zero so
-        # the bake/flash/recover paths don't record a flash that never landed.
+    if (upload_error or port_mismatch) and exit_code == 0:
+        # pio masked a silent DFU failure (or flashed a different port) as
+        # success — surface it as non-zero so the bake/flash/recover paths
+        # don't record a flash that never landed (or landed elsewhere).
         exit_code = 1
     out = {
         "exit_code": exit_code,
@@ -269,6 +342,8 @@ def flash(
     }
     if upload_error:
         out["upload_error"] = upload_error
+    if port_mismatch:
+        out["upload_port_mismatch"] = port_mismatch
     return out
 
 
@@ -301,12 +376,19 @@ def _run_install_script(script: Path, port: str, binary: Path) -> dict[str, Any]
         env=env,
     )
     duration = time.monotonic() - t0
-    return {
-        "exit_code": proc.returncode,
+    port_mismatch = _verify_upload_port(port, proc.stdout, proc.stderr)
+    exit_code = proc.returncode
+    if port_mismatch and exit_code == 0:
+        exit_code = 1
+    out = {
+        "exit_code": exit_code,
         "stdout_tail": pio.tail_lines(proc.stdout, 200),
         "stderr_tail": pio.tail_lines(proc.stderr, 200),
         "duration_s": round(duration, 2),
     }
+    if port_mismatch:
+        out["upload_port_mismatch"] = port_mismatch
+    return out
 
 
 def erase_and_flash(
@@ -323,6 +405,7 @@ def erase_and_flash(
     in that case) since a cached factory.bin would not reflect the new prefs.
     """
     _require_confirm(confirm, "erase_and_flash")
+    _require_port(port, "erase_and_flash")
     connection.reject_if_tcp(port, "erase_and_flash")
     _check_esp32_env(env)
 
@@ -381,6 +464,7 @@ def update_flash(
     overrides are provided we always force a rebuild.
     """
     _require_confirm(confirm, "update_flash")
+    _require_port(port, "update_flash")
     connection.reject_if_tcp(port, "update_flash")
     _check_esp32_env(env)
 
@@ -679,7 +763,7 @@ def _poll_job(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
         log_tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-tail_lines:]
 
     elapsed = round((state["finished_at"] or time.time()) - state["started_at"], 1)
-    return {
+    out = {
         "job_id": job_id,
         "kind": state["kind"],
         "env": state["env"],
@@ -691,6 +775,9 @@ def _poll_job(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
         "log_tail": log_tail,
         "log_path": state["log_path"],
     }
+    if state.get("error"):
+        out["error"] = state["error"]
+    return out
 
 
 def build_start(
@@ -753,10 +840,11 @@ def flash_start(
     """
     _require_confirm(confirm, "flash_start")
     _reject_native_env(env, "flash_start")
+    _require_port(port, "flash_start")
     connection.reject_if_tcp(port, "flash_start")
 
     def _body(state: dict[str, Any], log_path: Path) -> None:
-        extra_env = _build_flags_env(build_flags) if build_flags else None
+        extra_env = _upload_port_env(port, build_flags)
         with userprefs.temporary_overrides(userprefs_overrides):
             result = pio.run(
                 ["run", "-e", env, "-t", "upload", "--upload-port", port],
@@ -764,14 +852,23 @@ def flash_start(
                 check=False,
                 extra_env=extra_env,
             )
+        upload_error = _detect_upload_failure(result.stdout, result.stderr)
+        port_mismatch = _verify_upload_port(port, result.stdout, result.stderr)
+        error = port_mismatch or upload_error
+        exit_code = result.returncode
+        if error and exit_code == 0:
+            exit_code = 1
         stderr_section = "\n--- stderr ---\n" + result.stderr if result.stderr.strip() else ""
-        log_path.write_text(result.stdout + stderr_section, encoding="utf-8")
+        error_section = f"\n--- flash job FAILED ---\n{error}\n" if error else ""
+        log_path.write_text(result.stdout + stderr_section + error_section, encoding="utf-8")
         with _jobs_lock:
-            state["status"] = "done" if result.returncode == 0 else "failed"
-            state["exit_code"] = result.returncode
+            state["status"] = "done" if exit_code == 0 else "failed"
+            state["exit_code"] = exit_code
             state["finished_at"] = time.time()
             state["duration_s"] = round(result.duration_s, 2)
             state["port"] = port
+            if error:
+                state["error"] = error
 
     return _start_job("flashes", env, _body)
 
