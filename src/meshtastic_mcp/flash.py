@@ -22,7 +22,7 @@ from typing import Any
 
 import serial
 
-from . import boards, config, connection, devices, pio, port_recovery, userprefs
+from . import boards, config, connection, devices, jobs, pio, port_recovery, userprefs
 
 # Meshtastic variants use both `esp32s3` and `esp32-s3` style names across
 # variants/*/platformio.ini (no consistency enforced). Accept both spellings.
@@ -610,87 +610,9 @@ def touch_1200bps(
 # Both build and flash exceed the typical 60 s MCP request timeout; run them
 # in a daemon thread, return a job_id immediately, poll for completion.
 # ---------------------------------------------------------------------------
+# The registry itself lives in `jobs.py` — the vanity grinder shares it.
 
-_active_jobs: dict[str, dict[str, Any]] = {}
-_jobs_lock = threading.Lock()
-
-
-def _job_data_dir(kind: str) -> Path:
-    import os
-
-    from platformdirs import user_data_dir
-
-    root = Path(os.environ.get("MESHTASTIC_MCP_DATA_DIR") or user_data_dir("meshtastic-mcp"))
-    d = root / kind
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _start_job(kind: str, env: str, worker_body) -> dict[str, Any]:
-    """Launch `worker_body(state, log_path)` in a daemon thread, tracked by job_id.
-
-    `kind` is "builds" or "flashes" (used for the log subdir and id prefix).
-    `worker_body` receives the mutable `state` dict + the log Path; it runs the
-    actual pio invocation and updates state under `_jobs_lock`.
-    """
-    import uuid
-
-    job_id = uuid.uuid4().hex[:12]
-    log_path = _job_data_dir(kind) / f"{job_id}.log"
-
-    state: dict[str, Any] = {
-        "job_id": job_id,
-        "kind": kind,
-        "env": env,
-        "status": "running",
-        "started_at": time.time(),
-        "finished_at": None,
-        "exit_code": None,
-        "artifacts": [],
-        "log_path": str(log_path),
-    }
-    with _jobs_lock:
-        _active_jobs[job_id] = state
-
-    def _run() -> None:
-        try:
-            worker_body(state, log_path)
-        except Exception as exc:
-            log_path.write_text(f"{kind} worker error: {exc}\n", encoding="utf-8")
-            with _jobs_lock:
-                state["status"] = "failed"
-                state["finished_at"] = time.time()
-                state["error"] = str(exc)
-
-    threading.Thread(target=_run, daemon=True, name=f"{kind}-{job_id}").start()
-    return {"job_id": job_id, "status": "running", "log_path": str(log_path)}
-
-
-def _poll_job(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
-    """Shared poll for build/flash jobs started via `_start_job`."""
-    with _jobs_lock:
-        state = _active_jobs.get(job_id)
-    if state is None:
-        return {"error": f"Unknown job_id {job_id!r} (only this session's jobs are tracked)."}
-
-    log_path = Path(state["log_path"])
-    log_tail: list[str] = []
-    if log_path.exists():
-        log_tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-tail_lines:]
-
-    elapsed = round((state["finished_at"] or time.time()) - state["started_at"], 1)
-    return {
-        "job_id": job_id,
-        "kind": state["kind"],
-        "env": state["env"],
-        "status": state["status"],
-        "elapsed_s": elapsed,
-        "exit_code": state.get("exit_code"),
-        "duration_s": state.get("duration_s"),
-        "artifacts": state.get("artifacts", []),
-        "log_tail": log_tail,
-        "log_path": state["log_path"],
-    }
+_jobs_lock = jobs.LOCK
 
 
 def build_start(
@@ -721,7 +643,7 @@ def build_start(
             state["duration_s"] = round(result.duration_s, 2)
             state["artifacts"] = [str(p) for p in _artifacts_for(env)]
 
-    out = _start_job("builds", env, _body)
+    out = jobs.start("builds", env, _body)
     # Back-compat alias: callers/tests historically read build_id.
     out["build_id"] = out["job_id"]
     return out
@@ -733,9 +655,10 @@ def build_poll(build_id: str, tail_lines: int = 50) -> dict[str, Any]:
     Returns status (running/done/failed), elapsed time, artifacts, and the
     last `tail_lines` lines of build output.
     """
-    out = _poll_job(build_id, tail_lines=tail_lines)
+    out = jobs.poll(build_id, tail_lines=tail_lines)
     if "job_id" in out:
         out["build_id"] = out["job_id"]
+        out["env"] = out["label"]
     return out
 
 
@@ -773,9 +696,12 @@ def flash_start(
             state["duration_s"] = round(result.duration_s, 2)
             state["port"] = port
 
-    return _start_job("flashes", env, _body)
+    return jobs.start("flashes", env, _body)
 
 
 def flash_poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
     """Check status of a background flash started with `flash_start`."""
-    return _poll_job(job_id, tail_lines=tail_lines)
+    out = jobs.poll(job_id, tail_lines=tail_lines)
+    if "job_id" in out:
+        out["env"] = out["label"]
+    return out

@@ -55,6 +55,18 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   (authoritative > maintainer > contributor > community) — role tracks trust on a server
   full of confident misinformation; `$DISCORD_TRUST_TIERS` overrides. Everything returned is
   untrusted user content — `openWorldHint`. See `docs/discord.md`.
+- **mvgrind capability** (needs the `mvgrind` binary — `$MESHTASTIC_MCP_MVGRIND` or PATH — plus
+  an OpenCL driver): `vanity.py` vanity-identity tools. A PKI node's number is
+  `crc32(x25519_public_key)` and every client paints it with the low 24 bits read as RGB, so a
+  chosen id *or* colour means grinding the keyspace on the GPU
+  ([mvgrind](https://github.com/miketweaver/mvgrind)). Gated: `vanity_grind_start` /
+  `vanity_grind_poll` / `vanity_grind_stop` (async job pattern — see `jobs.py`). **Core, not
+  gated:** `vanity_preview` (key → id/colour, pure) and `vanity_apply` (write the key to a
+  radio), so a key ground on another machine still applies here. Every hit is re-derived by
+  this repo's own RFC 7748 ladder + `zlib.crc32`, sharing no code with the grinder;
+  `verified: false` means the key does not produce the id it claims. The apply path clears
+  `public_key` on the way out — the firmware only re-derives (and so only moves the NodeNum)
+  when the incoming public key is empty. See `docs/vanity.md`.
 - **FleetSuite web control plane** (the `[web]` extra, separate `meshtastic-mcp-web` entrypoint,
   not an MCP capability): `web/` FastAPI backend + `web-ui/` Vue SPA — device registry,
   build/flash queue, recovery ladder, camera streams, bench test runner, Datadog shipping, and
@@ -64,9 +76,10 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
 decorator (`_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled tools only when
-`CAPS.firmware` is active — 60 always-on tools (includes the 3 power-meter tools, always
-registered); +14 android, +17 firmware, +2 sdr, and the apple/sdk-cli/local-model gates on top
-(≈97 with everything active). Counts drift — `doctor` and the startup log are the source of truth.
+`CAPS.firmware` is active — 62 always-on tools (includes the 3 power-meter tools and
+`vanity_preview`/`vanity_apply`, always registered); +14 android, +17 firmware, +2 sdr,
++3 mvgrind, and the apple/sdk-cli/local-model gates on top (≈123 with everything active).
+Counts drift — `doctor` and the startup log are the source of truth.
 
 **Provisioning:** `doctor.py` (the `doctor` MCP tool / `meshtastic-mcp doctor` CLI) probes every
 external dependency and emits the exact, platform-aware acquisition command for anything missing
@@ -119,6 +132,9 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
 - **One MCP call per serial port** (non-blocking exclusive lock): open → act → close.
   Contention fails fast with a `... is busy ... Retry shortly.` error — it never queues or
   blocks, so the caller must catch and retry.
+- **Anything that can outrun a 60 s MCP call gets a job, not a longer timeout.** `jobs.py`
+  is the one registry (build, flash, grind): `jobs.start()` returns a `job_id`, the tool
+  pairs it with a `_poll`. Don't add a second registry.
 - **Destructive tools stay `confirm`-gated** (`reboot`, `factory_reset`, `erase_and_flash`,
   `uhubctl_*`) **and `destructiveHint`-annotated** (see the annotation maps in `server.py`).
   Don't bypass the gate. New tools get the right read/destructive/open-world hint.
@@ -286,6 +302,17 @@ App/AVD connects to `10.0.2.2:<port>` (emulator) or the host IP (device). `fuzz`
 `light`/`parser`/`adversary`/`chaos` — list them with `replay_fuzz_presets`. Pacing priority:
 `duration` (whole capture in N wall-clock seconds) > `rate` (steady pkts/sec) > `speed`
 (cadence multiplier); `replay_status` reports `target_rate` vs live `achieved_rate`.
+
+**Give a node a chosen id or colour**
+```
+vanity_grind_start(color="crimson", tol=6)   # or pattern="dc80", or both
+vanity_grind_poll(job_id)                    # hits[] — check `verified` before using one
+vanity_apply(private_key=<hit>, port=<port>, confirm=True)
+```
+`tol` costs nothing and finds a hit orders of magnitude sooner. `vanity_apply`
+**replaces the node's identity** (NodeNum, keypair, colour) and reboots the board;
+it needs `lora.region` set and a clamped key, and verifies the new number on
+reconnect. Hits are private keys — see `SECURITY.md`. Full detail: `docs/vanity.md`.
 
 ## Handling overflow / large result sets
 

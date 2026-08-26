@@ -62,6 +62,25 @@ After a write, **reboot then re-read** to prove it persisted to NVS, not just RA
 (`reboot <port>` → `get_config`). Region (`lora.region`) and `network.enabled_protocols`
 are the two that bite — see `meshtastic-e2e` `topology.md`.
 
+## Vanity identity (chosen node id / app colour)
+
+A node's number is `crc32(x25519_public_key)` and every app paints it with the low 24 bits
+read as RGB, so both are chosen by grinding keys, not by setting a field.
+
+```
+vanity_grind_start color=crimson tol=6        # or pattern=dc80, or both; returns job_id
+vanity_grind_poll <job_id>                    # hits[]; NEVER use one with verified=false
+vanity_preview <private_key>                  # what any key gives you — no device, no GPU
+vanity_apply <private_key> <port> confirm=true
+```
+
+- `tol` is free and finds a hit orders of magnitude sooner — always offer it.
+- Grinding needs `mvgrind` (`doctor` prints how to build it); preview/apply do not.
+- `vanity_apply` **replaces the identity**, drops the old NodeNum from the node's own DB, and
+  reboots the board. It needs `lora.region` set (keygen is skipped while UNSET) and refuses an
+  unclamped key. Keep the previous key if a way back matters.
+- Hits are private keys. Don't echo them further than needed; see `docs/vanity.md`.
+
 ## Message + observe
 
 ```
@@ -221,3 +240,5 @@ optional — see `doctor` for the `[ui]` extra). This is device-only; for app UI
 2. Mutations are confirm-gated and reversible-by-reboot only for RAM writes — re-read after reboot.
 3. `factory_reset(full=true)` wipes BLE bonds + the identity key; `full=false` keeps them.
 4. Prefer the recorder windows over ad-hoc reads — they're timestamped and align with app snapshots.
+5. Never apply a ground key whose `verified` is false, and never apply one without telling the
+   operator the old node id first — the change is not reversible without the previous key.

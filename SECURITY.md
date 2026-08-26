@@ -54,3 +54,14 @@ into argument lists.
 
 `recorder_export` writes to an arbitrary `dest_dir` on the MCP server's host
 filesystem. Ensure the path is within an expected directory.
+
+`vanity_grind_start` / `vanity_grind_poll` produce and return **private-key
+material**. Hits are written to `<MCP data dir>/grinds/<job_id>.keys` and to the
+job log (mvgrind prints them to stdout), both mode `0600`, and are returned
+inline so `vanity_apply` can consume them — so they also pass through the model's
+context. Treat the transcript and those files as secrets.
+
+`vanity_apply` replaces a device's identity: the NodeNum, the keypair, and the
+colour every app paints it. The old NodeNum is dropped from the node's own DB and
+peers must re-learn the new key. It is `confirm`-gated and `destructiveHint`;
+keep the previous private key if you want a way back. See `docs/vanity.md`.

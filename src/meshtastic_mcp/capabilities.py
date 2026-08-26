@@ -15,6 +15,8 @@ when their prerequisite is present:
   Needs the ``android`` CLI and ``adb`` on PATH.
 - ``apple`` — iOS Simulator / macOS-app + native-node orchestration. Needs ``xcrun``
   (``idb`` for UI drive).
+- ``mvgrind`` — GPU grinding of vanity NodeNums / app colours. Needs the ``mvgrind``
+  binary + an OpenCL driver.
 
 Tool registration in ``server.py`` consults these so a ``pip install meshtastic-mcp``
 with no firmware tree still exposes the full device/admin/recorder surface.
@@ -145,6 +147,20 @@ def has_discord() -> bool:
     return discord.available()
 
 
+def has_mvgrind() -> bool:
+    """True when the ``mvgrind`` GPU vanity grinder is resolvable.
+
+    Gates the vanity-identity *grind* tools (``vanity_grind_start`` /
+    ``vanity_grind_poll`` / ``vanity_grind_stop``). ``vanity_preview`` and
+    ``vanity_apply`` are core — a key ground elsewhere can always be inspected
+    and written here. Resolution is path-only (``$MESHTASTIC_MCP_MVGRIND`` →
+    PATH); needs an OpenCL driver at run time. See ``doctor``.
+    """
+    from . import vanity
+
+    return vanity.available()
+
+
 @dataclass(frozen=True)
 class Capabilities:
     firmware: bool
@@ -158,6 +174,7 @@ class Capabilities:
     tak: bool
     sdk_cli: bool
     discord: bool
+    mvgrind: bool
 
     def summary(self) -> str:
         active = [
@@ -174,6 +191,7 @@ class Capabilities:
                 ("tak", self.tak),
                 ("sdk_cli", self.sdk_cli),
                 ("discord", self.discord),
+                ("mvgrind", self.mvgrind),
             )
             if on
         ]
@@ -193,4 +211,5 @@ def detect() -> Capabilities:
         tak=has_tak(),
         sdk_cli=has_sdk_cli(),
         discord=has_discord(),
+        mvgrind=has_mvgrind(),
     )

@@ -874,6 +874,40 @@ def _uhubctl_check() -> Check:
     )
 
 
+def _mvgrind_check() -> Check:
+    """Vanity-identity grinding (`vanity_grind_*`): needs the `mvgrind` GPU grinder
+    plus an OpenCL driver. Optional — `vanity_preview`/`vanity_apply` are core, so a
+    key ground on another machine can still be inspected and written without this.
+    """
+    from . import vanity
+
+    needed = "grind a vanity NodeNum / app colour (vanity_grind_start / _poll / _stop)"
+    path = vanity.mvgrind_bin()
+    if path:
+        return Check(
+            "mvgrind", "vanity", STATUS_OK, needed, detail=path, env_override=vanity.MVGRIND_ENV
+        )
+    # Upstream probes `__has_include(<sys/random.h>)` for getrandom(2); macOS ships that
+    # header but declares only getentropy(), so a stock `make` fails to compile there. The
+    # /dev/urandom fallback in fill_random() is already correct — only the probe is wrong.
+    # Keep any note LAST: the whole fix string is meant to be pasted into a shell.
+    build = (
+        "git clone --recursive https://github.com/miketweaver/mvgrind && cd mvgrind && make "
+        f"&& export {vanity.MVGRIND_ENV}=$PWD/mvgrind"
+    )
+    if _IS_MAC:
+        build += "  # macOS: patch the getrandom(2) probe first — one line, docs/vanity.md"
+    return Check(
+        "mvgrind",
+        "vanity",
+        STATUS_MISSING,
+        needed,
+        detail="mvgrind not on PATH",
+        fix=build,
+        env_override=vanity.MVGRIND_ENV,
+    )
+
+
 def run() -> DoctorReport:
     """Probe everything and return a structured report (never raises)."""
     caps = capabilities.detect()
@@ -959,6 +993,8 @@ def run() -> DoctorReport:
         _sdk_cli_check(),
         # discord capability (read-only community-server source)
         _discord_check(),
+        # vanity capability (GPU NodeNum/colour grinding)
+        _mvgrind_check(),
     ]
     return DoctorReport(
         platform=f"{platform.system()} {platform.machine()} / Python {platform.python_version()}",

@@ -6,6 +6,27 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Vanity node identities** (`mvgrind` capability + two core tools) — pick a node's id or the
+  colour every app paints it, then adopt it. A PKI node's number is
+  `crc32(x25519_public_key)` and the clients read the low 24 bits of it straight as RGB
+  (Android `NodeColors.kt`, Apple `Color.swift` agree), so a chosen id or colour means grinding
+  the keyspace: [mvgrind](https://github.com/miketweaver/mvgrind) does it on the GPU
+  (~92 M keys/s on an Apple M4 — a full 8-digit id averages ~48 s, a tolerant colour is
+  instant). `vanity_grind_start` / `vanity_grind_poll` / `vanity_grind_stop` drive it as a
+  background job (the `jobs.py` registry, now shared with build/flash), gated on the binary
+  (`$MESHTASTIC_MCP_MVGRIND` or PATH). `vanity_preview` (key → id + colour + the black/white
+  the apps put on it) and `vanity_apply` (write it to a radio) are **core**, so a key ground on
+  another machine still applies here. Every hit is re-derived by this repo's own RFC 7748
+  X25519 ladder + `zlib.crc32` — no shared code with the grinder's kernels — and comes back
+  `verified: false` if the key does not produce the id it claims. `vanity_apply` is
+  `confirm`-gated and `destructiveHint` (it *replaces* the identity: the old NodeNum is dropped
+  from the node's own DB and peers must re-learn the key), refuses an unclamped key or an UNSET
+  `lora.region` (the firmware silently skips keygen there), clears `public_key` on the way out
+  so the firmware actually re-derives and moves the NodeNum, and verifies the new number on
+  reconnect. Hits are private-key material: `0600` files under the data dir, and returned
+  inline — see `SECURITY.md`. `doctor` reports the binary and prints the build command
+  (including the one-line macOS `getrandom` patch upstream needs). Full detail:
+  `docs/vanity.md`.
 - **Discord read-only source** (`discord` capability) — ten `discord_*` tools read the
   Meshtastic community server: server-side `discord_search` (Discord's own index, full
   history; channel / author / mentions / has / date / pinned filters, `offset` paging, `"me"`
