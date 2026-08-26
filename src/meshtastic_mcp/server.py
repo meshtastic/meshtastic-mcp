@@ -38,6 +38,7 @@ from . import (
     registry,
     rf_oracle,
     serial_session,
+    vanity,
 )
 from . import (
     config_snapshot as config_snapshot_mod,
@@ -198,6 +199,21 @@ def discord_tool(*args: Any, **kwargs: Any):
     return deco
 
 
+def vanity_tool(*args: Any, **kwargs: Any):
+    """Like `@app.tool()` but only registers when the `mvgrind` grinder is present.
+
+    Gates the GPU grind tools only. `vanity_preview` and `vanity_apply` are core:
+    a key ground on another machine is still inspectable and applicable here.
+    """
+
+    def deco(fn):
+        if CAPS.mvgrind:
+            return app.tool(*args, **kwargs)(fn)
+        return fn
+
+    return deco
+
+
 def _start_recorder() -> None:
     # Persistent device-log capture. Starts on first import — pubsub fan-out
     # is process-global, so subscribing here captures every active interface
@@ -244,6 +260,13 @@ _SDR_TOOLS = (
     "rf_confirm_tx",
 )
 
+# mvgrind-coupled tools, gated by `vanity_tool` on the mvgrind capability.
+_VANITY_TOOLS = (
+    "vanity_grind_start",
+    "vanity_grind_poll",
+    "vanity_grind_stop",
+)
+
 # Firmware-coupled tools, gated by `firmware_tool` on the firmware capability.
 _FIRMWARE_TOOLS = (
     "list_boards",
@@ -281,6 +304,14 @@ def _log_capabilities() -> None:
                 "(set MESHTASTIC_FIRMWARE_ROOT to enable): %s",
                 len(_FIRMWARE_TOOLS),
                 ", ".join(_FIRMWARE_TOOLS),
+            )
+        if not CAPS.mvgrind:
+            log.info(
+                "mvgrind capability inactive: %d vanity-grind tools not registered "
+                "(build https://github.com/miketweaver/mvgrind, or set "
+                "$MESHTASTIC_MCP_MVGRIND): %s — vanity_preview/vanity_apply still work",
+                len(_VANITY_TOOLS),
+                ", ".join(_VANITY_TOOLS),
             )
         if not CAPS.sdr:
             log.info(
@@ -3467,6 +3498,104 @@ def push_fake_nodedb(
     )
 
 
+# ---------- Vanity identities (NodeNum / app colour) -----------------------
+# A PKI node's number is crc32(x25519_public_key) and the apps paint it with the
+# low 24 bits read as RGB — so a chosen id or colour means grinding the keyspace
+# (mvgrind, GPU) and then writing the winning private key. Grinding is gated on
+# the binary; preview/apply are core. See `vanity.py` for the derivation.
+
+
+@app.tool()
+def vanity_preview(private_key: str) -> dict[str, Any]:
+    """What node id and colour a private key produces. No device, no grinder.
+
+    Takes hex or base64. Returns the node id, NodeNum, the RGB the apps paint it
+    (and the black/white they put on top), and whether the scalar is clamped.
+    Use it to check a key someone else ground before `vanity_apply` writes it.
+    """
+    return vanity.describe_key(private_key)
+
+
+@vanity_tool()
+def vanity_grind_start(
+    pattern: str | None = None,
+    color: str | None = None,
+    tol: int = 0,
+    count: int = 1,
+    device: int | None = None,
+    timeout_s: float = vanity.DEFAULT_TIMEOUT_S,
+) -> dict[str, Any]:
+    """Grind for a keypair whose node id / app colour matches, in the background.
+
+    Returns a `job_id` in under a second; poll with `vanity_grind_poll`. Ask for
+    an id pattern (`"dc80"` prefix, `"dc80****"` wildcards, `"dc80,801f"` a set,
+    8 hex digits for an exact id), a colour (`"crimson"`, `"#dc143c"`), or both.
+
+    `tol` widens the colour to +/-N per channel — it costs nothing to check and
+    lands a hit far sooner (`crimson` alone is ~17 M keys; `--tol 6` is ~8 K).
+    The two constraints share bits (id nibbles 3-8 *are* the colour channels), so
+    an impossible pair is rejected up front, in the job log.
+
+    The result is private-key material: hits land in a 0600 file and come back
+    inline from the poll. Treat them as secrets.
+    """
+    return vanity.grind_start(
+        pattern=pattern,
+        color=color,
+        tol=tol,
+        count=count,
+        device=device,
+        timeout_s=timeout_s,
+    )
+
+
+@vanity_tool()
+def vanity_grind_poll(job_id: str, tail_lines: int = 12) -> dict[str, Any]:
+    """Check a background grind: status, progress tail, and any hits so far.
+
+    Every hit is re-derived on the CPU by an implementation that shares no code
+    with the grinder; `verified: false` means the key does not actually produce
+    the id it claims, and must not be applied. **Hits contain private keys.**
+    """
+    return vanity.grind_poll(job_id, tail_lines=tail_lines)
+
+
+@vanity_tool()
+def vanity_grind_stop(job_id: str) -> dict[str, Any]:
+    """Stop a running grind. Anything already found is kept and returned."""
+    return vanity.grind_stop(job_id)
+
+
+@app.tool()
+def vanity_apply(
+    private_key: str,
+    port: str | None = None,
+    confirm: bool = False,
+    verify: bool = True,
+    verify_timeout_s: float = 75.0,
+) -> dict[str, Any]:
+    """Write a vanity private key to a device, moving it to the matching NodeNum.
+
+    Destructive: this replaces the node's identity. The old NodeNum is dropped
+    from its own DB, peers keep using the old public key until they see the new
+    NodeInfo, and anything that named the old node (admin keys, another node's
+    DM history) has to be re-pointed. Keep the old key if you want a way back.
+
+    Requires `confirm=True`, a clamped key, and a device whose `lora.region` is
+    set — the firmware refuses key derivation while the region is UNSET, which
+    would make this a silent no-op. The board reboots itself (~7 s) to commit;
+    with `verify` we reconnect and confirm it came back on the expected number,
+    which is also the empirical check that this build has PKI keygen at all.
+    """
+    return vanity.apply_key(
+        private_key=private_key,
+        port=port,
+        confirm=confirm,
+        verify=verify,
+        verify_timeout_s=verify_timeout_s,
+    )
+
+
 # ---------- MCP tool annotations (modern hint metadata) -------------------
 # Annotations let clients reason about each tool without calling it: surface
 # read-only vs destructive in the UI, auto-approve safe reads, warn before
@@ -3494,6 +3623,8 @@ _READ_ONLY = {
     "get_board",
     "build_poll",  # reads background-build state; never mutates
     "flash_poll",  # reads background-flash state; never mutates
+    "vanity_preview",  # pure key -> id/colour derivation; no device, no host state
+    "vanity_grind_poll",  # reads grind-job state; never mutates
     "serial_list",
     "serial_read",  # reads buffered bytes; no write side-effect
     "device_info",
@@ -3541,6 +3672,9 @@ _READ_ONLY = {
 _DESTRUCTIVE = {
     "build_start",  # launches a pio subprocess; cannot be undone mid-flight
     "flash_start",  # launches a pio upload subprocess
+    "vanity_grind_start",  # spawns a GPU grinder; writes private-key material to disk
+    "vanity_grind_stop",  # terminates that subprocess
+    "vanity_apply",  # replaces the node identity (NodeNum + keypair); not reversible
     "build",
     "clean",
     "pio_flash",
@@ -3648,6 +3782,7 @@ _OPEN_WORLD = {
     "set_channel_url",
     "config_snapshot",  # reads live device config
     "config_diff",  # may read live device config (name_b=None)
+    "vanity_apply",  # writes the security config to a live device and reboots it
     "set_owner",
     "set_debug_log_api",
     "send_text",
@@ -3740,6 +3875,11 @@ _TITLE_OVERRIDES: dict[str, str] = {
     "pa_meter_status": "PA Meter Status",
     "pa_measure": "PA Meter Measure",
     "pa_sweep": "PA Power Sweep (Closed-Loop)",
+    "vanity_preview": "Vanity Identity Preview",
+    "vanity_grind_start": "Vanity Grind (Async Start)",
+    "vanity_grind_poll": "Vanity Grind (Poll Status)",
+    "vanity_grind_stop": "Vanity Grind (Stop)",
+    "vanity_apply": "Adopt Vanity Identity",
 }
 
 
