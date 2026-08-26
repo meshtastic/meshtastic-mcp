@@ -23,7 +23,7 @@ from typing import Any
 
 import serial
 
-from . import boards, config, connection, devices, pio, port_recovery, userprefs
+from . import boards, config, connection, devices, pio, port_recovery, registry, userprefs
 
 # Meshtastic variants use both `esp32s3` and `esp32-s3` style names across
 # variants/*/platformio.ini (no consistency enforced). Accept both spellings.
@@ -70,6 +70,42 @@ def _require_port(port: str, operation: str) -> None:
             f"{operation} got a glob pattern for port ({port!r}). Pass the "
             "exact device path so the upload cannot land on another device."
         )
+
+
+def _acquire_port(port: str, operation: str) -> threading.Lock:
+    """Take the shared per-port lock for the length of an upload, or fail fast.
+
+    Uploads are the one device operation that must not share a port: two
+    concurrent flashes drive the same serial line, and `connect()` holding it
+    makes `ensure_port_free` read the port as wedged and power-cycle the hub
+    slot mid-flash. Same non-blocking `registry.port_lock` the connect/serial
+    paths use, so all of them serialize against each other.
+    """
+    active = registry.active_session_for_port(port)
+    if active is not None:
+        raise FlashError(
+            f"{operation}: port {port} is held by serial session {active.id}. "
+            "Call `serial_close` first."
+        )
+    lock = registry.port_lock(port)
+    if not lock.acquire(blocking=False):
+        raise FlashError(
+            f"{operation}: port {port} is busy — another device operation is "
+            "in flight. Retry shortly."
+        )
+    return lock
+
+
+def _release_port(lock: threading.Lock) -> None:
+    """Release a lock taken by `_acquire_port`, tolerating a double release.
+
+    `threading.Lock` is unowned — the docs allow release from any thread — so
+    `flash_start` can acquire on the caller's thread and release on the worker's.
+    """
+    try:
+        lock.release()
+    except RuntimeError:
+        pass
 
 
 def _upload_port_env(port: str, build_flags: dict[str, Any] | None) -> dict[str, str]:
@@ -304,26 +340,33 @@ def flash(
     _reject_native_env(env, "flash")
     _require_port(port, "flash")
     connection.reject_if_tcp(port, "flash")
-    # Pre-flight: a held or wedged port can't be flashed. ensure_port_free waits
-    # out a transient holder and, if the device is genuinely wedged (hung
-    # firmware / stale CDC node), power-cycles its own hub slot to re-enumerate
-    # it. Re-enumeration can bring the device back on a DIFFERENT /dev path, so
-    # flash whatever path it returns rather than the one we were handed.
+    # Held across the pre-flight too: an in-process holder makes ensure_port_free
+    # read the port as wedged and power-cycle the hub slot under it. Keyed on the
+    # requested path — a racing caller names that, not the one recovery lands on.
+    lock = _acquire_port(port, "flash")
     try:
-        port = port_recovery.ensure_port_free(port, allow_power_cycle=True)
-    except port_recovery.PortRecoveryError as exc:
-        raise FlashError(
-            f"cannot flash {env!r}: serial port {port} could not be made usable ({exc})"
-        ) from exc
-    extra_env = _upload_port_env(port, build_flags)
-    with userprefs.temporary_overrides(userprefs_overrides) as effective:
-        result = pio.run(
-            ["run", "-e", env, "-t", "upload", "--upload-port", port],
-            timeout=pio.TIMEOUT_UPLOAD,
-            check=False,
-            extra_env=extra_env,
-            line_cb=progress_cb,
-        )
+        # Pre-flight: a held or wedged port can't be flashed. ensure_port_free waits
+        # out a transient holder and, if the device is genuinely wedged (hung
+        # firmware / stale CDC node), power-cycles its own hub slot to re-enumerate
+        # it. Re-enumeration can bring the device back on a DIFFERENT /dev path, so
+        # flash whatever path it returns rather than the one we were handed.
+        try:
+            port = port_recovery.ensure_port_free(port, allow_power_cycle=True)
+        except port_recovery.PortRecoveryError as exc:
+            raise FlashError(
+                f"cannot flash {env!r}: serial port {port} could not be made usable ({exc})"
+            ) from exc
+        extra_env = _upload_port_env(port, build_flags)
+        with userprefs.temporary_overrides(userprefs_overrides) as effective:
+            result = pio.run(
+                ["run", "-e", env, "-t", "upload", "--upload-port", port],
+                timeout=pio.TIMEOUT_UPLOAD,
+                check=False,
+                extra_env=extra_env,
+                line_cb=progress_cb,
+            )
+    finally:
+        _release_port(lock)
     upload_error = _detect_upload_failure(result.stdout, result.stderr)
     port_mismatch = _verify_upload_port(port, result.stdout, result.stderr)
     exit_code = result.returncode
@@ -445,7 +488,11 @@ def erase_and_flash(
         script = config.firmware_root() / "bin" / "device-install.sh"
         if not script.is_file():
             raise FlashError(f"device-install.sh not found at {script}")
-        result = _run_install_script(script, port, factory)
+        lock = _acquire_port(port, "erase_and_flash")
+        try:
+            result = _run_install_script(script, port, factory)
+        finally:
+            _release_port(lock)
 
     result["userprefs"] = _userprefs_summary(effective)
     return result
@@ -502,7 +549,11 @@ def update_flash(
         script = config.firmware_root() / "bin" / "device-update.sh"
         if not script.is_file():
             raise FlashError(f"device-update.sh not found at {script}")
-        result = _run_install_script(script, port, firmware)
+        lock = _acquire_port(port, "update_flash")
+        try:
+            result = _run_install_script(script, port, firmware)
+        finally:
+            _release_port(lock)
 
     result["userprefs"] = _userprefs_summary(effective)
     return result
@@ -752,8 +803,12 @@ def _start_job(kind: str, env: str, worker_body) -> dict[str, Any]:
 
 def _poll_job(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
     """Shared poll for build/flash jobs started via `_start_job`."""
+    # Snapshot under the lock: the worker publishes exit_code/error/status in one
+    # critical section, so reading the live dict later can catch a status
+    # without its reason.
     with _jobs_lock:
-        state = _active_jobs.get(job_id)
+        live = _active_jobs.get(job_id)
+        state = dict(live) if live is not None else None
     if state is None:
         return {"error": f"Unknown job_id {job_id!r} (only this session's jobs are tracked)."}
 
@@ -802,11 +857,11 @@ def build_start(
         stderr_section = "\n--- stderr ---\n" + result.stderr if result.stderr.strip() else ""
         log_path.write_text(result.stdout + stderr_section, encoding="utf-8")
         with _jobs_lock:
-            state["status"] = "done" if result.returncode == 0 else "failed"
             state["exit_code"] = result.returncode
             state["finished_at"] = time.time()
             state["duration_s"] = round(result.duration_s, 2)
             state["artifacts"] = [str(p) for p in _artifacts_for(env)]
+            state["status"] = "done" if result.returncode == 0 else "failed"
 
     out = _start_job("builds", env, _body)
     # Back-compat alias: callers/tests historically read build_id.
@@ -842,16 +897,22 @@ def flash_start(
     _reject_native_env(env, "flash_start")
     _require_port(port, "flash_start")
     connection.reject_if_tcp(port, "flash_start")
+    # Acquired here, not in the worker, so a busy port errors now instead of
+    # becoming a job the caller finds dead on its first poll.
+    lock = _acquire_port(port, "flash_start")
 
     def _body(state: dict[str, Any], log_path: Path) -> None:
-        extra_env = _upload_port_env(port, build_flags)
-        with userprefs.temporary_overrides(userprefs_overrides):
-            result = pio.run(
-                ["run", "-e", env, "-t", "upload", "--upload-port", port],
-                timeout=pio.TIMEOUT_UPLOAD,
-                check=False,
-                extra_env=extra_env,
-            )
+        try:
+            extra_env = _upload_port_env(port, build_flags)
+            with userprefs.temporary_overrides(userprefs_overrides):
+                result = pio.run(
+                    ["run", "-e", env, "-t", "upload", "--upload-port", port],
+                    timeout=pio.TIMEOUT_UPLOAD,
+                    check=False,
+                    extra_env=extra_env,
+                )
+        finally:
+            _release_port(lock)
         upload_error = _detect_upload_failure(result.stdout, result.stderr)
         port_mismatch = _verify_upload_port(port, result.stdout, result.stderr)
         error = port_mismatch or upload_error
@@ -862,15 +923,21 @@ def flash_start(
         error_section = f"\n--- flash job FAILED ---\n{error}\n" if error else ""
         log_path.write_text(result.stdout + stderr_section + error_section, encoding="utf-8")
         with _jobs_lock:
-            state["status"] = "done" if exit_code == 0 else "failed"
             state["exit_code"] = exit_code
             state["finished_at"] = time.time()
             state["duration_s"] = round(result.duration_s, 2)
             state["port"] = port
             if error:
                 state["error"] = error
+            # Status last: a poll treats anything but "running" as terminal, so
+            # publishing it before the reason can hand back a bare failure.
+            state["status"] = "done" if exit_code == 0 else "failed"
 
-    return _start_job("flashes", env, _body)
+    try:
+        return _start_job("flashes", env, _body)
+    except BaseException:
+        _release_port(lock)
+        raise
 
 
 def flash_poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
