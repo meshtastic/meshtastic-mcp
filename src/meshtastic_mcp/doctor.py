@@ -888,15 +888,15 @@ def _mvgrind_check() -> Check:
             "mvgrind", "vanity", STATUS_OK, needed, detail=path, env_override=vanity.MVGRIND_ENV
         )
     # Upstream probes `__has_include(<sys/random.h>)` for getrandom(2); macOS ships that
-    # header but declares only getentropy(), so a stock `make` fails to compile there. The
-    # /dev/urandom fallback in fill_random() is already correct — only the probe is wrong.
+    # header but declares only getentropy(), so a stock `make` fails to compile there.
+    # Fix submitted as miketweaver/mvgrind#2; docs/vanity.md carries the patch meanwhile.
     # Keep any note LAST: the whole fix string is meant to be pasted into a shell.
     build = (
         "git clone --recursive https://github.com/miketweaver/mvgrind && cd mvgrind && make "
         f"&& export {vanity.MVGRIND_ENV}=$PWD/mvgrind"
     )
     if _IS_MAC:
-        build += "  # macOS: patch the getrandom(2) probe first — one line, docs/vanity.md"
+        build += "  # macOS: patch the getrandom(2) probe first — docs/vanity.md (mvgrind#2)"
     return Check(
         "mvgrind",
         "vanity",

@@ -134,18 +134,34 @@ cd mvgrind && make && make test
 Then put `mvgrind` on `PATH`, or point `$MESHTASTIC_MCP_MVGRIND` at the binary.
 `doctor` prints the command for this platform and reports where it resolved.
 
-**macOS needs a one-line patch as of 2026-08-26.** Upstream probes for
-`getrandom(2)` with `__has_include(<sys/random.h>)`; macOS ships that header but
-declares only `getentropy`, so a stock `make` fails with *"call to undeclared
-function 'getrandom'"*. The `/dev/urandom` fallback in `fill_random()` is
-already correct — only the probe is wrong:
+**macOS needs a small patch until [miketweaver/mvgrind#2](https://github.com/miketweaver/mvgrind/pull/2)
+lands.** Upstream probes for `getrandom(2)` with `__has_include(<sys/random.h>)`;
+macOS ships that header but declares only `getentropy()` in it, so a stock
+`make` dies with *"call to undeclared function 'getrandom'"*. Seed from
+`getentropy()` there instead — same fails-closed CSPRNG guarantee, no
+`/dev/urandom` dependency:
 
 ```c
 #if __has_include(<sys/random.h>)
 #include <sys/random.h>
-#if !defined(__APPLE__)          /* macOS has the header but not getrandom(2) */
+#if defined(__APPLE__)          /* the header is there; getrandom(2) is not */
+#define MV_HAVE_GETENTROPY 1
+#else
 #define MV_HAVE_GETRANDOM 1
 #endif
+#endif
+```
+
+```c
+#ifdef MV_HAVE_GETENTROPY       /* in fill_random(), beside the getrandom block */
+    size_t got_off = 0;
+    while (got_off < n) {
+        size_t chunk = (n - got_off) > 256 ? 256 : (n - got_off);
+        if (getentropy(buf + got_off, chunk) != 0)
+            break;
+        got_off += chunk;
+    }
+    have = (got_off == n);
 #endif
 ```
 
