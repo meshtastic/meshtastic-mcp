@@ -16,6 +16,7 @@ job loudly when the output shows a different port was used.
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -181,6 +182,37 @@ def test_flash_refuses_a_port_another_operation_holds() -> None:
         run.assert_not_called()
     finally:
         lock.release()
+        registry.clear_port_lock(REQUESTED)
+
+
+def test_flash_refuses_a_port_a_serial_session_holds_and_frees_the_lock() -> None:
+    """`serial_open` registers its session while holding this same lock, so the
+    session check has to come after the acquire — and rejecting must not keep it."""
+    session = SimpleNamespace(id="ses-1")
+
+    def _session_only_if_lock_is_held(port: str):
+        probe = registry.port_lock(port)
+        if probe.acquire(blocking=False):
+            # Checked before the acquire — the window serial_open registers in.
+            probe.release()
+            return None
+        return session
+
+    try:
+        with (
+            patch.object(
+                registry, "active_session_for_port", side_effect=_session_only_if_lock_is_held
+            ),
+            patch.object(port_recovery, "ensure_port_free") as recover,
+            pytest.raises(flash.FlashError, match="serial session ses-1"),
+        ):
+            flash.flash("meshnology_w10", REQUESTED, confirm=True)
+        recover.assert_not_called()
+
+        lock = registry.port_lock(REQUESTED)
+        assert lock.acquire(blocking=False), "the rejected flash kept the port lock"
+        lock.release()
+    finally:
         registry.clear_port_lock(REQUESTED)
 
 

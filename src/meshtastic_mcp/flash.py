@@ -81,17 +81,21 @@ def _acquire_port(port: str, operation: str) -> threading.Lock:
     slot mid-flash. Same non-blocking `registry.port_lock` the connect/serial
     paths use, so all of them serialize against each other.
     """
-    active = registry.active_session_for_port(port)
-    if active is not None:
-        raise FlashError(
-            f"{operation}: port {port} is held by serial session {active.id}. "
-            "Call `serial_close` first."
-        )
     lock = registry.port_lock(port)
     if not lock.acquire(blocking=False):
         raise FlashError(
             f"{operation}: port {port} is busy — another device operation is "
             "in flight. Retry shortly."
+        )
+    # Session check under the lock, the order serial_open uses: it registers
+    # while holding this lock, so checking first would miss a session that
+    # registers between the check and the acquire.
+    active = registry.active_session_for_port(port)
+    if active is not None:
+        _release_port(lock)
+        raise FlashError(
+            f"{operation}: port {port} is held by serial session {active.id}. "
+            "Call `serial_close` first."
         )
     return lock
 
