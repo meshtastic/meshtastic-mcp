@@ -116,6 +116,15 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
 - **No firmware-tree assumptions in core.** Core modules must import and run without
   `MESHTASTIC_FIRMWARE_ROOT`. Recorder data dir is `MESHTASTIC_MCP_DATA_DIR` → platformdirs →
   cwd, never firmware-relative.
+- **One firmware tree, shared by every session.** `MESHTASTIC_FIRMWARE_ROOT`
+  is a single checkout, and clients set it identically for every session and
+  every worktree on the machine — so concurrent agents build in one `.pio`
+  tree. PlatformIO rewrites `project.checksum` and cleans `.pio/build/*` when
+  the env changes, so another session's build silently deletes yours: on
+  2026-08-26 a finished 8-minute `seeed-xiao-s3` artifact vanished between
+  `build_poll` returning `done` and the next `ls`. Treat a `done` build as
+  perishable — flash immediately, don't re-poll and assume. Before a
+  multi-device session, check for other builders (`pgrep -af 'pio run'`).
 - **One MCP call per serial port** (non-blocking exclusive lock): open → act → close.
   Contention fails fast with a `... is busy ... Retry shortly.` error — it never queues or
   blocks, so the caller must catch and retry.
@@ -355,5 +364,6 @@ These will produce flaky, slow, or incorrect results:
 - **Confirming a local send with `packets_window`.** A self-originated packet never reaches that stream — the library drops the firmware's echo as "a packet we sent" — so it reads as failure on a working mesh. Use `wait_for_tx=True` with `set_debug_log_api(True)`, and treat `tx_confirmed: null` as "not observable", not "failed". See *Send a message and confirm delivery*.
 - **Calling a firmware tool without checking `doctor()` first.** If `MESHTASTIC_FIRMWARE_ROOT` is unset, firmware tools are not registered at all. Call `doctor()` on first failure; parse `fix_commands` and surface them to the user.
 - **Omitting `confirm=True` on destructive tools then retrying.** The confirm gate is intentional — don't loop-retry without it. Surface the confirmation requirement to the user.
+- **Letting a test suite reach the bench.** Anything that shells out to a real `pio run -t upload` can flash an attached board, and an *invalid* `--upload-port` is the guaranteed trigger for PlatformIO's auto-detect fallback — most dangerous exactly when the port doesn't exist. Real incidents: a `meshnology_w10` 16 MB image boot-looping an 8 MB Heltec Wireless Tracker V2 (2026-08-25, fixed in #73), and a unit-test run in a worktree orphaning a `pio run -t upload --upload-port /dev/cu.usbmodem1201` (a macOS path) to `systemd --user` on Linux (2026-08-26). Mock the subprocess; never let a port string a test invented reach `pio`.
 - **Assuming the recorder has data immediately.** It starts capturing when a serial session opens. If you just opened the port, query with `start="-5s"` and check `line_count > 0` before asserting content.
 - **Using `serial_open`/`serial_read`/`serial_close` for admin work.** Those are low-level transport tools for raw byte inspection. Use the admin tools (`get_config`, `send_text`, `device_info`, etc.) which manage the session for you.
