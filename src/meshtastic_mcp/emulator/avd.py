@@ -462,7 +462,22 @@ def deeplink(path: str, *, serial: str | None = None, package: str | None = None
     """
     pkg = package or resolve_package(serial=serial)
     uri = f"{DEEPLINK_SCHEME}/{path.lstrip('/')}"
-    args = ["shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", uri]
+    # `--ez skip_onboarding true` is MainActivity's EXTRA_SKIP_ONBOARDING, honored
+    # only by debug builds (BuildConfig.DEBUG-gated) and only while onboarding is
+    # pending — release builds and completed onboarding ignore it, so it is safe
+    # to send unconditionally and saves the Skip x3 dance on fresh installs.
+    args = [
+        "shell",
+        "am",
+        "start",
+        "-a",
+        "android.intent.action.VIEW",
+        "--ez",
+        "skip_onboarding",
+        "true",
+        "-d",
+        uri,
+    ]
     if pkg:
         args.append(pkg)
     adb(*args, serial=serial, check=False)
@@ -1044,6 +1059,11 @@ def connect_app_to_tcp(
         deadline = time.monotonic() + confirm_timeout_s
         while time.monotonic() < deadline:
             try:
+                # Builds after 2.8.1 guard link-initiated connects with a trust
+                # dialog ("Connect to this device?"); accept it. Exact-match
+                # "Connect" hits the button, not the longer dialog title.
+                if find_text("Connect to this device?", serial=serial):
+                    _tap_text("Connect", serial=serial)
                 if not find_text("Not connected", serial=serial):
                     return True
             except EmulatorError:

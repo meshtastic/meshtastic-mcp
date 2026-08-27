@@ -110,6 +110,9 @@ PROFILE: dict = {
     # want_response exchange) plus a per-node background reliable-delivery hum.
     "ack_ratio": 0.8,
     "ack_background_interval": 3600,
+    # Traceroute request->response pairs per hour. The app pops a modal for each
+    # response addressed to the observer, so UI-driving sessions set this to 0.
+    "traceroute_pairs_per_hour": 12,
     # NeighborInfo is off by default in real firmware — only infra + a sliver
     # of enthusiasts emit it (BM: 0.04% of traffic).
     "neighborinfo_interval": 21600,
@@ -1402,7 +1405,7 @@ def generate(
     # Child RNG: this block's draw count depends on route shapes, so isolating
     # it keeps later sections' draws (text chatter etc.) stable when it evolves.
     tr_rng = random.Random(rng.getrandbits(64))
-    for _ in range(max(1, days * 24 * 12)):
+    for _ in range(max(0, int(float(P.get("traceroute_pairs_per_hour", 12)) * days * 24))):
         t = tr_rng.randint(start_epoch, end_epoch - 1)
         if tr_rng.random() > _activity(hod(t)):
             continue

@@ -207,12 +207,14 @@ def test_disconnect_app_via_deeplink_uses_sentinel(monkeypatch) -> None:
 
 def test_connect_app_to_tcp_deeplink_fast_path_confirms(monkeypatch) -> None:
     # "Not connected" is present for the first 2 polls, then clears -> success
-    # without ever falling through to the legacy UI-tap flow.
-    calls = {"deeplink": 0, "tap": 0, "find_text": 0}
+    # without ever falling through to the legacy UI-tap flow. No trust dialog appears.
+    calls = {"deeplink": 0, "tap": 0, "polls": 0}
 
     def _find_text(token, serial=None):
-        calls["find_text"] += 1
-        return calls["find_text"] <= 2
+        if token == "Connect to this device?":
+            return False
+        calls["polls"] += 1
+        return calls["polls"] <= 2
 
     monkeypatch.setattr(
         avd,
@@ -229,6 +231,34 @@ def test_connect_app_to_tcp_deeplink_fast_path_confirms(monkeypatch) -> None:
     assert ok is True
     assert calls["deeplink"] == 1
     assert calls["tap"] == 0  # never fell through to the UI-tap fallback
+
+
+def test_connect_app_to_tcp_accepts_the_trust_dialog(monkeypatch) -> None:
+    # Builds after 2.8.1 guard link-initiated connects with a trust dialog; the fast
+    # path taps its exact-match "Connect" button and the connection then completes.
+    calls = {"taps": []}
+    state = {"dialog": True, "connected": False}
+
+    def _find_text(token, serial=None):
+        if token == "Connect to this device?":
+            return state["dialog"]
+        return not state["connected"]  # "Not connected" until the dialog is accepted
+
+    def _tap_text(text, serial=None, **kwargs):
+        calls["taps"].append(text)
+        if text == "Connect":
+            state["dialog"] = False
+            state["connected"] = True
+        return True
+
+    monkeypatch.setattr(avd, "connect_app_via_deeplink", lambda addr, serial=None: None)
+    monkeypatch.setattr(avd, "find_text", _find_text)
+    monkeypatch.setattr(avd, "_tap_text", _tap_text)
+    monkeypatch.setattr(avd.time, "sleep", lambda s: None)
+
+    ok = avd.connect_app_to_tcp(host="192.0.2.68", port=4403, confirm_timeout_s=5.0)
+    assert ok is True
+    assert calls["taps"] == ["Connect"]  # the dialog tap, and nothing else
 
 
 def test_connect_app_to_tcp_falls_back_to_ui_taps_when_deeplink_never_confirms(monkeypatch) -> None:
