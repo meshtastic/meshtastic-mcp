@@ -100,6 +100,25 @@ All notable changes are documented here. Format loosely follows
   `achieved_rate`, so a stress run is self-verifying.
 
 ### Fixed
+- **Flash tools can no longer flash a different device than the requested port**
+  (`flash`/`pio_flash`, `flash_start`, `erase_and_flash`, `update_flash`) — pioarduino's
+  Hybrid-Compile pass (custom sdkconfig → `*** Compile Arduino IDF libs ***`) re-invokes a
+  child `pio run -e <env> -t upload` that forwards targets but no CLI options, so the child
+  dropped our `--upload-port`, auto-detected a port, and could flash whichever device it
+  found first (real incident 2026-08-25: a `meshnology_w10` 16 MB image landed on the 8 MB
+  Heltec Wireless Tracker V2 one hub over, boot-looping it while the job reported success).
+  Uploads now also pin the port via `PLATFORMIO_UPLOAD_PORT` in the subprocess environment —
+  the project-option override the child run inherits — and every flash result is post-checked
+  against the ports the output claims were used (`Auto-detected:` / `Using manually
+  specified:` / esptool's `Serial port` lines): a mismatch forces a non-zero exit with an
+  `upload_port_mismatch` error naming both ports. Empty or glob `port` arguments (which
+  PlatformIO silently turns into auto-detection) are rejected up front, and `flash_start`
+  jobs now also apply the silent-DFU-failure detection `flash` already had, surfacing
+  `error` through `flash_poll`. Uploads also take the same per-port lock the
+  connect/serial paths use, so they serialize against each other and against a live
+  `connect()` — held across `flash`'s pre-flight too, since `ensure_port_free` reads an
+  in-process holder as a wedged device and would power-cycle the hub slot mid-flash.
+  A busy port fails fast (`flash_start` included, on the calling thread).
 - **Traceroutes now surface in app traceroute logs** — the sim emitted only in-flight
   traceroute *requests* (`request_id` 0), which apps ignore: their traceroute logs persist
   only *responses* (nonzero `decoded.request_id`), so a whole capture streamed with an empty
