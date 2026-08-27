@@ -261,6 +261,22 @@ def test_connect_app_to_tcp_accepts_the_trust_dialog(monkeypatch) -> None:
     assert calls["taps"] == ["Connect"]  # the dialog tap, and nothing else
 
 
+def test_connect_app_to_tcp_never_succeeds_while_the_trust_dialog_blocks(monkeypatch) -> None:
+    # While the dialog is up, the UI dump contains only dialog nodes, so "Not connected"
+    # is absent — that absence must not read as success when the accept tap keeps failing.
+    def _find_text(token, serial=None):
+        return token == "Connect to this device?"  # dialog forever; nothing else visible
+
+    monkeypatch.setattr(avd, "connect_app_via_deeplink", lambda addr, serial=None: None)
+    monkeypatch.setattr(avd, "find_text", _find_text)
+    monkeypatch.setattr(avd, "_tap_text", lambda *a, **k: False)  # taps never land
+    monkeypatch.setattr(avd, "_find_center", lambda *a, **k: None)
+    monkeypatch.setattr(avd.time, "sleep", lambda s: None)
+
+    ok = avd.connect_app_to_tcp(host="192.0.2.68", port=4403, confirm_timeout_s=1.0)
+    assert ok is False  # timed out into the fallback, which also failed — never a false success
+
+
 def test_connect_app_to_tcp_falls_back_to_ui_taps_when_deeplink_never_confirms(monkeypatch) -> None:
     # "Not connected" never clears within the confirm window -> falls through to
     # the legacy UI-tap flow (covers app builds predating the deep link).

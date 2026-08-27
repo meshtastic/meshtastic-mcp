@@ -1061,10 +1061,13 @@ def connect_app_to_tcp(
             try:
                 # Builds after 2.8.1 guard link-initiated connects with a trust
                 # dialog ("Connect to this device?"); accept it. Exact-match
-                # "Connect" hits the button, not the longer dialog title.
+                # "Connect" hits the button, not the longer dialog title. While
+                # the dialog is up the dump contains only dialog nodes, so the
+                # absence of "Not connected" proves nothing — never judge
+                # connectivity in the same poll that saw the dialog.
                 if find_text("Connect to this device?", serial=serial):
                     _tap_text("Connect", serial=serial)
-                if not find_text("Not connected", serial=serial):
+                elif not find_text("Not connected", serial=serial):
                     return True
             except EmulatorError:
                 pass  # transient dump failure (mid-animation) — keep polling
