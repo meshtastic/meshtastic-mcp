@@ -35,6 +35,30 @@ test stimulates one plane and asserts on the *other*.
 The device plane (`mesh_e2e.py`, native nodes, recorder) is platform-neutral and shared; only
 the app plane differs (Android CLI+adb vs Apple `xcrun simctl`+`idb`).
 
+## Fast app bring-up — use this before any manual UI driving
+
+Never hand-walk onboarding and the manual-IP dialog on a debug build; the app has a
+scripted path (and hand-walking it is how sessions waste ten minutes of taps):
+
+```bash
+adb shell am start -n <pkg>/org.meshtastic.app.MainActivity \
+  --ez skip_onboarding true \
+  -a android.intent.action.VIEW -d "https://meshtastic.org/connections?address=t10.0.2.2:4403"
+```
+
+- `skip_onboarding` is MainActivity's debug-only `EXTRA_SKIP_ONBOARDING` — bypasses the
+  whole intro flow on a fresh install (release builds ignore it).
+- `/connections?address=t<host>:<port>` auto-connects (transport prefixes: `t` TCP, `x` BLE
+  MAC, `s` serial). `address=n` disconnects. Full path list:
+  `docs/en/developer/navigation-and-deep-links.md` in the app repo.
+- Builds after 2.8.1 pop a trust dialog ("Connect to this device?") on link-initiated
+  connects — one exact-match tap on **Connect**. `avd.connect_app_to_tcp()` does all of
+  this (bypass, deep link, dialog, fallback taps) — prefer it over raw adb.
+- Driving Settings/UI with a sim attached? Start it with
+  `sim_profile={"traceroute_pairs_per_hour": 0}` — the default sim injects traceroute
+  responses that pop a modal over whatever you are testing (`replay_stop` also works once
+  the node DB is populated; the app keeps its nodes).
+
 ## Topology (read first)
 
 Three supported topologies — pick the one that matches your hardware:

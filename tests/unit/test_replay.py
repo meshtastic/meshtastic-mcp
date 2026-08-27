@@ -78,6 +78,19 @@ def test_sim_is_seeded_and_has_full_portnum_breadth():
     assert "MeshCon" in cap_a.channels
 
 
+def test_traceroute_pairs_per_hour_zero_silences_traceroutes():
+    """UI-driving sessions set the knob to 0 so the app isn't buried in traceroute modals."""
+    quiet = sim.generate(
+        nodes=30, days=1, seed=7, start=1_700_000_000, profile={"traceroute_pairs_per_hour": 0}
+    )
+    assert 70 not in _portnum_counts(quiet), (
+        "TRACEROUTE_APP packets emitted despite the knob being 0"
+    )
+
+    default = sim.generate(nodes=30, days=1, seed=7, start=1_700_000_000)
+    assert 70 in _portnum_counts(default), "default profile should still emit traceroute pairs"
+
+
 def _read_frame(sock: socket.socket) -> mesh_pb2.FromRadio:
     state = 0
     while True:
