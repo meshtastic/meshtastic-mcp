@@ -1,7 +1,7 @@
 ---
 name: meshtastic-e2e
 license: GPL-3.0-only
-description: Closed-loop end-to-end testing of a Meshtastic device and a Meshtastic app (Android or Apple) together. Use when validating that an action on the radio (send a text, change config, a node beacon, a power-cycle) surfaces correctly in the app UI, or that an action in the app produces the correct on-air/on-device result. Drives the firmware device via the Meshtastic MCP server and the app via the Android CLI (`android` + `adb`) or the Apple toolchain (`xcrun simctl` + `idb`), then cross-asserts one plane against the other.
+description: Closed-loop end-to-end testing of a Meshtastic device and a Meshtastic app (Android, Apple, or the Compose desktop app) together. Use when validating that an action on the radio (send a text, change config, a node beacon, a power-cycle) surfaces correctly in the app UI, or that an action in the app produces the correct on-air/on-device result. Drives the firmware device via the Meshtastic MCP server and the app via the Android CLI (`android` + `adb`), the Apple toolchain (`xcrun simctl` + `idb`), or the Compose Hot Reload MCP server for desktop, then cross-asserts one plane against the other.
 ---
 
 # Meshtastic Device ↔ App E2E Testing
@@ -14,6 +14,7 @@ test stimulates one plane and asserts on the *other*.
 | **Device** (Meshtastic MCP) | `send_text`, `set_config`, `push_fake_nodedb`, `send_input_event`, `uhubctl_cycle`, traceroute | recorder `packets_window` / `telemetry_timeline` / `logs_window` / `events_window`, `device_info`, `list_nodes`, serial logs, `capture_screen`+OCR |
 | **App — Android** (android CLI + adb) | `adb shell input tap/text/swipe`, `android run` | `android layout --diff`, `android screen capture [--annotate]` |
 | **App — Apple** (xcrun simctl + idb) | `idb ui tap/text`, `simctl install/launch` | `idb ui describe-all`, `simctl io screenshot` |
+| **App — Desktop** (Compose Hot Reload MCP) | `click` / `type_text` / `scroll` (by `nodeId`) | `get_semantic_tree`, `get_logs`, `get_ui_error` |
 
 ## Reference files (load the one you need)
 
@@ -33,7 +34,8 @@ test stimulates one plane and asserts on the *other*.
 - `references/triage.md` — dual-plane root-cause analysis of a FAIL (pairs with the `triage_e2e_failure` MCP prompt).
 
 The device plane (`mesh_e2e.py`, native nodes, recorder) is platform-neutral and shared; only
-the app plane differs (Android CLI+adb vs Apple `xcrun simctl`+`idb`).
+the app plane differs (Android CLI+adb, Apple `xcrun simctl`+`idb`, or the Compose Hot Reload
+MCP server for desktop).
 
 ## Fast app bring-up — use this before any manual UI driving
 
@@ -68,6 +70,7 @@ Three supported topologies — pick the one that matches your hardware:
 | **Emulator lab** (no hardware) | `meshtasticd` native nodes via UDP multicast | Android AVD | `10.0.2.2:<port>` |
 | **Physical Android** | Real radios via USB serial | USB-attached Android phone | `adb reverse` → `127.0.0.1:<port>` |
 | **Physical Apple** | Real radios via USB serial | iOS Simulator only (see caveat) | `127.0.0.1:<port>` |
+| **Desktop app** | Real radios via USB serial, or native nodes over UDP | Compose `:desktopApp` on the host | `127.0.0.1:<port>` |
 
 For **physical Android**: `avd.tcp_dut_address(port, serial=<phone_serial>)` sets up the
 `adb reverse` tunnel automatically and returns the correct address. Pass it to
@@ -83,6 +86,25 @@ For **physical Android**: `avd.tcp_dut_address(port, serial=<phone_serial>)` set
 Full wiring detail and the single-radio app-over-TCP workaround in `references/topology.md`.
 One radio cannot be both tester and DUT (the serial port lock is exclusive).
 
+### Desktop app plane (Compose Hot Reload MCP)
+
+CMP 1.12+ is what bundles the MCP-capable Compose Hot Reload, and `Meshtastic-Android` is
+on 1.12.0 — so this plane is available there today. Its tracked `.mcp.json` registers the server as
+`compose-hot-reload` (`:desktopApp:hotMcpServer`), so a session opened in that repo drives
+the **live** desktop app with no rebuild between assertions. Start it with
+`./gradlew :desktopApp:hotRun`, then:
+
+- **Poll `status` until `connected: true`** before any other call — the server accepts
+  requests before the app has connected to it.
+- **`get_semantic_tree` is the oracle:** roles, text, `selected`/`focused`, actions and
+  bounds — everything the journey-driven approach in `references/journeys.md` needs.
+  `click` / `type_text` / `scroll` address nodes by `nodeId` from that tree.
+  `take_screenshot` exists but its output depends on the host renderer; prefer the tree.
+- **`reload`** applies source edits into the running app (`await_reload` when started
+  with `--auto`), so a fix can be re-asserted without restarting the mesh setup.
+
+The device plane is unchanged: same radios, same recorder, same `mesh_e2e.py`.
+
 ## Prerequisites
 
 Before running any loop, verify all of these. Missing items cause silent failures, not clear errors.
@@ -91,7 +113,7 @@ Before running any loop, verify all of these. Missing items cause silent failure
 |---|---|---|
 | `MESHTASTIC_FIRMWARE_ROOT` set | `echo $MESHTASTIC_FIRMWARE_ROOT` | Set to your firmware checkout path |
 | Two radios (TESTER + DUT) | `list_devices()` → ≥2 ports with `likely_meshtastic=true` | Plug in both radios; use TCP DUT if only one physical radio |
-| App installed on device/emulator | `adb shell pm list packages \| grep meshtastic` | `android run` or `adb install` |
+| App reachable on the plane you are testing | Android: `adb shell pm list packages \| grep meshtastic` · Apple: `xcrun simctl listapps` · Desktop: MCP `status` → `connected: true` | `android run` / `adb install`; `simctl install`; `./gradlew :desktopApp:hotRun` |
 | Recorder running (process-global) | `recorder_status()` → `running=true` | Auto-starts on first MCP serial call; captures every interface |
 | `uhubctl` available (Loop 5 only) | `uhubctl -l` returns hub info | `brew install uhubctl`; set `MESHTASTIC_UHUBCTL_LOCATION_TESTER` |
 | `doctor()` returns `ok=true` | Call `doctor()` | Run each `fix_commands` entry in order |
