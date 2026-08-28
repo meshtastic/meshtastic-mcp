@@ -34,7 +34,8 @@ test stimulates one plane and asserts on the *other*.
 - `references/triage.md` — dual-plane root-cause analysis of a FAIL (pairs with the `triage_e2e_failure` MCP prompt).
 
 The device plane (`mesh_e2e.py`, native nodes, recorder) is platform-neutral and shared; only
-the app plane differs (Android CLI+adb vs Apple `xcrun simctl`+`idb`).
+the app plane differs (Android CLI+adb, Apple `xcrun simctl`+`idb`, or the Compose Hot Reload
+MCP server for desktop).
 
 ## Fast app bring-up — use this before any manual UI driving
 
@@ -87,7 +88,8 @@ One radio cannot be both tester and DUT (the serial port lock is exclusive).
 
 ### Desktop app plane (Compose Hot Reload MCP)
 
-Requires CMP 1.12+. `Meshtastic-Android`'s tracked `.mcp.json` registers the server as
+CMP 1.12+ is what bundles the MCP-capable Compose Hot Reload, and `Meshtastic-Android` is
+on 1.12.0 — so this plane is available there today. Its tracked `.mcp.json` registers the server as
 `compose-hot-reload` (`:desktopApp:hotMcpServer`), so a session opened in that repo drives
 the **live** desktop app with no rebuild between assertions. Start it with
 `./gradlew :desktopApp:hotRun`, then:
@@ -111,7 +113,7 @@ Before running any loop, verify all of these. Missing items cause silent failure
 |---|---|---|
 | `MESHTASTIC_FIRMWARE_ROOT` set | `echo $MESHTASTIC_FIRMWARE_ROOT` | Set to your firmware checkout path |
 | Two radios (TESTER + DUT) | `list_devices()` → ≥2 ports with `likely_meshtastic=true` | Plug in both radios; use TCP DUT if only one physical radio |
-| App installed on device/emulator | `adb shell pm list packages \| grep meshtastic` | `android run` or `adb install` |
+| App reachable on the plane you are testing | Android: `adb shell pm list packages \| grep meshtastic` · Apple: `xcrun simctl listapps` · Desktop: MCP `status` → `connected: true` | `android run` / `adb install`; `simctl install`; `./gradlew :desktopApp:hotRun` |
 | Recorder running (process-global) | `recorder_status()` → `running=true` | Auto-starts on first MCP serial call; captures every interface |
 | `uhubctl` available (Loop 5 only) | `uhubctl -l` returns hub info | `brew install uhubctl`; set `MESHTASTIC_UHUBCTL_LOCATION_TESTER` |
 | `doctor()` returns `ok=true` | Call `doctor()` | Run each `fix_commands` entry in order |
