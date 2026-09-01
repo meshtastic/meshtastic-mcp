@@ -231,6 +231,43 @@ back to `capture_screen` then. A `blank: true` result means the panel had hit
 `display.screen_on_secs`, not that the capture failed: send any `send_input_event` to wake it
 and capture again.
 
+### Screenshots for documentation
+
+`capture_display` is the right tool for docs shots — exact pixels, no camera rig. Two
+arguments exist for this case:
+
+- **`out_path`** names the file (parents are created). Without it every call overwrites one
+  scratch path, so a ten-screen walkthrough ends up as a single image.
+- **`scale`** enlarges by an integer factor, nearest-neighbour, max 8. A 128x64 OLED is
+  unreadable at native size on a page; 2x-4x is usually right. The pixel grid stays hard on
+  purpose — a smoothed device UI reads as a blurry photo of a screen. `width`/`height` in the
+  result describe the written image, `panel_width`/`panel_height` the device.
+
+Walking a menu is a loop of wake, capture, advance:
+
+```
+send_input_event(port=P, event_code="SELECT")          # wake; the panel sleeps after
+                                                       # display.screen_on_secs
+capture_display(port=P, out_path="docs/img/01-home.png", scale=2)
+send_input_event(port=P, event_code="DOWN")
+capture_display(port=P, out_path="docs/img/02-nodes.png", scale=2)
+```
+
+Each call opens and closes the port (settle + handshake + a quiet period before the frame is
+considered whole), so budget roughly 6-10s per capture and do not interleave other port work.
+Check `blank` on every shot — a blank frame means the panel slept mid-walk, so wake and retake
+rather than shipping it.
+
+Two things that bite in practice:
+
+- **The content varies shot to shot.** Node counts, battery percentage and the clock all move,
+  so a set captured over several minutes looks inconsistent. `push_fake_nodedb` (and
+  `replay_start` for a simulated mesh) give every screenshot the same mesh; `set_owner` fixes
+  the device name.
+- **Real screens leak real data.** Node long_names, positions and message text from your own
+  mesh end up in the image. Seed a fake node DB before capturing anything destined for a public
+  page, rather than editing PNGs afterwards.
+
 ## Grounded answers
 
 - **`android_docs_search` / `android_docs_fetch`** — Android/Compose/API questions answered from
