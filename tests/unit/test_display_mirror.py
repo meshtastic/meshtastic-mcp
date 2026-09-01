@@ -484,3 +484,27 @@ def test_palette_over_the_region_cap_is_rejected() -> None:
         _palette(total=dm._MAX_PALETTE_REGIONS + 1, regions=_region(0, 0, 8, 8, RED, 0))
     )
     assert canvas.palette.regions == []
+
+
+# ── upscaling for documentation shots ──────────────────────────────────────
+
+
+def test_upscale_is_a_no_op_at_factor_one() -> None:
+    rgb = b"\xff\x00\x00\x00\xff\x00"
+    assert dm.upscale(rgb, 2, 1, 1) == (rgb, 2, 1)
+
+
+def test_upscale_replicates_each_pixel_into_a_block() -> None:
+    # 2x1 red|green at 2x -> 4x2, every pixel doubled in both axes.
+    rgb = b"\xff\x00\x00" + b"\x00\xff\x00"
+    out, w, h = dm.upscale(rgb, 2, 1, 2)
+    assert (w, h) == (4, 2)
+    row = b"\xff\x00\x00" * 2 + b"\x00\xff\x00" * 2
+    assert out == row * 2  # both output rows identical
+
+
+def test_upscale_keeps_edges_hard() -> None:
+    """Nearest-neighbour: no interpolated pixels between the two colours."""
+    out, _, _ = dm.upscale(b"\x00\x00\x00" + b"\xff\xff\xff", 2, 1, 4)
+    colours = {out[i : i + 3] for i in range(0, len(out), 3)}
+    assert colours == {b"\x00\x00\x00", b"\xff\xff\xff"}
