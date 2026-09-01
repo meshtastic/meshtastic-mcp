@@ -394,6 +394,7 @@ def android_render_compose_preview(file: str, preview: str | None = None) -> str
 # meshtastic-mcp server processes never share a screenshot path for the same
 # serial and stomp on each other's files/cache state.
 _ANDROID_SCREENSHOT_DIR = Path(tempfile.mkdtemp(prefix="meshtastic-mcp-android-"))
+_DISPLAY_CAPTURE_DIR = Path(tempfile.mkdtemp(prefix="meshtastic-mcp-display-"))
 
 
 @android_tool()
@@ -2245,6 +2246,38 @@ def send_input_event(
 
 
 @app.tool()
+def capture_display(port: str | None = None, timeout_s: float = 20.0) -> dict[str, Any]:
+    """Capture the device's own screen from its framebuffer and write a PNG.
+
+    The on-device counterpart to `capture_screen`: instead of photographing
+    the panel with a webcam, this reads the framebuffer the firmware is
+    rendering, so the pixels are exact. Handles both BaseUI (1bpp MONO_VLSB)
+    and MUI/device-ui (RGB565 dirty rects), and needs firmware built with
+    screen-mirror support (meshtastic/firmware#11681) — older firmware
+    ignores the admin verb silently and this times out.
+
+    A `blank: true` result almost always means the panel had already timed
+    out (`display.screen_on_secs`, reported alongside it) rather than a
+    mirroring failure — inject any `send_input_event` to wake it, then
+    capture again.
+
+    Colour BaseUI devices currently render black-and-white: the region
+    palette (`DisplayPalette`) is not applied yet. MUI devices are full
+    colour.
+
+    Returns:
+        {path, width, height, format, blank, screen_on_secs, frames, rects}
+    """
+    from . import display_mirror
+
+    result = display_mirror.capture(port=port, timeout_s=timeout_s)
+    png = result.pop("png")
+    out_path = _DISPLAY_CAPTURE_DIR / f"display-{Path(port).name if port else 'default'}.png"
+    out_path.write_bytes(png)
+    return {"path": str(out_path), "bytes": len(png), **result}
+
+
+@app.tool()
 def capture_screen(role: str | None = None, ocr: bool = True) -> dict[str, Any]:
     """Grab a frame from the USB webcam pointed at the device screen.
 
@@ -3693,6 +3726,9 @@ _DESTRUCTIVE = {
     # band -> same curve) and harmless to any DUT; the set_config-style pattern.
     "pa_measure",
     "pa_sweep",  # writes lora.tx_power, keys TX, may reboot the node
+    # Drives the device (one-shot mirror verb) and overwrites the PNG at its
+    # fixed path — the same shape as android_screenshot below.
+    "capture_display",
     "send_input_event",  # drives device button/GPIO; side-effect on hardware
     "android_screenshot",  # writes a PNG to the host filesystem
     "android_tap",  # drives device input; side-effect on the running app
@@ -3792,6 +3828,11 @@ _OPEN_WORLD = {
     "factory_reset",
     "send_input_event",
     "capture_screen",
+    # The device's own screen renders mesh-sourced text — a remote node's
+    # long_name, a received message — so a capture can carry an injection
+    # payload exactly like android_screenshot. Untrusted content, one hop
+    # closer to the source.
+    "capture_display",
     "touch_1200bps",
     "pio_flash",
     "flash_start",
