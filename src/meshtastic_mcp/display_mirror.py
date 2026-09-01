@@ -43,6 +43,7 @@ FROM_RADIO_DISPLAY_PALETTE = 21
 
 # AdminMessage payload_variant field numbers (meshtastic/admin.proto).
 ADMIN_GET_DISPLAY_FRAME_REQUEST = 50
+ADMIN_SET_DISPLAY_MIRROR = 51
 
 # DisplayFrame.Format
 FORMAT_MONO_VLSB = 1
@@ -171,6 +172,11 @@ def encode_varint_field(number: int, value: int) -> bytes:
 def admin_request_frame() -> bytes:
     """An `AdminMessage` carrying only `get_display_frame_request = true`."""
     return encode_varint_field(ADMIN_GET_DISPLAY_FRAME_REQUEST, 1)
+
+
+def admin_set_mirror(enabled: bool) -> bytes:
+    """An `AdminMessage` carrying only `set_display_mirror`."""
+    return encode_varint_field(ADMIN_SET_DISPLAY_MIRROR, 1 if enabled else 0)
 
 
 # ── PNG output ─────────────────────────────────────────────────────────────
@@ -540,14 +546,25 @@ _QUIET_S = 1.0
 
 _POLL_S = 0.05
 
+# Re-request if nothing has arrived by then.
+_RETRY_S = 4.0
+
+# Let the config handshake finish before speaking.
+_SETTLE_S = 2.0
+
 
 def capture(port: str | None = None, timeout_s: float = 20.0) -> dict[str, Any]:
     """Request one frame of the device's screen and return it as PNG bytes.
 
-    Uses the one-shot `get_display_frame_request` verb rather than arming
-    continuous mirroring: the firmware clears the one-shot only once the whole
-    frame has drained, so it is self-limiting and cannot leave the device
-    streaming (or holding the MUI rect pool) if this call dies partway.
+    Arms mirroring, requests a frame, and disarms in a `finally`.
+
+    The one-shot `get_display_frame_request` on its own looks tidier — the
+    firmware clears it once the frame has drained, so it cannot leave the
+    device streaming — but on the MUI (LVGL) path it does not reliably
+    produce a frame, verified on a T-Deck: arm-plus-request returns a rect
+    every time where request-alone times out. Disarming on the way out stops
+    the device streaming to nobody, and `PhoneAPI::close()` disarms again
+    when the connection drops, so an abandoned call cannot leave it armed.
 
     Raises `TimeoutError` when no frame arrives, which on this wire is
     indistinguishable from firmware that has never heard of the verb — the
@@ -582,13 +599,27 @@ def capture(port: str | None = None, timeout_s: float = 20.0) -> dict[str, Any]:
 
         iface._handleFromRadio = types.MethodType(patched, iface)
         try:
-            _request_frame(iface)
+            # connect() yields the moment the interface is constructed. An
+            # admin message sent into the tail of the config handshake is
+            # silently dropped, so settle first and re-send the whole pair
+            # (not just the request — arming is the half that matters) if
+            # nothing has arrived.
+            time.sleep(_SETTLE_S)
+            _arm_and_request(iface)
             deadline = time.monotonic() + budget
+            retry_at = time.monotonic() + _RETRY_S
             while time.monotonic() < deadline:
                 if canvas.complete and time.monotonic() - last_chunk >= _QUIET_S:
                     break
+                if not canvas.complete and time.monotonic() >= retry_at:
+                    _arm_and_request(iface)
+                    retry_at = time.monotonic() + _RETRY_S
                 time.sleep(_POLL_S)
         finally:
+            try:
+                _send_admin(iface, admin_set_mirror(False))
+            except Exception as exc:  # never mask the real result
+                log.debug("display mirror: disarm failed (%s)", exc)
             # Instance attribute, so this never leaks into other interfaces
             # held by the recorder/replay/cot_relay sessions in this process.
             iface._handleFromRadio = original
@@ -624,18 +655,24 @@ def _screen_on_secs(iface: Any) -> int | None:
         return None
 
 
-def _request_frame(iface: Any) -> None:
-    """Send the one-shot request as raw bytes on the admin portnum.
+def _arm_and_request(iface: Any) -> None:
+    """Arm mirroring and ask for a frame."""
+    _send_admin(iface, admin_set_mirror(True))
+    _send_admin(iface, admin_request_frame())
+
+
+def _send_admin(iface: Any, payload: bytes) -> None:
+    """Send a pre-encoded AdminMessage as raw bytes on the admin portnum.
 
     Deliberately not `localNode._sendAdmin`: that expects a generated
-    `AdminMessage` (it assigns `session_passkey` onto it), and the field is
-    new in protobufs#1054. `sendData` takes bytes as-is, and a local admin
+    `AdminMessage` (it assigns `session_passkey` onto it), and these fields
+    are new in protobufs#1054. `sendData` takes bytes as-is, and a local admin
     message needs no session key.
     """
     from meshtastic import portnums_pb2  # type: ignore[import-untyped]
 
     iface.sendData(
-        admin_request_frame(),
+        payload,
         destinationId=iface.myInfo.my_node_num,
         portNum=portnums_pb2.PortNum.ADMIN_APP,
         wantAck=False,
