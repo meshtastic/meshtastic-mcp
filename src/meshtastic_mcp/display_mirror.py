@@ -39,6 +39,7 @@ log = logging.getLogger("meshtastic_mcp.display_mirror")
 
 # FromRadio payload_variant field numbers (meshtastic/mesh.proto).
 FROM_RADIO_DISPLAY_FRAME = 20
+FROM_RADIO_DISPLAY_PALETTE = 21
 
 # AdminMessage payload_variant field numbers (meshtastic/admin.proto).
 ADMIN_GET_DISPLAY_FRAME_REQUEST = 50
@@ -59,6 +60,25 @@ _F_RECT_X = 8
 _F_RECT_Y = 9
 _F_RECT_WIDTH = 10
 _F_RECT_HEIGHT = 11
+_F_PALETTE_SIGNATURE = 12
+
+# DisplayPalette field numbers, and ColorRegion's within it.
+_P_SIGNATURE = 1
+_P_DEFAULT_ON = 2
+_P_DEFAULT_OFF = 3
+_P_REGION_OFFSET = 4
+_P_REGION_TOTAL = 5
+_P_REGIONS = 6
+_R_X = 1
+_R_Y = 2
+_R_WIDTH = 3
+_R_HEIGHT = 4
+_R_ON_COLOR = 5
+_R_OFF_COLOR = 6
+
+# The firmware's region table is far smaller than this; the cap only bounds
+# what a malformed or hostile stream can make us accumulate.
+_MAX_PALETTE_REGIONS = 512
 
 # MONO_VLSB packs 8 vertically adjacent pixels per byte (one "page" row).
 _PIXELS_PER_PAGE = 8
@@ -178,6 +198,98 @@ def rgb565_to_rgb(value: int) -> bytes:
     return bytes(((r5 << 3) | (r5 >> 2), (g6 << 2) | (g6 >> 4), (b5 << 3) | (b5 >> 2)))
 
 
+# ── colour palette ─────────────────────────────────────────────────────────
+
+
+class _Region:
+    """One colorized rectangle, with its colours already expanded to RGB."""
+
+    __slots__ = ("bottom", "left", "off", "on", "right", "top")
+
+    def __init__(self, fields: dict[int, list[Any]]) -> None:
+        self.left = int(field(fields, _R_X))
+        self.top = int(field(fields, _R_Y))
+        self.right = self.left + int(field(fields, _R_WIDTH))
+        self.bottom = self.top + int(field(fields, _R_HEIGHT))
+        self.on = rgb565_to_rgb(int(field(fields, _R_ON_COLOR)))
+        self.off = rgb565_to_rgb(int(field(fields, _R_OFF_COLOR)))
+
+
+class _Palette:
+    """Accumulates `DisplayPalette` region chunks for one signature.
+
+    A device that paints the 1bpp base UI onto a colour panel applies
+    per-region on/off colours at flush time and streams the same table here,
+    so the mirror renders in the panel's true colours at 1bpp bandwidth.
+    Chunks are ordered by region index; anything out of sequence, or for a
+    different signature, discards what was held.
+    """
+
+    def __init__(self) -> None:
+        self.signature = 0
+        self.default_on = b"\xff\xff\xff"
+        self.default_off = b"\x00\x00\x00"
+        self.regions: list[_Region] = []
+        self._total = 0
+        self._received = 0
+
+    @property
+    def complete(self) -> bool:
+        return self._total > 0 and self._received >= self._total
+
+    def handle(self, payload: bytes) -> None:
+        try:
+            fields = parse_fields(payload)
+        except ValueError as exc:
+            log.debug("display_palette: undecodable payload (%s)", exc)
+            return
+
+        signature = int(field(fields, _P_SIGNATURE))
+        offset = int(field(fields, _P_REGION_OFFSET))
+        total = int(field(fields, _P_REGION_TOTAL))
+        chunks = [c for c in fields.get(_P_REGIONS, []) if isinstance(c, bytes)]
+
+        if offset == 0:
+            self.signature = signature
+            self.regions = []
+            self._received = 0
+            self._total = total
+            # Defaults are authoritative on the first chunk; later ones may omit them.
+            self.default_on = rgb565_to_rgb(int(field(fields, _P_DEFAULT_ON)))
+            self.default_off = rgb565_to_rgb(int(field(fields, _P_DEFAULT_OFF)))
+        elif signature != self.signature or offset != self._received:
+            log.debug("display_palette: dropping chunk %d@%d", signature, offset)
+            self.regions = []
+            self._received = 0
+            self._total = 0
+            return
+
+        if total > _MAX_PALETTE_REGIONS or self._received + len(chunks) > _MAX_PALETTE_REGIONS:
+            log.debug("display_palette: region table over cap (%d)", total)
+            self.regions = []
+            self._received = 0
+            self._total = 0
+            return
+
+        for chunk in chunks:
+            try:
+                self.regions.append(_Region(parse_fields(chunk)))
+            except ValueError as exc:
+                log.debug("display_palette: undecodable region (%s)", exc)
+                return
+        self._received += len(chunks)
+
+    def colors_at(self, x: int, row_regions: list[_Region]) -> tuple[bytes, bytes]:
+        """(on, off) for a pixel, highest table index winning where regions overlap."""
+        for region in reversed(row_regions):
+            if region.left <= x < region.right:
+                return region.on, region.off
+        return self.default_on, self.default_off
+
+    def regions_on_row(self, y: int) -> list[_Region]:
+        return [r for r in self.regions if r.top <= y < r.bottom]
+
+
 # ── frame reassembly ───────────────────────────────────────────────────────
 
 
@@ -197,6 +309,9 @@ class _MirrorCanvas:
         self.frames = 0
         self.rects = 0
         self.format: int | None = None
+        self.palette = _Palette()
+        self._mono: bytearray | None = None
+        self._mono_palette_sig = 0
         self._buf: bytearray | None = None
         self._received = 0
         self._frame_id = 0
@@ -204,8 +319,31 @@ class _MirrorCanvas:
 
     @property
     def complete(self) -> bool:
-        """True once at least one whole frame (or rect) has been composited."""
-        return self.rgb is not None and (self.frames or self.rects) > 0
+        """True once at least one whole frame (or rect) has arrived."""
+        return self._mono is not None or (self.rgb is not None and self.rects > 0)
+
+    def render(self) -> bytes | None:
+        """The finished RGB canvas.
+
+        Deferred to the end of a capture rather than done per chunk: the
+        palette may arrive after the frame it colours (the proto allows
+        display_palette to interleave), and rendering early would freeze the
+        frame as monochrome.
+        """
+        if self._mono is not None:
+            return self._render_mono(self._mono)
+        return bytes(self.rgb) if self.rgb is not None else None
+
+    @property
+    def colorized(self) -> bool:
+        """True when a palette matching the captured frame was applied."""
+        return (
+            self._mono is not None
+            and self._mono_palette_sig != 0
+            and self.palette.signature == self._mono_palette_sig
+            # A half-received table would colour some regions and not others.
+            and self.palette.complete
+        )
 
     def handle(self, payload: bytes) -> None:
         """Feed one `DisplayFrame` message. Malformed input is dropped, not raised."""
@@ -277,23 +415,36 @@ class _MirrorCanvas:
         if self._received < len(buf):
             return
 
-        self._render_mono(buf)
+        self._mono = buf
+        self._mono_palette_sig = int(field(fields, _F_PALETTE_SIGNATURE))
         self._buf = None
         self.frames += 1
         self.format = FORMAT_MONO_VLSB
 
-    def _render_mono(self, buf: bytearray) -> None:
-        rgb = self._ensure_canvas(self.width, self.height)
-        on, off = b"\xff\xff\xff", b"\x00\x00\x00"
+    def _render_mono(self, buf: bytearray) -> bytes:
+        """Expand the 1bpp frame, colorizing through the palette when it matches.
+
+        A frame naming a palette signature we do not hold renders monochrome,
+        which is what the proto asks for.
+        """
+        palette = self.palette if self.colorized else None
+        rgb = bytearray(self.width * self.height * 3)
+        plain_on, plain_off = b"\xff\xff\xff", b"\x00\x00\x00"
         for y in range(self.height):
             page = (y // _PIXELS_PER_PAGE) * self.width
             bit = 1 << (y % _PIXELS_PER_PAGE)
             row = y * self.width
+            row_regions = palette.regions_on_row(y) if palette else []
             for x in range(self.width):
                 index = page + x
                 lit = index < len(buf) and buf[index] & bit
+                if palette is None:
+                    on, off = plain_on, plain_off
+                else:
+                    on, off = palette.colors_at(x, row_regions)
                 dst = (row + x) * 3
                 rgb[dst : dst + 3] = on if lit else off
+        return bytes(rgb)
 
     # -- RGB565 dirty rects -----------------------------------------------
 
@@ -414,7 +565,14 @@ def capture(port: str | None = None, timeout_s: float = 20.0) -> dict[str, Any]:
         def patched(self: Any, payload: bytes, **kwargs: Any) -> Any:
             nonlocal last_chunk
             try:
-                for raw in parse_fields(payload).get(FROM_RADIO_DISPLAY_FRAME, []):
+                fields = parse_fields(payload)
+                # Palette first: the firmware sends it ahead of the frame so a
+                # client can colorize the first frame it renders.
+                for raw in fields.get(FROM_RADIO_DISPLAY_PALETTE, []):
+                    if isinstance(raw, bytes):
+                        canvas.palette.handle(raw)
+                        last_chunk = time.monotonic()
+                for raw in fields.get(FROM_RADIO_DISPLAY_FRAME, []):
                     if isinstance(raw, bytes):
                         canvas.handle(raw)
                         last_chunk = time.monotonic()
@@ -437,14 +595,14 @@ def capture(port: str | None = None, timeout_s: float = 20.0) -> dict[str, Any]:
 
         screen_on_secs = _screen_on_secs(iface)
 
-    if not canvas.complete or canvas.rgb is None:
+    rgb = canvas.render()
+    if not canvas.complete or rgb is None:
         raise TimeoutError(
             f"no display frame within {budget:g}s — the device must run firmware with "
             "screen-mirror support (meshtastic/firmware#11681); older firmware ignores "
             "the get_display_frame_request admin verb silently"
         )
 
-    rgb = bytes(canvas.rgb)
     return {
         "png": write_png(canvas.width, canvas.height, rgb),
         "width": canvas.width,
@@ -452,6 +610,7 @@ def capture(port: str | None = None, timeout_s: float = 20.0) -> dict[str, Any]:
         "format": "RGB565" if canvas.format == FORMAT_RGB565 else "MONO_VLSB",
         "frames": canvas.frames,
         "rects": canvas.rects,
+        "colorized": canvas.colorized,
         "blank": _looks_blank(rgb),
         "screen_on_secs": screen_on_secs,
     }
