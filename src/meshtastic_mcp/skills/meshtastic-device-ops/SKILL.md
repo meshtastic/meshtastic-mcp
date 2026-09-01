@@ -224,6 +224,13 @@ speaks natively. To validate that path from a dev machine instead of a phone:
 `send_input_event` drives the device's buttons; `capture_screen` grabs the OLED (camera/OCR
 optional — see `doctor` for the `[ui]` extra). This is device-only; for app UI use `meshtastic-e2e`.
 
+**Prefer `capture_display` when the firmware supports it.** It reads the framebuffer over the
+phone API instead of photographing the panel, so it needs no camera and the pixels are exact
+(and OCR is far more reliable). It times out on firmware without screen-mirror support — fall
+back to `capture_screen` then. A `blank: true` result means the panel had hit
+`display.screen_on_secs`, not that the capture failed: send any `send_input_event` to wake it
+and capture again.
+
 ## Grounded answers
 
 - **`android_docs_search` / `android_docs_fetch`** — Android/Compose/API questions answered from
