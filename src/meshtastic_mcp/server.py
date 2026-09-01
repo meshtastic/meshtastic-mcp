@@ -2261,12 +2261,15 @@ def capture_display(port: str | None = None, timeout_s: float = 20.0) -> dict[st
     mirroring failure — inject any `send_input_event` to wake it, then
     capture again.
 
-    Colour BaseUI devices currently render black-and-white: the region
-    palette (`DisplayPalette`) is not applied yet. MUI devices are full
-    colour.
+    Colour is handled for both UIs: MUI streams RGB565 directly, and a
+    colour BaseUI device streams its 1bpp frame plus the region palette its
+    panel paints with, which is applied here. `colorized` reports whether a
+    palette was actually matched and applied; a monochrome panel has none and
+    renders black-and-white.
 
     Returns:
-        {path, width, height, format, blank, screen_on_secs, frames, rects}
+        {path, width, height, format, blank, colorized, screen_on_secs,
+         frames, rects}
     """
     from . import display_mirror
 
