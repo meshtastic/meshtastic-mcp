@@ -146,9 +146,10 @@ def test_mono_frame_lights_the_expected_pixels() -> None:
 
     assert canvas.complete
     assert (canvas.width, canvas.height, canvas.frames) == (8, 8, 1)
-    assert canvas.rgb is not None
-    assert bytes(canvas.rgb[:24]) == b"\xff\xff\xff" * 8  # row 0 lit
-    assert bytes(canvas.rgb[24:48]) == b"\x00\x00\x00" * 8  # row 1 dark
+    rgb = canvas.render()
+    assert rgb is not None
+    assert rgb[:24] == b"\xff\xff\xff" * 8  # row 0 lit
+    assert rgb[24:48] == b"\x00\x00\x00" * 8  # row 1 dark
 
 
 def test_mono_height_not_a_multiple_of_eight_still_rounds_up_to_whole_pages() -> None:
@@ -321,3 +322,165 @@ def test_blank_detects_any_single_colour_not_just_black() -> None:
     assert dm._looks_blank(b"\x00\x00\x00" * 16)
     assert dm._looks_blank(b"\xff\xff\xff" * 16)
     assert not dm._looks_blank(b"\x00\x00\x00" * 15 + b"\xff\xff\xff")
+
+
+# ── colour palette ─────────────────────────────────────────────────────────
+
+
+def _region(x: int, y: int, w: int, h: int, on: int, off: int) -> bytes:
+    body = (
+        dm.encode_varint_field(dm._R_X, x)
+        + dm.encode_varint_field(dm._R_Y, y)
+        + dm.encode_varint_field(dm._R_WIDTH, w)
+        + dm.encode_varint_field(dm._R_HEIGHT, h)
+        + dm.encode_varint_field(dm._R_ON_COLOR, on)
+        + dm.encode_varint_field(dm._R_OFF_COLOR, off)
+    )
+    return _bytes_field(dm._P_REGIONS, body)
+
+
+def _palette(
+    *,
+    signature: int = 7,
+    default_on: int = 0xFFFF,
+    default_off: int = 0x0000,
+    offset: int = 0,
+    total: int = 1,
+    regions: bytes = b"",
+) -> bytes:
+    return (
+        dm.encode_varint_field(dm._P_SIGNATURE, signature)
+        + dm.encode_varint_field(dm._P_DEFAULT_ON, default_on)
+        + dm.encode_varint_field(dm._P_DEFAULT_OFF, default_off)
+        + dm.encode_varint_field(dm._P_REGION_OFFSET, offset)
+        + dm.encode_varint_field(dm._P_REGION_TOTAL, total)
+        + regions
+    )
+
+
+def _mono_frame(signature: int = 7) -> bytes:
+    # 8x8, every pixel set, naming the palette it was painted with.
+    return _frame(
+        width=8,
+        height=8,
+        fmt=dm.FORMAT_MONO_VLSB,
+        total=8,
+        data=b"\xff" * 8,
+    ) + dm.encode_varint_field(dm._F_PALETTE_SIGNATURE, signature)
+
+
+def test_palette_colorizes_set_pixels_inside_its_region() -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.palette.handle(_palette(regions=_region(0, 0, 4, 8, RED, GREEN)))
+    canvas.handle(_mono_frame())
+
+    assert canvas.colorized
+    rgb = canvas.render()
+    assert rgb is not None
+    assert rgb[0:3] == b"\xff\x00\x00"  # inside the region, pixel set -> on_color
+    assert rgb[12:15] == b"\xff\xff\xff"  # outside it -> palette default_on
+
+
+def test_palette_clear_pixels_take_the_region_off_colour() -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.palette.handle(_palette(regions=_region(0, 0, 8, 8, RED, GREEN)))
+    # Every pixel clear.
+    canvas.handle(
+        _frame(width=8, height=8, fmt=dm.FORMAT_MONO_VLSB, total=8, data=b"\x00" * 8)
+        + dm.encode_varint_field(dm._F_PALETTE_SIGNATURE, 7)
+    )
+    rgb = canvas.render()
+    assert rgb is not None
+    assert rgb[0:3] == b"\x00\xff\x00"
+
+
+def test_higher_indexed_region_wins_where_regions_overlap() -> None:
+    # The proto's precedence rule: later table index overrides earlier.
+    canvas = dm._MirrorCanvas()
+    canvas.palette.handle(
+        _palette(total=2, regions=_region(0, 0, 8, 8, RED, 0) + _region(0, 0, 4, 8, GREEN, 0))
+    )
+    canvas.handle(_mono_frame())
+    rgb = canvas.render()
+    assert rgb is not None
+    assert rgb[0:3] == b"\x00\xff\x00"  # inside both -> the later region
+    assert rgb[15:18] == b"\xff\x00\x00"  # inside only the first
+
+
+def test_palette_arriving_after_the_frame_still_colorizes() -> None:
+    """Rendering is deferred, so an interleaved palette is not missed."""
+    canvas = dm._MirrorCanvas()
+    canvas.handle(_mono_frame())
+    canvas.palette.handle(_palette(regions=_region(0, 0, 8, 8, RED, 0)))
+
+    assert canvas.colorized
+    rgb = canvas.render()
+    assert rgb is not None
+    assert rgb[0:3] == b"\xff\x00\x00"
+
+
+def test_frame_naming_an_unheld_palette_renders_monochrome() -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.palette.handle(_palette(signature=99, regions=_region(0, 0, 8, 8, RED, 0)))
+    canvas.handle(_mono_frame(signature=7))  # references a different palette
+
+    assert not canvas.colorized
+    rgb = canvas.render()
+    assert rgb is not None
+    assert rgb[0:3] == b"\xff\xff\xff"
+
+
+def test_frame_without_a_palette_signature_renders_monochrome() -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.palette.handle(_palette(regions=_region(0, 0, 8, 8, RED, 0)))
+    canvas.handle(_frame(width=8, height=8, fmt=dm.FORMAT_MONO_VLSB, total=8, data=b"\xff" * 8))
+
+    assert not canvas.colorized  # signature 0 == device renders monochrome
+    rgb = canvas.render()
+    assert rgb is not None
+    assert rgb[0:3] == b"\xff\xff\xff"
+
+
+def test_half_received_palette_does_not_colorize() -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.palette.handle(_palette(total=2, regions=_region(0, 0, 8, 8, RED, 0)))
+    canvas.handle(_mono_frame())
+
+    assert not canvas.palette.complete
+    assert not canvas.colorized  # would colour some regions and not others
+
+
+def test_palette_chunks_reassemble_in_order() -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.palette.handle(_palette(total=2, regions=_region(0, 0, 8, 8, RED, 0)))
+    canvas.palette.handle(_palette(total=2, offset=1, regions=_region(0, 0, 4, 8, GREEN, 0)))
+
+    assert canvas.palette.complete
+    assert len(canvas.palette.regions) == 2
+
+
+def test_out_of_sequence_palette_chunk_discards_the_table() -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.palette.handle(_palette(total=3, regions=_region(0, 0, 8, 8, RED, 0)))
+    canvas.palette.handle(_palette(total=3, offset=2, regions=_region(0, 0, 4, 8, GREEN, 0)))
+
+    assert not canvas.palette.complete
+    assert canvas.palette.regions == []
+
+
+def test_palette_chunk_for_a_different_signature_is_dropped() -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.palette.handle(_palette(total=2, regions=_region(0, 0, 8, 8, RED, 0)))
+    canvas.palette.handle(
+        _palette(signature=8, total=2, offset=1, regions=_region(0, 0, 4, 8, GREEN, 0))
+    )
+
+    assert canvas.palette.regions == []
+
+
+def test_palette_over_the_region_cap_is_rejected() -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.palette.handle(
+        _palette(total=dm._MAX_PALETTE_REGIONS + 1, regions=_region(0, 0, 8, 8, RED, 0))
+    )
+    assert canvas.palette.regions == []
