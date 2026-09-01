@@ -198,6 +198,31 @@ def write_png(width: int, height: int, rgb: bytes) -> bytes:
     )
 
 
+def upscale(rgb: bytes, width: int, height: int, factor: int) -> tuple[bytes, int, int]:
+    """Enlarge by an integer factor, nearest-neighbour.
+
+    No interpolation on purpose: a device UI is a pixel grid, and smoothing it
+    reads as a blurry photo of a screen rather than a screenshot.
+    """
+    if factor <= 1:
+        return rgb, width, height
+    row_bytes = width * 3
+    out = bytearray(row_bytes * factor * height * factor)
+    scaled_row_bytes = row_bytes * factor
+    for y in range(height):
+        row = bytearray(scaled_row_bytes)
+        src = y * row_bytes
+        for x in range(width):
+            pixel = rgb[src + x * 3 : src + x * 3 + 3]
+            base = x * factor * 3
+            for k in range(factor):
+                row[base + k * 3 : base + k * 3 + 3] = pixel
+        for k in range(factor):
+            dst = (y * factor + k) * scaled_row_bytes
+            out[dst : dst + scaled_row_bytes] = row
+    return bytes(out), width * factor, height * factor
+
+
 def rgb565_to_rgb(value: int) -> bytes:
     """Expand one little-endian RGB565 pixel to an 8-bit RGB triple."""
     r5, g6, b5 = (value >> 11) & 0x1F, (value >> 5) & 0x3F, value & 0x1F
@@ -552,8 +577,14 @@ _RETRY_S = 4.0
 # Let the config handshake finish before speaking.
 _SETTLE_S = 2.0
 
+# Device panels are small (128x64 up to 320x240), so a documentation
+# screenshot usually wants enlarging. Nearest-neighbour keeps the pixel grid
+# crisp, which is what reads well for a device UI; 8x of the largest panel is
+# 2560x1920, past any reasonable page width.
+MAX_SCALE = 8
 
-def capture(port: str | None = None, timeout_s: float = 20.0) -> dict[str, Any]:
+
+def capture(port: str | None = None, timeout_s: float = 20.0, scale: int = 1) -> dict[str, Any]:
     """Request one frame of the device's screen and return it as PNG bytes.
 
     Arms mirroring, requests a frame, and disarms in a `finally`.
@@ -634,10 +665,15 @@ def capture(port: str | None = None, timeout_s: float = 20.0) -> dict[str, Any]:
             "the get_display_frame_request admin verb silently"
         )
 
+    factor = max(1, min(int(scale), MAX_SCALE))
+    scaled, width, height = upscale(rgb, canvas.width, canvas.height, factor)
     return {
-        "png": write_png(canvas.width, canvas.height, rgb),
-        "width": canvas.width,
-        "height": canvas.height,
+        "png": write_png(width, height, scaled),
+        "width": width,
+        "height": height,
+        "panel_width": canvas.width,
+        "panel_height": canvas.height,
+        "scale": factor,
         "format": "RGB565" if canvas.format == FORMAT_RGB565 else "MONO_VLSB",
         "frames": canvas.frames,
         "rects": canvas.rects,
