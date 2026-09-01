@@ -2246,7 +2246,12 @@ def send_input_event(
 
 
 @app.tool()
-def capture_display(port: str | None = None, timeout_s: float = 20.0) -> dict[str, Any]:
+def capture_display(
+    port: str | None = None,
+    out_path: str | None = None,
+    scale: int = 1,
+    timeout_s: float = 20.0,
+) -> dict[str, Any]:
     """Capture the device's own screen from its framebuffer and write a PNG.
 
     The on-device counterpart to `capture_screen`: instead of photographing
@@ -2267,17 +2272,28 @@ def capture_display(port: str | None = None, timeout_s: float = 20.0) -> dict[st
     palette was actually matched and applied; a monochrome panel has none and
     renders black-and-white.
 
+    For documentation shots, pass `out_path` to name the file — without it
+    every capture overwrites one scratch path, so a walkthrough ends up as a
+    single image. `scale` enlarges by an integer factor (nearest-neighbour,
+    max 8), which a 128x64 OLED needs to be legible on a page; `width` and
+    `height` describe the written image, `panel_width`/`panel_height` the
+    device.
+
     Returns:
-        {path, width, height, format, blank, colorized, screen_on_secs,
-         frames, rects}
+        {path, bytes, width, height, panel_width, panel_height, scale,
+         format, blank, colorized, screen_on_secs, frames, rects}
     """
     from . import display_mirror
 
-    result = display_mirror.capture(port=port, timeout_s=timeout_s)
+    result = display_mirror.capture(port=port, timeout_s=timeout_s, scale=scale)
     png = result.pop("png")
-    out_path = _DISPLAY_CAPTURE_DIR / f"display-{Path(port).name if port else 'default'}.png"
-    out_path.write_bytes(png)
-    return {"path": str(out_path), "bytes": len(png), **result}
+    if out_path:
+        target = Path(out_path).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        target = _DISPLAY_CAPTURE_DIR / f"display-{Path(port).name if port else 'default'}.png"
+    target.write_bytes(png)
+    return {"path": str(target), "bytes": len(png), **result}
 
 
 @app.tool()
