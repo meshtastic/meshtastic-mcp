@@ -1467,6 +1467,7 @@ def serial_open(
     baud: int = 115200,
     env: str | None = None,
     filters: list[str] | None = None,
+    reset: bool = False,
 ) -> dict[str, Any]:
     """Open a `pio device monitor` session reading from `port`.
 
@@ -1477,6 +1478,17 @@ def serial_open(
     Without `env`, uses the supplied baud and filters (default ["direct"]).
     Common filters: direct, time, hexlify, esp32_exception_decoder,
     esp32_c3_exception_decoder, log2file.
+
+    `reset=True` pulses the auto-reset lines (RTS -> EN, DTR -> GPIO0) just before the monitor
+    starts, so the session captures the device's boot. Use it whenever the interesting output is
+    at startup - opening a monitor afterwards has already missed it, and rebooting over the
+    Meshtastic API needs the very port the monitor is about to hold. The response reports
+    `reset_pulsed`; False means the pulse could not be issued and the session simply starts
+    mid-run.
+
+    If reads come back empty, the usual cause is not this tool: a node with
+    security.debug_log_api_enabled sends its log to the StreamAPI as protobuf rather than to the
+    console, which leaves the UART silent. serial_read says so in a `hint`.
 
     Returns a session_id for use with serial_read / serial_close, plus the
     resolved baud and filters so callers can confirm what pio selected.
@@ -1498,7 +1510,9 @@ def serial_open(
             raise connection.ConnectionError(
                 f"Port {port} is held by serial session {active.id}. Call `serial_close` first."
             )
-        session = serial_session.open_session(port=port, baud=baud, env=env, filters=filters)
+        session = serial_session.open_session(
+            port=port, baud=baud, env=env, filters=filters, reset=reset
+        )
         registry.register_session(session)
     finally:
         lock.release()
@@ -1507,6 +1521,7 @@ def serial_open(
         "resolved_baud": session.baud,
         "resolved_filters": session.filters,
         "env": session.env,
+        "reset_pulsed": session.reset_pulsed,
     }
 
 

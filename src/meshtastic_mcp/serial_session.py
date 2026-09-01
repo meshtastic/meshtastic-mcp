@@ -23,6 +23,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+import serial
+
 from . import boards, config
 
 try:  # POSIX only; pio/meshtastic-mcp targets Linux/macOS hosts.
@@ -55,6 +57,9 @@ class SerialSession:
     total_lines: int = 0
     started_at: float = field(default_factory=time.time)
     stopped_at: float | None = None
+    # None when no reset was requested; True/False when one was attempted. Surfaced so a caller
+    # that asked for a boot capture can tell whether it actually got one.
+    reset_pulsed: bool | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
     _thread: threading.Thread | None = None
 
@@ -100,16 +105,46 @@ def _drain(session: SerialSession) -> None:
         session.stopped_at = time.time()
 
 
+def pulse_reset(port: str, baud: int = 115200) -> bool:
+    """Reset an ESP32 by pulsing the auto-reset lines, then release the port.
+
+    The usual USB-serial auto-reset wiring is RTS -> EN and DTR -> GPIO0, so holding GPIO0 high
+    while pulsing EN low reboots into the application rather than the ROM bootloader. This is the
+    same sequence esptool calls a "classic reset".
+
+    Exists so a monitor session can be opened *across* a reboot. Boot-time logging is where the
+    interesting firmware failures are, and there is otherwise no way to see it: opening the monitor
+    after the fact has already missed it, and rebooting over the Meshtastic API needs the very port
+    the monitor is about to hold.
+
+    Returns False when the port cannot be opened or the platform has no modem-control lines; the
+    caller should carry on and open the monitor regardless, just without a fresh boot.
+    """
+    try:
+        with serial.Serial(port, baud, timeout=0.1) as ser:
+            ser.setDTR(False)  # GPIO0 high: boot the application, not the ROM loader
+            ser.setRTS(True)  # EN low: hold in reset
+            time.sleep(0.15)
+            ser.setRTS(False)  # EN high: run
+    except Exception:
+        return False
+    return True
+
+
 def open_session(
     port: str,
     baud: int = 115200,
     env: str | None = None,
     filters: list[str] | None = None,
+    reset: bool = False,
 ) -> SerialSession:
     """Spawn `pio device monitor` and return a SerialSession.
 
     If `env` is supplied, pio resolves baud and filters from platformio.ini.
     Otherwise uses the supplied `baud` and `filters` (default `['direct']`).
+
+    `reset` pulses the auto-reset lines just before the monitor starts, so the session captures
+    the boot. See `pulse_reset`.
     """
     # Lazy import to avoid circular: registry imports serial_session.
     from . import connection
@@ -163,6 +198,10 @@ def open_session(
         for f in effective_filters:
             args.extend(["--filter", f])
 
+    # Before pio claims the port. A failed reset is not fatal - the caller still gets a monitor,
+    # it just starts mid-run rather than at boot.
+    reset_ok = pulse_reset(port, effective_baud) if reset else None
+
     binary = str(config.pio_bin())
     work_dir = str(config.firmware_root())
 
@@ -213,6 +252,7 @@ def open_session(
         env=env,
         proc=proc,
         _stdin_master_fd=stdin_master_fd,
+        reset_pulsed=reset_ok,
     )
     t = threading.Thread(target=_drain, args=(session,), daemon=True)
     t.start()
@@ -249,12 +289,25 @@ def read_session(
     new_cursor = effective_start + len(lines)
 
     eof = session.proc.poll() is not None
-    return {
+    result: dict[str, Any] = {
         "lines": lines,
         "new_cursor": new_cursor,
         "eof": eof,
         "dropped": dropped,
     }
+    if not lines and session.total_lines == 0 and not eof:
+        # A silent port looks exactly like a broken tool, and the usual cause is neither. Say so
+        # rather than leaving the caller to conclude the device is dead: a node with
+        # security.debug_log_api_enabled streams its log as LogRecord protobufs over the API
+        # instead of text on the console, so the UART goes quiet and only logs_window sees
+        # anything. The other common cause is simply having opened the monitor after boot.
+        result["hint"] = (
+            "No output yet. If this node has debug_log_api enabled, firmware logs go to the "
+            "StreamAPI as protobuf instead of the serial console - use logs_window, or call "
+            "set_debug_log_api(False) and reboot to get text here. If you are after boot-time "
+            "logs, reopen with serial_open(reset=True) so the session starts before the reset."
+        )
+    return result
 
 
 def close_session(session: SerialSession) -> bool:
@@ -300,4 +353,5 @@ def session_summary(session: SerialSession) -> dict[str, Any]:
         "stopped_at": session.stopped_at,
         "line_count": line_count,
         "eof": session.proc.poll() is not None,
+        "reset_pulsed": session.reset_pulsed,
     }
