@@ -109,9 +109,9 @@ def pulse_reset(port: str, baud: int = 115200) -> bool:
     """Reset an ESP32 by pulsing the auto-reset lines, then release the port.
 
     The usual USB-serial auto-reset wiring is RTS -> EN and DTR -> GPIO0, so holding GPIO0 high
-    while pulsing EN low reboots into the application rather than the ROM bootloader. This is the
-    same sequence esptool calls a "classic reset".
-
+    while pulsing EN low reboots into the application rather than the ROM bootloader. That matches
+    esptool's HardReset (which pulses EN alone; pulse_reset also holds GPIO0 high), not its
+    ClassicReset, which drives GPIO0 low to enter the ROM bootloader.
     Exists so a monitor session can be opened *across* a reboot. Boot-time logging is where the
     interesting firmware failures are, and there is otherwise no way to see it: opening the monitor
     after the fact has already missed it, and rebooting over the Meshtastic API needs the very port
@@ -305,7 +305,7 @@ def read_session(
             "No output yet. If this node has debug_log_api enabled, firmware logs go to the "
             "StreamAPI as protobuf instead of the serial console - use logs_window, or call "
             "set_debug_log_api(False) and reboot to get text here. If you are after boot-time "
-            "logs, reopen with serial_open(reset=True) so the session starts before the reset."
+            "logs, reopen with serial_open(reset=True), which pulses the reset just before the monitor opens."
         )
     return result
 

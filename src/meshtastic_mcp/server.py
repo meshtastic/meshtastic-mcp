@@ -1483,8 +1483,9 @@ def serial_open(
     starts, so the session captures the device's boot. Use it whenever the interesting output is
     at startup - opening a monitor afterwards has already missed it, and rebooting over the
     Meshtastic API needs the very port the monitor is about to hold. The response reports
-    `reset_pulsed`; False means the pulse could not be issued and the session simply starts
-    mid-run.
+    `reset_pulsed`: None when `reset` was not requested, False when the pulse could not be issued
+    and the session simply starts mid-run, True when the lines were pulsed and the session
+    captures the boot.
 
     If reads come back empty, the usual cause is not this tool: a node with
     security.debug_log_api_enabled sends its log to the StreamAPI as protobuf rather than to the
