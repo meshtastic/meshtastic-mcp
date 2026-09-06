@@ -1106,6 +1106,30 @@ def test_fromradio_from_kind_builds_client_notifications():
         == "duplicated_public_key"
     )
 
+    # key-verification request + inform — structured fields populated
+    fr = build.fromradio_from_kind(
+        "client_notification",
+        {"variant": "key_verification_number_request", "nonce": 11, "remote_longname": "Alice"},
+    )
+    kv = mesh_pb2.FromRadio.FromString(
+        fr.SerializeToString()
+    ).clientNotification.key_verification_number_request
+    assert kv.nonce == 11 and kv.remote_longname == "Alice"
+
+    fr = build.fromradio_from_kind(
+        "client_notification",
+        {
+            "variant": "key_verification_number_inform",
+            "nonce": 22,
+            "remote_longname": "Alice",
+            "security_number": 4242,
+        },
+    )
+    cn = mesh_pb2.FromRadio.FromString(fr.SerializeToString()).clientNotification
+    assert cn.WhichOneof("payload_variant") == "key_verification_number_inform"
+    kv = cn.key_verification_number_inform
+    assert kv.nonce == 22 and kv.remote_longname == "Alice" and kv.security_number == 4242
+
     # key-verification final — structured fields populated
     fr = build.fromradio_from_kind(
         "client_notification",
