@@ -2981,6 +2981,55 @@ def replay_inject_fileinfo(
 
 
 @app.tool()
+def replay_inject_client_notification(
+    session_id: str,
+    variant: str = "low_entropy_key",
+    message: str = "",
+    level: str = "WARNING",
+    remote_longname: str = "",
+    nonce: int = 0,
+    security_number: int = 0,
+    verification_characters: str = "",
+    is_sender: bool = False,
+    count: int = 1,
+) -> dict[str, Any]:
+    """Inject a ClientNotification into a running replay session — drive the app's
+    device-notification UI hardware-free.
+
+    Real firmware pushes a `ClientNotification` (a top-level FromRadio, no MeshPacket
+    envelope) for events the connected client must surface: a compromised/low-entropy key
+    that was regenerated, a duplicated public key, and the key-verification handshake. You
+    can't reproduce these on a healthy device, so this emits them on demand to test each
+    notification's rendering.
+
+    `variant`:
+      - `low_entropy_key` (default) — the pre-2.8 weak-key detection: "Compromised keys were
+        detected and regenerated." (pairs with the firmware fix that rejects a restored weak key).
+      - `duplicated_public_key` — another node advertises a key that duplicates one already known.
+      - `key_verification_number_request` / `_number_inform` / `_final` — the three steps of the
+        contact key-verification flow (`nonce`, `remote_longname`, `security_number`,
+        `verification_characters`, `is_sender` fill the structured fields).
+      - `text` — a plain notification carrying only `message` + `level`.
+    `message` overrides the canned text (the marker variants default to firmware's wording);
+    `level` is DEBUG/INFO/WARNING/ERROR/CRITICAL. `count` repeats the inject.
+    """
+    args = {
+        "variant": variant,
+        "message": message,
+        "level": level,
+        "remote_longname": remote_longname,
+        "nonce": nonce,
+        "security_number": security_number,
+        "verification_characters": verification_characters,
+        "is_sender": is_sender,
+    }
+    msgs = [
+        replay_build.fromradio_from_kind("client_notification", args) for _ in range(max(1, count))
+    ]
+    return get_replay_manager().inject_fromradio(session_id, msgs)
+
+
+@app.tool()
 def replay_inject_traceroute(
     session_id: str,
     destination_node: int,
@@ -3738,6 +3787,7 @@ _DESTRUCTIVE = {
     "atak_share_item",  # drives ATAK UI; broadcasts CoT to every connected peer
     "replay_inject",  # emits packets onto the live connection
     "replay_inject_beacon",  # emits a MESH_BEACON_APP packet
+    "replay_inject_client_notification",  # emits a ClientNotification FromRadio to the client
     "replay_inject_fileinfo",  # emits a FileInfo FromRadio onto the live connection
     "replay_inject_traceroute",  # emits a TRACEROUTE_APP RouteDiscovery packet
     "replay_inject_waypoint",  # emits a WAYPOINT_APP packet (with optional geofence)

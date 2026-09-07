@@ -409,6 +409,10 @@ def fromradio_from_kind(kind: str, args: dict[str, Any]) -> mesh_pb2.FromRadio:
     kinds: ``fileinfo`` (file_name, size_bytes) -- exercises a client's file-manifest
     handler (STATE_SEND_FILEMANIFEST) outside the initial handshake window, e.g. to fuzz-
     test unbounded accumulation or malformed entries under a long-running session.
+    ``client_notification`` (variant, message, level, + per-variant fields) -- the device→
+    client notifications real firmware pushes (low-entropy/regenerated key, duplicated
+    public key, the key-verification handshake), so an app's notification UI can be driven
+    hardware-free.
     """
     a = args or {}
     if kind == "fileinfo":
@@ -419,4 +423,68 @@ def fromradio_from_kind(kind: str, args: dict[str, Any]) -> mesh_pb2.FromRadio:
         # (advertised by replay_inject_fileinfo) still encode instead of raising.
         fr.fileInfo.size_bytes = int(a.get("size_bytes", 0)) & 0xFFFFFFFF
         return fr
+    if kind == "client_notification":
+        return _client_notification(a)
     raise ValueError(f"unknown fromradio inject kind: {kind!r}")
+
+
+# ClientNotification payload_variant oneof names the app renders specially; plus a
+# plain-text notification (no variant, just message + level).
+CLIENT_NOTIFICATION_VARIANTS = (
+    "low_entropy_key",
+    "duplicated_public_key",
+    "key_verification_number_request",
+    "key_verification_number_inform",
+    "key_verification_final",
+)
+# Canned text real firmware attaches to the marker variants (apps also render their own).
+_CLIENT_NOTIFICATION_DEFAULT_MSG = {
+    "low_entropy_key": "Compromised keys were detected and regenerated.",
+    "duplicated_public_key": "A node is advertising a public key that duplicates another node's.",
+}
+
+
+def _client_notification(a: dict[str, Any]) -> mesh_pb2.FromRadio:
+    """Build a FromRadio carrying a ClientNotification (device→client alert)."""
+    fr = mesh_pb2.FromRadio()
+    cn = fr.clientNotification
+    level = str(a.get("level", "WARNING")).upper()
+    try:
+        cn.level = mesh_pb2.LogRecord.Level.Value(level)
+    except (ValueError, KeyError):
+        cn.level = mesh_pb2.LogRecord.Level.WARNING
+    variant = a.get("variant")
+    message = a.get("message") or _CLIENT_NOTIFICATION_DEFAULT_MSG.get(variant or "", "")
+    if message:
+        cn.message = str(message)
+    if a.get("reply_id"):
+        cn.reply_id = int(a["reply_id"]) & 0xFFFFFFFF
+    if a.get("time"):
+        cn.time = int(a["time"]) & 0xFFFFFFFF
+    if variant in (None, "", "text"):
+        return fr  # plain text notification, no oneof variant
+    if variant == "low_entropy_key":
+        cn.low_entropy_key.SetInParent()
+    elif variant == "duplicated_public_key":
+        cn.duplicated_public_key.SetInParent()
+    elif variant == "key_verification_number_request":
+        kv = cn.key_verification_number_request
+        kv.nonce = int(a.get("nonce", 0)) & 0xFFFFFFFFFFFFFFFF
+        kv.remote_longname = str(a.get("remote_longname", ""))
+    elif variant == "key_verification_number_inform":
+        kv = cn.key_verification_number_inform
+        kv.nonce = int(a.get("nonce", 0)) & 0xFFFFFFFFFFFFFFFF
+        kv.remote_longname = str(a.get("remote_longname", ""))
+        kv.security_number = int(a.get("security_number", 0)) & 0xFFFFFFFF
+    elif variant == "key_verification_final":
+        kv = cn.key_verification_final
+        kv.nonce = int(a.get("nonce", 0)) & 0xFFFFFFFFFFFFFFFF
+        kv.remote_longname = str(a.get("remote_longname", ""))
+        kv.isSender = bool(a.get("is_sender", False))
+        kv.verification_characters = str(a.get("verification_characters", ""))
+    else:
+        raise ValueError(
+            f"unknown client_notification variant {variant!r}; "
+            f"expected one of {(*CLIENT_NOTIFICATION_VARIANTS, 'text')}"
+        )
+    return fr

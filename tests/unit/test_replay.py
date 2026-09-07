@@ -1085,6 +1085,81 @@ def test_fromradio_from_kind_builds_fileinfo():
         build.fromradio_from_kind("bogus", {})
 
 
+def test_fromradio_from_kind_builds_client_notifications():
+    """Every ClientNotification variant builds + round-trips: the two marker variants
+    (with firmware's canned text), the three key-verification steps (structured fields),
+    and a plain-text notification. Level maps from its name.
+    """
+    from meshtastic_mcp.replay import build
+
+    # low-entropy (the pre-2.8 weak-key alert) — variant set + default firmware text
+    fr = build.fromradio_from_kind("client_notification", {"variant": "low_entropy_key"})
+    cn = mesh_pb2.FromRadio.FromString(fr.SerializeToString()).clientNotification
+    assert cn.WhichOneof("payload_variant") == "low_entropy_key"
+    assert "regenerated" in cn.message
+    assert cn.level == mesh_pb2.LogRecord.Level.WARNING
+
+    assert (
+        build.fromradio_from_kind(
+            "client_notification", {"variant": "duplicated_public_key"}
+        ).clientNotification.WhichOneof("payload_variant")
+        == "duplicated_public_key"
+    )
+
+    # key-verification request + inform — structured fields populated
+    fr = build.fromradio_from_kind(
+        "client_notification",
+        {"variant": "key_verification_number_request", "nonce": 11, "remote_longname": "Alice"},
+    )
+    kv = mesh_pb2.FromRadio.FromString(
+        fr.SerializeToString()
+    ).clientNotification.key_verification_number_request
+    assert kv.nonce == 11 and kv.remote_longname == "Alice"
+
+    fr = build.fromradio_from_kind(
+        "client_notification",
+        {
+            "variant": "key_verification_number_inform",
+            "nonce": 22,
+            "remote_longname": "Alice",
+            "security_number": 4242,
+        },
+    )
+    cn = mesh_pb2.FromRadio.FromString(fr.SerializeToString()).clientNotification
+    assert cn.WhichOneof("payload_variant") == "key_verification_number_inform"
+    kv = cn.key_verification_number_inform
+    assert kv.nonce == 22 and kv.remote_longname == "Alice" and kv.security_number == 4242
+
+    # key-verification final — structured fields populated
+    fr = build.fromradio_from_kind(
+        "client_notification",
+        {
+            "variant": "key_verification_final",
+            "nonce": 777,
+            "remote_longname": "Bob",
+            "is_sender": True,
+            "verification_characters": "AB12CD",
+            "level": "INFO",
+        },
+    )
+    cn = mesh_pb2.FromRadio.FromString(fr.SerializeToString()).clientNotification
+    assert cn.WhichOneof("payload_variant") == "key_verification_final"
+    kv = cn.key_verification_final
+    assert kv.nonce == 777 and kv.remote_longname == "Bob"
+    assert kv.isSender is True and kv.verification_characters == "AB12CD"
+    assert cn.level == mesh_pb2.LogRecord.Level.INFO
+
+    # plain text — no variant, just message
+    fr = build.fromradio_from_kind(
+        "client_notification", {"variant": "text", "message": "heads up"}
+    )
+    cn = fr.clientNotification
+    assert cn.WhichOneof("payload_variant") is None and cn.message == "heads up"
+
+    with pytest.raises(ValueError):
+        build.fromradio_from_kind("client_notification", {"variant": "nope"})
+
+
 def test_from_events_builds_scenario_capture():
     cap = capture.from_events(
         [
@@ -1199,6 +1274,51 @@ def test_live_inject_fromradio_reaches_client():
         client.close()
         assert found  # injected FileInfo reached the live client
         assert mgr.status(sid)["injected"] >= 1
+    finally:
+        mgr.stop(sid)
+
+
+def test_live_inject_client_notification_reaches_client():
+    """A ClientNotification (low_entropy_key) injected mid-session reaches the connected
+    client as a top-level FromRadio with the right variant + text — so an app's
+    notification UI can be driven hardware-free.
+    """
+    from meshtastic_mcp.replay import build, get_manager
+
+    cap = sim.generate(nodes=5, days=1, seed=1, start=1_700_000_000)
+    mgr = get_manager()
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    st = mgr.start(cap, ReplayParams(host="127.0.0.1", port=port, rate=600, node_delay=0))
+    sid = st["id"]
+    try:
+        client = None
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                client = socket.create_connection(("127.0.0.1", port), timeout=1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        assert client is not None
+        _send_toradio(client, want_config_id=69420)
+        _send_toradio(client, want_config_id=69421)
+        time.sleep(0.3)
+
+        fr_in = build.fromradio_from_kind("client_notification", {"variant": "low_entropy_key"})
+        assert mgr.inject_fromradio(sid, [fr_in])["queued"] == 1
+        found = None
+        t0 = time.time()
+        while time.time() - t0 < 3 and found is None:
+            fr = _read_frame(client)
+            if fr.WhichOneof("payload_variant") == "clientNotification":
+                found = fr.clientNotification
+        client.close()
+        assert found is not None, "ClientNotification did not reach the client"
+        assert found.WhichOneof("payload_variant") == "low_entropy_key"
+        assert "regenerated" in found.message
     finally:
         mgr.stop(sid)
 

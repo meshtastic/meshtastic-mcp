@@ -6,6 +6,16 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Replay client-notification injection** (`replay_inject_client_notification`) — emit the
+  device→client `ClientNotification`s real firmware pushes, so an app's notification UI can be
+  driven hardware-free: `low_entropy_key` (the pre-2.8 compromised/regenerated-key alert),
+  `duplicated_public_key`, the three key-verification steps (`key_verification_number_request`
+  /`_number_inform`/`_final`, with `nonce`/`remote_longname`/`security_number`/
+  `verification_characters`/`is_sender`), and a plain `text` notification. Marker variants
+  default to firmware's wording; `level` maps DEBUG…CRITICAL. Built via
+  `build.fromradio_from_kind("client_notification", …)` and delivered through the existing
+  `inject_fromradio` path — you can't reproduce these on a healthy device, so this reproduces
+  them on demand.
 - **Vanity node identities** (`mvgrind` capability + two core tools) — pick a node's id or the
   colour every app paints it, then adopt it. A PKI node's number is
   `crc32(x25519_public_key)` and the clients read the low 24 bits of it straight as RGB

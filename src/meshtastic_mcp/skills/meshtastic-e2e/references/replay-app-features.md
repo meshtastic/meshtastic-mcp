@@ -96,6 +96,15 @@ emitted count) and `stats_sent`/`duplicates_seen` for the two paces separately. 
 are `TELEMETRY_APP` from the observer node — the app only logs a node's *own* telemetry to these
 views when `packet.from == connectedNode`.
 
+**Client notifications:** `replay_inject_client_notification(sid, variant=…)` pushes the device→
+client `ClientNotification`s real firmware raises — events you can't reproduce on a healthy device,
+so the app's notification/dialog UI is otherwise untestable. `variant`: `low_entropy_key` (the
+pre-2.8 "Compromised keys were detected and regenerated." alert — pairs with the firmware fix that
+rejects a restored weak key), `duplicated_public_key`, the three key-verification steps
+(`key_verification_number_request`/`_number_inform`/`_final` with `nonce`/`remote_longname`/
+`security_number`/`verification_characters`/`is_sender`), or `text` for a plain `message`+`level`.
+Assert with `poll_notification`/`poll_for_text` on the rendered banner/dialog.
+
 **Disconnect-survival is now guaranteed:** with `loop=True`, closing/backgrounding the app (or a
 `Connection reset by peer`) severs only *that* connection — the session keeps listening and the
 next reconnect handshakes and streams a fresh pass. So a soak test can bounce the app repeatedly
