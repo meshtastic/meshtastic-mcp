@@ -38,8 +38,8 @@ from typing import Any
 log = logging.getLogger("meshtastic_mcp.display_mirror")
 
 # FromRadio payload_variant field numbers (meshtastic/mesh.proto).
-FROM_RADIO_DISPLAY_FRAME = 20
-FROM_RADIO_DISPLAY_PALETTE = 21
+FROM_RADIO_DISPLAY_FRAME = 21
+FROM_RADIO_DISPLAY_PALETTE = 22
 
 # AdminMessage payload_variant field numbers (meshtastic/admin.proto).
 ADMIN_GET_DISPLAY_FRAME_REQUEST = 50
