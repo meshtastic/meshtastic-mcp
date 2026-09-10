@@ -45,15 +45,17 @@ tree, decides each tap from the goal, and runs *out of your context* — every s
 and UI dump stays in its process instead of your window. Apple and desktop keep the
 inline loop; the journey XML stays the shared source of truth.
 
-```
+```text
 mobile_run_task(
   task_desc      = <the journey's <action> list, one numbered line each, + the token>,
   model          = "Flash",            # measured 70x cheaper than Pro; see Cost below
   locked_app_package = "com.geeksville.mesh.fdroid.debug",
   device_serial  = "<phone serial>",   # bind it; do not let it pick
-  expected_output_desc = "Per action: what was on screen and what was tapped.",
 )
 ```
+
+`expected_output_desc` is Pro-only and is ignored on Flash — add it only when you have
+already decided to pay for Pro.
 
 Then poll `mobile_manage_task` at least once a minute (mobile tasks stall silently and the
 completion wakeup is not reliable on its own), and read `stderr_log` on failure — that is
@@ -100,10 +102,21 @@ about the oracle changes; only who does the tapping.
 - **`outbound`** — clean handoff. Every step is app-side, then the recorder asserts wire
   truth independently. This is the journey to trust first, because the device plane can
   check Artemis's self-report against reality.
-- **`inbound`, `node-sync`** — the device plane must fire **first**, and `mobile_run_task`
-  is one-shot: it cannot wait for your signal mid-run. Either inject before starting the
-  task, or make the journey's last action a bounded `wait_for_text` on the token using the
-  hop-count deadline from `harness.md` rule 2. You own that race.
+- **`inbound`, `node-sync`** — the stimulus must land **after the app is connected**, and
+  `mobile_run_task` is one-shot: it cannot wait for your signal mid-run. Nothing in this
+  repo promises that the phone-API session replays a stimulus sent before the app
+  subscribed, so do **not** simply inject first and hope it is buffered. Use the
+  device-plane connect event as the handoff:
+
+  1. Make the journey's last action a bounded `wait_for_text` on the token, using the
+     hop-count deadline from `harness.md` rule 2.
+  2. Start `mobile_run_task`; the journey connects the app as one of its own steps.
+  3. Watch the device plane for the app's session — `replay_status` reporting
+     `connected: true` with a client, or the recorder seeing the phone-API session open.
+  4. Inject only then, while Artemis is inside that final bounded wait.
+
+  `node-sync.journey.xml` permits seeding before *or* during the journey; step 3 is what
+  makes "before" safe, so prefer it either way.
 
 ### Caveats
 
