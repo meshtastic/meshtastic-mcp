@@ -13,6 +13,7 @@ test stimulates one plane and asserts on the *other*.
 |---|---|---|
 | **Device** (Meshtastic MCP) | `send_text`, `set_config`, `push_fake_nodedb`, `send_input_event`, `uhubctl_cycle`, traceroute | recorder `packets_window` / `telemetry_timeline` / `logs_window` / `events_window`, `device_info`, `list_nodes`, serial logs, `capture_screen`+OCR |
 | **App — Android** (android CLI + adb) | `adb shell input tap/text/swipe`, `android run` | `android layout --diff`, `android screen capture [--annotate]` |
+| **App — Android, agent-driven** (Artemis MCP) | `mobile_run_task` runs a whole journey out of context | **none — never its own oracle**; the device plane decides (see `references/journeys.md`) |
 | **App — Apple** (xcrun simctl + idb) | `idb ui tap/text`, `simctl install/launch` | `idb ui describe-all`, `simctl io screenshot` |
 | **App — Desktop** (Compose Hot Reload MCP) | `click` / `type_text` / `scroll` (by `nodeId`) | `get_semantic_tree`, `get_logs`, `get_ui_error` |
 
@@ -29,7 +30,7 @@ test stimulates one plane and asserts on the *other*.
 - `references/emulator-lab.md` — hardware-free Android: AVD app over TCP + native UDP mesh
 - `references/replay-app-features.md` — **drive app behavior via the replay engine**: feature injection (geofence/waypoints/alerts via `replay_inject`), sustained-load/stress (`conference-stress` preset, `duration`/`rate` pacing, self-verifying `achieved_rate`), mDNS/Bonjour auto-discovery, traceroute-log population, and tapback/bot-plane reactions; logcat/notification oracles + gotchas
 - `references/simulator-apple.md` — hardware-free Apple: iOS Simulator / macOS app over TCP (`127.0.0.1`) + native UDP mesh
-- `references/journeys.md` — **journey-driven UI (recommended over hardcoded coordinates)**: drive the app from a goal via the live a11y tree, version-resilient. Ships journey XML in `references/journeys/`.
+- `references/journeys.md` — **journey-driven UI (recommended over hardcoded coordinates)**: drive the app from a goal via the live a11y tree, version-resilient. Ships journey XML in `references/journeys/`. For Android, hand the journey to **Artemis** (`mobile_run_task`) rather than looping inline — same XML, runs out of context. Its verification is fail-open, so the recorder stays the verdict.
 - `references/vision-oracle.md` — use a screenshot + vision as the assertion when the a11y tree is empty (WebView/Canvas/animation).
 - `references/triage.md` — dual-plane root-cause analysis of a FAIL (pairs with the `triage_e2e_failure` MCP prompt).
 
