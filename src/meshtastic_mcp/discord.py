@@ -69,6 +69,11 @@ _CATEGORY = 4
 _ADMIN_PERM = 0x8
 _MANAGE_GUILD = 0x20
 _MOD_PERMS = 0x2 | 0x4 | 0x2000  # kick | ban | manage messages
+_VIEW_CHANNEL = 0x400
+_READ_HISTORY = 0x10000
+# What this bridge means by "readable", and exactly the guild-wide grant the invite
+# asks for (66560) — a channel overwrite can still take either bit away.
+_READ_PERMS = _VIEW_CHANNEL | _READ_HISTORY
 TRUST_TIERS = ("authoritative", "maintainer", "contributor", "community", "bot")
 _DEFAULT_TIER_PATTERNS = {
     "authoritative": re.compile(r"^(admin|administrator|leads?|moderators?|mods?|staff)$", re.I),
@@ -80,6 +85,11 @@ _JUMP_RE = re.compile(r"discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)")
 
 class DiscordError(RuntimeError):
     """Raised when the token is missing or Discord returns an unusable result."""
+
+
+def _public(entry: dict[str, Any]) -> dict[str, Any]:
+    """A channel entry as callers see it: ``readable`` is an internal annotation."""
+    return {k: v for k, v in entry.items() if k != "readable"}
 
 
 # ---------- config: token / guild / operator --------------------------------
@@ -331,6 +341,8 @@ class Client:
         self._operator: dict[str, Any] | None = None
         self._tiers: dict[str, str] | None = None  # role id -> tier
         self._tags: dict[str, dict[str, str]] = {}  # forum id -> tag id -> name
+        self._me: dict[str, Any] | None = None
+        self._my_roles: list[str] | None = None
 
     # -- guild -----------------------------------------------------------------
 
@@ -508,15 +520,72 @@ class Client:
             raise DiscordError(f"no member with username {ref!r} (try discord_member)")
         raise DiscordError(f"{len(hits)} members match {ref!r}; use an id")
 
+    # -- own permissions -------------------------------------------------------
+
+    def me(self) -> dict[str, Any]:
+        """The bot's own user object (cached)."""
+        if self._me is None:
+            self._me = self._t("GET", "/users/@me", None) or {}
+        return self._me
+
+    def _my_role_ids(self) -> list[str]:
+        """Role ids the bot holds here; unknown (deleted) roles are dropped."""
+        if self._my_roles is None:
+            uid = self.me().get("id", "")
+            m = self._t("GET", f"/guilds/{self.guild_id()}/members/{uid}", None) or {}
+            self._my_roles = [r for r in m.get("roles") or [] if r in self.roles()]
+        return self._my_roles
+
+    def _base_perms(self) -> int:
+        """Guild-level permissions: @everyone OR'd with every role the bot holds."""
+        roles = self.roles()
+        perms = int(roles.get(self.guild_id(), {}).get("perms", 0))
+        for rid in self._my_role_ids():
+            perms |= int(roles[rid]["perms"])
+        return perms
+
+    def _channel_perms(self, ch: dict[str, Any], base: int) -> int:
+        """Effective permissions on one channel, per Discord's documented overwrite order.
+
+        @everyone overwrite, then every role overwrite the bot holds (denies
+        aggregated, then allows), then the member-specific overwrite. Synced
+        channels carry their category's overwrites already, so there is no
+        category walk. ``allow``/``deny`` arrive as strings.
+        """
+        if base & _ADMIN_PERM:
+            return ~0
+        overwrites = ch.get("permission_overwrites") or []
+        gid, uid, mine = self.guild_id(), self.me().get("id", ""), set(self._my_role_ids())
+        perms = base
+        for o in overwrites:
+            if o.get("id") == gid:
+                perms = (perms & ~int(o.get("deny") or 0)) | int(o.get("allow") or 0)
+        allow = deny = 0
+        for o in overwrites:
+            if int(o.get("type") or 0) == 0 and o.get("id") in mine:
+                allow |= int(o.get("allow") or 0)
+                deny |= int(o.get("deny") or 0)
+        perms = (perms & ~deny) | allow
+        for o in overwrites:
+            if int(o.get("type") or 0) == 1 and o.get("id") == uid:
+                perms = (perms & ~int(o.get("deny") or 0)) | int(o.get("allow") or 0)
+        return perms
+
     # -- channels --------------------------------------------------------------
 
-    def channels(self, refresh: bool = False) -> list[dict[str, Any]]:
-        """Text-bearing channels, forums, and active threads, with category and tags."""
+    def _all_channels(self, refresh: bool = False) -> list[dict[str, Any]]:
+        """Every text-bearing channel, each annotated ``readable``.
+
+        Internal on purpose: name resolution has to keep finding a channel the bot
+        cannot read, so ``discord_read("leads")`` still fails with Discord's own
+        403 instead of a misleading "no channel named".
+        """
         if self._channels is not None and not refresh:
             return self._channels
         gid = self.guild_id()
         raw = self._t("GET", f"/guilds/{gid}/channels", None) or []
         cats = {c["id"]: c.get("name", "") for c in raw if c.get("type") == _CATEGORY}
+        base = self._base_perms()
         out: list[dict[str, Any]] = []
         for c in raw:
             kind = _KINDS.get(c.get("type", -1))
@@ -528,6 +597,7 @@ class Client:
                 "kind": kind,
                 "category": cats.get(c.get("parent_id") or "", ""),
                 "topic": (c.get("topic") or "")[:200],
+                "readable": self._channel_perms(c, base) & _READ_PERMS == _READ_PERMS,
             }
             if kind == "forum":
                 tags = c.get("available_tags") or []
@@ -538,9 +608,31 @@ class Client:
         by_id = {c["id"]: c for c in out}
         for t in active.get("threads", []):
             parent = by_id.get(t.get("parent_id") or "")
-            out.append(self._slim_thread(t, parent))
+            entry = self._slim_thread(t, parent)
+            # A thread is exactly as readable as the channel it hangs under.
+            entry["readable"] = bool(parent and parent["readable"])
+            out.append(entry)
         self._channels = out
         return out
+
+    def channels(
+        self, refresh: bool = False, include_unreadable: bool = False
+    ) -> list[dict[str, Any]]:
+        """Channels the bot can actually read, with category and tags.
+
+        ``GET /guilds/{id}/channels`` returns the whole guild regardless of the bot's
+        permissions, so the listing is filtered here against computed per-channel
+        permissions. ``include_unreadable=True`` returns the rest too, each carrying
+        ``readable`` — that is how you find what to ask an admin to grant.
+        """
+        allc = self._all_channels(refresh=refresh)
+        if include_unreadable:
+            return allc
+        return [_public(c) for c in allc if c["readable"]]
+
+    def unreadable_count(self) -> int:
+        """How many text-bearing channels exist that the bot cannot read."""
+        return sum(1 for c in self._all_channels() if not c["readable"])
 
     def _slim_thread(self, t: dict[str, Any], parent: dict[str, Any] | None) -> dict[str, Any]:
         meta = t.get("thread_metadata") or {}
@@ -579,9 +671,9 @@ class Client:
         if ref.isdigit():
             return ref
         low = ref.lower()
-        hits = [c for c in self.channels() if c["name"].lower() == low]
+        hits = [c for c in self._all_channels() if c["name"].lower() == low]
         if not hits:
-            hits = [c for c in self.channels(refresh=True) if c["name"].lower() == low]
+            hits = [c for c in self._all_channels(refresh=True) if c["name"].lower() == low]
         if len(hits) == 1:
             return hits[0]["id"]
         if not hits:
@@ -676,7 +768,7 @@ class Client:
         msgs.reverse()
         tmeta = meta.get("thread_metadata") or {}
         parent_id = meta.get("parent_id")
-        parent = next((c for c in self.channels() if c["id"] == parent_id), None)
+        parent = next((c for c in self._all_channels() if c["id"] == parent_id), None)
         tags = (
             self._tag_names(parent_id, meta.get("applied_tags") or [])
             if parent and parent.get("kind") == "forum" and parent_id
@@ -707,10 +799,10 @@ class Client:
     ) -> dict[str, Any]:
         """Posts (threads) of a forum channel, newest-first: active + public archived."""
         fid = self.resolve_channel(channel)
-        parent = next((c for c in self.channels() if c["id"] == fid), None)
+        parent = next((c for c in self._all_channels() if c["id"] == fid), None)
         if parent is None or parent.get("kind") != "forum":
             raise DiscordError(f"{channel!r} is not a forum channel")
-        posts = [c for c in self.channels() if c.get("parent_id") == fid]
+        posts = [_public(c) for c in self._all_channels() if c.get("parent_id") == fid]
         if include_archived:
             before: str | None = None
             while len(posts) < limit * 2:  # over-fetch so a tag filter still fills the page
@@ -788,7 +880,7 @@ class Client:
             for m in group if isinstance(group, list) else [group]:
                 hits.append(self._slim(m, m.get("channel_id", "")))
         thread_names = {t["id"]: t.get("name", "") for t in raw.get("threads") or []}
-        self.channels()  # warm the name map
+        self._all_channels()  # warm the name map
         for h in hits:
             h["channel"] = thread_names.get(h["channel_id"]) or self._channel_name(h["channel_id"])
         total = int(raw.get("total_results") or 0)

@@ -110,6 +110,19 @@ All notable changes are documented here. Format loosely follows
   `achieved_rate`, so a stress run is self-verifying.
 
 ### Fixed
+- **`discord_channels` listed channels the bot cannot read** — `GET /guilds/{id}/channels`
+  returns the whole guild regardless of the bot's permissions, so the tool advertised every
+  channel while claiming to list "readable" ones. On the Meshtastic server that meant all 235,
+  including the private management channels; an agent read the listing, concluded it could see
+  `#leads`, and only found out when `discord_read` came back `403 Missing Access` — or, worse,
+  concluded from an empty `discord_search` that nobody had discussed something. The listing is
+  now filtered against per-channel permissions computed from the overwrites already in that
+  payload (@everyone, then the bot's role overwrites, then its member overwrite, with
+  `ADMINISTRATOR` short-circuiting), threads inherit their parent's readability, and the
+  withheld count comes back as `unreadable`. `include_unreadable=True` lists them anyway with
+  `readable`, which is how you see what to ask an admin to grant. Name resolution deliberately
+  still searches the unfiltered set, so `discord_read("leads")` keeps failing with Discord's
+  own 403 rather than a misleading "no channel named".
 - **Flash tools can no longer flash a different device than the requested port**
   (`flash`/`pio_flash`, `flash_start`, `erase_and_flash`, `update_flash`) — pioarduino's
   Hybrid-Compile pass (custom sdkconfig → `*** Compile Arduino IDF libs ***`) re-invokes a
