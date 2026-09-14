@@ -91,8 +91,11 @@ only advertised when a token resolves.
 Guild-wide *View Channels* from the invite lives on the bot's **managed role** (named after
 the app, created automatically). A channel whose `@everyone` overwrite denies View Channel
 hides from the bot — `discord_read` returns `403 … Missing Access` and search silently omits
-it. A server admin grants access per channel (or per category with sync on): *Permissions →
-add the bot's managed role → allow View Channel + Read Message History*. Think before asking
+it. `discord_channels` leaves such channels out (it reports how many under `unreadable`);
+`discord_channels(include_unreadable=True)` names them, so you can see what is worth asking
+for. A server admin grants access per channel (or per category with sync on): *Permissions →
+add the bot's managed role → allow View Channel + Read Message History*. Grant the **channel**,
+not the category, unless you mean every channel under it. Think before asking
 for moderation / security channels — whatever the bot can read ends up in an agent's context.
 
 ## Usage

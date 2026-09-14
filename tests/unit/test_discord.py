@@ -26,7 +26,14 @@ ROLES = [
         "permissions": "0",
         "managed": True,
     },
-    {"id": "r-mcp", "name": "meshtastic-mcp", "position": 1, "permissions": "0", "managed": True},
+    # The invite's guild-wide View Channels + Read Message History (66560) lands here.
+    {
+        "id": "r-mcp",
+        "name": "meshtastic-mcp",
+        "position": 1,
+        "permissions": "66560",
+        "managed": True,
+    },
     {"id": GUILD, "name": "@everyone", "position": 0, "permissions": "0"},
 ]
 MEMBERS = {
@@ -37,7 +44,12 @@ MEMBERS = {
         "roles": [],
     },
     "u-bot": {"user": {"id": "u-bot", "username": "GitHub", "bot": True}, "roles": ["r-boost"]},
+    "u-mcp": {
+        "user": {"id": "u-mcp", "username": "meshtastic-mcp", "bot": True},
+        "roles": ["r-mcp"],
+    },
 }
+DENY_VIEW = {"id": GUILD, "type": 0, "deny": "1024", "allow": "0"}
 
 
 def _msg(i: int, content: str, author: str = "u-rando", cid: str = "10") -> dict[str, Any]:
@@ -75,6 +87,8 @@ class FakeTransport:
         self.calls.append((method, path, query))
         assert method == "GET", "read-only bridge must never write"
         q = query or {}
+        if path == "/users/@me":
+            return MEMBERS["u-mcp"]["user"]
         if path == "/users/@me/guilds":
             return [{"id": GUILD, "name": "Meshtastic"}]
         if path == f"/guilds/{GUILD}/roles":
@@ -96,6 +110,18 @@ class FakeTransport:
                 {"id": "10", "type": 0, "name": "android", "parent_id": "1", "topic": "t"},
                 {"id": "11", "type": 0, "name": "firmware", "parent_id": None},
                 {"id": "13", "type": 2, "name": "voice"},
+                # Private: @everyone denied View Channel, nothing gives it back.
+                {"id": "40", "type": 0, "name": "leads", "permission_overwrites": [DENY_VIEW]},
+                # Private, but granted back on the bot's managed role.
+                {
+                    "id": "41",
+                    "type": 0,
+                    "name": "clients-and-app-design",
+                    "permission_overwrites": [
+                        DENY_VIEW,
+                        {"id": "r-mcp", "type": 0, "deny": "0", "allow": "1024"},
+                    ],
+                },
                 {
                     "id": "20",
                     "type": 15,
@@ -110,6 +136,7 @@ class FakeTransport:
             return {
                 "threads": [
                     {"id": "12", "name": "ble-thread", "parent_id": "10", "thread_metadata": {}},
+                    {"id": "42", "name": "leads-thread", "parent_id": "40", "thread_metadata": {}},
                     {
                         "id": "30",
                         "name": "Pairing fails",
@@ -267,8 +294,10 @@ def test_messages_carry_author_trust(client) -> None:
 def test_enrich_caches_member_lookups(client) -> None:
     t = client._t
     client.messages("android", limit=7)  # 7 messages, one author
-    lookups = [c for c in t.calls if "/members/u-" in c[1]]
+    # Author enrichment only; the bot's own member probe (u-mcp) is a separate, cached call.
+    lookups = [c for c in t.calls if c[1].endswith("/members/u-rando")]
     assert len(lookups) == 1
+    assert len([c for c in t.calls if c[1].endswith("/members/u-mcp")]) == 1
 
 
 def test_left_server_author(client) -> None:
@@ -303,7 +332,15 @@ def test_resolve_user_by_name_and_id(client) -> None:
 
 def test_channels_flatten_category_forum_tags_and_posts(client) -> None:
     by = {c["name"]: c for c in client.channels()}
-    assert set(by) == {"android", "firmware", "help-forum", "ble-thread", "Pairing fails"}
+    # "leads" and its thread are denied; "clients-and-app-design" is granted back on r-mcp.
+    assert set(by) == {
+        "android",
+        "firmware",
+        "help-forum",
+        "ble-thread",
+        "Pairing fails",
+        "clients-and-app-design",
+    }
     assert by["android"]["category"] == "Apps"
     assert by["help-forum"]["kind"] == "forum" and by["help-forum"]["tags"] == ["Android", "Solved"]
     post = by["Pairing fails"]
@@ -627,3 +664,58 @@ def test_server_registers_discord_tools_when_token_present() -> None:
             ann is not None and ann.readOnlyHint and ann.openWorldHint and not ann.destructiveHint
         )
     assert "trust" in (tools["discord_search"].description or "")
+
+
+# -- channel readability -----------------------------------------------------
+
+
+def test_channels_hide_what_the_bot_cannot_read(client) -> None:
+    """The guild endpoint returns every channel; the listing must not."""
+    names = {c["name"] for c in client.channels()}
+    assert "leads" not in names
+    assert "clients-and-app-design" in names  # denied, then granted back on the bot's role
+    assert client.unreadable_count() == 2  # #leads and the thread under it
+    assert all("readable" not in c for c in client.channels())
+
+
+def test_include_unreadable_names_them_with_a_flag(client) -> None:
+    by = {c["name"]: c for c in client.channels(include_unreadable=True)}
+    assert by["leads"]["readable"] is False
+    assert by["clients-and-app-design"]["readable"] is True
+    assert by["android"]["readable"] is True
+
+
+def test_thread_under_a_hidden_channel_is_dropped(client) -> None:
+    """Otherwise it survives as a parentless thread — hidden content, less metadata."""
+    assert "leads-thread" not in {c["name"] for c in client.channels()}
+    by = {c["name"]: c for c in client.channels(include_unreadable=True)}
+    assert by["leads-thread"]["readable"] is False
+
+
+def test_resolve_channel_still_finds_an_unreadable_channel(client) -> None:
+    """So discord_read keeps failing with Discord's 403, not 'no channel named'."""
+    assert client.resolve_channel("#leads") == "40"
+
+
+def test_administrator_short_circuits_every_overwrite(monkeypatch, client) -> None:
+    monkeypatch.setitem(client.roles()["r-mcp"], "perms", 0x8)
+    client._channels = None
+    assert "leads" in {c["name"] for c in client.channels()}
+
+
+def test_member_overwrite_beats_the_role_grant(client) -> None:
+    """A member-specific deny is applied last and wins."""
+    ch = {
+        "id": "9",
+        "type": 0,
+        "name": "x",
+        "permission_overwrites": [
+            {"id": "r-mcp", "type": 0, "deny": "0", "allow": "66560"},
+            {"id": "u-mcp", "type": 1, "deny": "1024", "allow": "0"},
+        ],
+    }
+    assert client._channel_perms(ch, client._base_perms()) & discord._VIEW_CHANNEL == 0
+
+
+def test_read_perms_match_the_invite_permission_integer() -> None:
+    assert discord._READ_PERMS == 66560

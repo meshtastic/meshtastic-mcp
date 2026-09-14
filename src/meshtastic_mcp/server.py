@@ -917,14 +917,23 @@ def discord_status() -> dict[str, Any]:
 
 
 @discord_tool()
-def discord_channels(refresh: bool = False) -> dict[str, Any]:
-    """List readable channels, forums (with tags) and active threads/posts, by category.
+def discord_channels(refresh: bool = False, include_unreadable: bool = False) -> dict[str, Any]:
+    """List the channels, forums (with tags) and active threads/posts the bot can read.
 
-    Cached per server process; `refresh=True` re-fetches. Names returned here are
-    accepted everywhere a `channel` / `thread` argument appears.
+    Only readable channels are listed — Discord's guild endpoint returns every channel
+    regardless of permission, so a raw listing would promise history that `discord_read`
+    then 403s on. `unreadable` counts what was withheld; `include_unreadable=True` names
+    them too, each with `readable`, which is how you work out what to ask an admin to
+    grant (see docs/discord.md). Cached per server process; `refresh=True` re-fetches.
+    Names returned here are accepted everywhere a `channel` / `thread` argument appears.
     """
-    chans = _discord().channels(refresh=refresh)
-    return {"count": len(chans), "channels": chans}
+    client = _discord()
+    chans = client.channels(refresh=refresh, include_unreadable=include_unreadable)
+    return {
+        "count": len(chans),
+        "unreadable": client.unreadable_count(),
+        "channels": chans,
+    }
 
 
 @discord_tool()
