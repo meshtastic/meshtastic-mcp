@@ -6,6 +6,32 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **BLE sniffer capture** (`ble_sniffer` capability + one core tool) — watch the
+  phone-to-node BLE link from outside both ends with an nRF Sniffer for Bluetooth LE dongle.
+  This is the independent oracle for the one failure neither end reports honestly: the app
+  says "no devices found" while the node says "advertising". `ble_sniff_start` /
+  `ble_sniff_poll` / `ble_sniff_stop` run a capture as a background job (the `jobs.py`
+  registry, shared with build/flash/grind), gated on an attached dongle;
+  `ble_sniff_status` is **core**, so the tool that reports the hardware missing is not
+  hidden by the hardware being missing. Capture shells out to Nordic's
+  `nrfutil-ble-sniffer` plugin binary (resolved via `$MESHTASTIC_MCP_BLE_SNIFFER` →
+  `$NRFUTIL_HOME/bin` → `~/.nrfutil/bin` → PATH, deliberately *not* through
+  `config.nrfutil_bin()`, which also matches `adafruit-nrfutil` and the legacy
+  `nordicsemi` pip `nrfutil` — neither has a `ble-sniffer` subcommand); the resulting
+  pcap is parsed back with `struct` alone, no scapy/pyshark. Rows merge per advertiser
+  address across PDU types because identifying a node is asymmetric — ESP32 nodes
+  advertise name and `MESH_SERVICE_UUID` together, nRF52 nodes advertise the UUID but put
+  the name in the scan response only — so `likely_meshtastic` keys off the service UUID
+  and never off a name. CRC-failing packets are counted but kept out of the rows, a
+  captured `SCAN_REQ`/`CONNECT_IND` contributes an address but never its type (scanners
+  were measured setting `RxAdd=0` for random-static advertisers), and spans use the pcap
+  clock rather than the sniffer's 32-bit microsecond counter, which wraps every ~71 min.
+  **Receive only:** the sniffer firmware's UART protocol has no transmit command, so there
+  is no BLE counterpart to `inject_frame`; `scan_follow_rsp` (which emits SCAN_REQ to
+  solicit names) is the sole transmit path and is off by default so a capture cannot
+  perturb what it observes. Output is untrusted — a BLE device name is arbitrary text from
+  any radio in range, the widest such source here since it needs no mesh membership at all
+  (all four tools `openWorldHint`; see `SECURITY.md`). Docs: `docs/ble-sniffer.md`.
 - **Replay client-notification injection** (`replay_inject_client_notification`) — emit the
   device→client `ClientNotification`s real firmware pushes, so an app's notification UI can be
   driven hardware-free: `low_entropy_key` (the pre-2.8 compromised/regenerated-key alert),

@@ -55,6 +55,22 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   (authoritative > maintainer > contributor > community) — role tracks trust on a server
   full of confident misinformation; `$DISCORD_TRUST_TIERS` overrides. Everything returned is
   untrusted user content — `openWorldHint`. See `docs/discord.md`.
+- **ble-sniffer capability** (needs an nRF Sniffer for Bluetooth LE dongle — Nordic VID
+  `0x1915`/PID `0x522A` — plus Nordic's `nrfutil-ble-sniffer` plugin binary):
+  `ble_sniffer.py` off-device capture of the **phone-to-node BLE link**. The independent
+  oracle for the failure neither end reports honestly — the app says "no devices found"
+  while the node says "advertising". Gated: `ble_sniff_start` / `ble_sniff_poll` /
+  `ble_sniff_stop` (async job pattern). **Core, not gated:** `ble_sniff_status`, for the
+  same reason as `pa_meter_status` — the tool that reports the hardware missing must not be
+  hidden by the hardware being missing. **Receive only:** the sniffer firmware's UART
+  protocol has no transmit command, so there is no BLE counterpart to `inject_frame`;
+  `scan_follow_rsp` (which emits SCAN_REQ) is the sole transmit path and is off by default.
+  A Meshtastic node is identified by `MESH_SERVICE_UUID`, never by a name — ESP32 nodes
+  advertise name + UUID, nRF52 nodes advertise the UUID but put the name in the scan
+  response alone, so rows merge per address across PDU types. pcap parsing is pure
+  `struct` (no scapy/pyshark). Resolution deliberately bypasses `config.nrfutil_bin()`,
+  which also accepts `adafruit-nrfutil` and the legacy `nordicsemi` pip `nrfutil` —
+  neither has a `ble-sniffer` subcommand. See `docs/ble-sniffer.md`.
 - **mvgrind capability** (needs the `mvgrind` binary — `$MESHTASTIC_MCP_MVGRIND` or PATH — plus
   an OpenCL driver): `vanity.py` vanity-identity tools. A PKI node's number is
   `crc32(x25519_public_key)` and every client paints it with the low 24 bits read as RGB, so a
@@ -76,9 +92,10 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
 decorator (`_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled tools only when
-`CAPS.firmware` is active — 62 always-on tools (includes the 3 power-meter tools and
-`vanity_preview`/`vanity_apply`, always registered); +14 android, +17 firmware, +2 sdr,
-+3 mvgrind, and the apple/sdk-cli/local-model gates on top (≈123 with everything active).
+`CAPS.firmware` is active — 65 always-on tools (includes the 3 power-meter tools,
+`vanity_preview`/`vanity_apply` and `ble_sniff_status`, always registered); +14 android,
++17 firmware, +2 sdr, +3 mvgrind, +3 ble-sniffer, and the apple/sdk-cli/local-model gates
+on top (≈129 with everything active).
 Counts drift — `doctor` and the startup log are the source of truth.
 
 **Provisioning:** `doctor.py` (the `doctor` MCP tool / `meshtastic-mcp doctor` CLI) probes every
@@ -153,7 +170,10 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   a malicious node's long_name/text can appear in the app UI or logcat that these tools
   read. `cot_relay_status` is a third source — it returns per-peer callsigns supplied by
   connected TAK clients (attacker-controllable). The `discord_*` tools are a fourth —
-  every message is public, user-authored text. Combined with `device_info` (private data)
+  every message is public, user-authored text. `ble_sniff_poll`/`ble_sniff_stop` are a
+  fifth, and the widest: a BLE device name is arbitrary text chosen by whoever owns any
+  radio in range, so an attacker needs no mesh membership at all, only proximity.
+  Combined with `device_info` (private data)
   and `send_text` (exfiltration), a hostile node could inject instructions via a crafted
   packet payload. Do not process untrusted mesh content and call `send_text` in the same
   agentic task without explicit human review. See `SECURITY.md`.
