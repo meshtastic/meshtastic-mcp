@@ -2292,10 +2292,16 @@ def capture_screen(role: str | None = None, ocr: bool = True) -> dict[str, Any]:
 def uhubctl_list() -> list[dict[str, Any]]:
     """List every USB hub + per-port device attachment as seen by `uhubctl`.
 
-    Read-only — no confirm required. Each hub entry includes its location
-    (`1-1.3`), descriptor, whether it supports Per-Port Power Switching,
-    and a list of populated ports with VID:PID of attached devices.
-    Useful for pre-flight checks before a destructive power-cycle call.
+    Read-only — no confirm required. Each hub entry includes its location,
+    descriptor, whether it supports Per-Port Power Switching, and a list of
+    populated ports with VID:PID of attached devices. Useful for pre-flight
+    checks before a destructive power-cycle call.
+
+    `location` is uhubctl notation (`1-1.3`) on Linux/macOS. On Windows the
+    backend is VirtualHere's `vhfilter` instead — uhubctl cannot switch port
+    power there at all — and a location is the hub's PnP device path, e.g.
+    `USB\\VID_0BDA&PID_0411\\6&28cf390b&0&2`. Pass whichever form this tool
+    returned; both round-trip into the power calls unchanged.
     """
     from . import uhubctl as uhubctl_mod
 
@@ -2310,12 +2316,14 @@ def uhubctl_power(
     role: str | None = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
-    """Power a USB hub port on or off via `uhubctl -a on|off`.
+    """Power a USB hub port on or off (`uhubctl -a on|off`, or `vhfilter
+    --switch-port` on Windows).
 
-    Target the port by either (`location`, `port`) — raw uhubctl syntax,
-    e.g. `location="1-1.3", port=2` — OR by `role` ("nrf52", "esp32s3").
-    Role lookup honors `MESHTASTIC_UHUBCTL_LOCATION_<ROLE>` +
-    `_PORT_<ROLE>` env vars first, falls back to VID auto-detection.
+    Target the port by either (`location`, `port`) — e.g. `location="1-1.3",
+    port=2`, or a PnP device path on Windows, as `uhubctl_list` reports it —
+    OR by `role` ("nrf52", "esp32s3"). Role lookup honors
+    `MESHTASTIC_UHUBCTL_LOCATION_<ROLE>` + `_PORT_<ROLE>` env vars first,
+    falls back to VID auto-detection.
 
     `action="off"` requires `confirm=True` (destructive — the attached
     device will immediately disappear from the OS).
@@ -2344,8 +2352,8 @@ def uhubctl_cycle(
     """Power a USB hub port off, wait `delay_s` seconds, then on.
 
     The typical hard-reset sequence — shorter than off+on as two RPCs
-    because uhubctl handles the timing in-process. Target by (location,
-    port) or by role (see `uhubctl_power`). Requires `confirm=True`.
+    because the timing is handled in-process. Target by (location, port)
+    or by role (see `uhubctl_power`). Requires `confirm=True`.
     """
     from . import uhubctl as uhubctl_mod
 
