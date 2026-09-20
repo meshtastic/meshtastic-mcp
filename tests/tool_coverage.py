@@ -98,6 +98,11 @@ _TOOL_MAP: dict[str, tuple[str, str]] = {
     "picotool_info": ("meshtastic_mcp.hw_tools", "picotool_info"),
     "picotool_load": ("meshtastic_mcp.hw_tools", "picotool_load"),
     "picotool_raw": ("meshtastic_mcp.hw_tools", "picotool_raw"),
+    # BLE sniffer (off-device capture of the phone<->node link)
+    "ble_sniff_status": ("meshtastic_mcp.ble_sniffer", "status"),
+    "ble_sniff_start": ("meshtastic_mcp.ble_sniffer", "capture_start"),
+    "ble_sniff_poll": ("meshtastic_mcp.ble_sniffer", "capture_poll"),
+    "ble_sniff_stop": ("meshtastic_mcp.ble_sniffer", "capture_stop"),
     # Android app-plane driving
     "android_ui_dump": ("meshtastic_mcp.emulator.avd", "ui_dump"),
     "android_screenshot": ("meshtastic_mcp.emulator.avd", "screenshot"),

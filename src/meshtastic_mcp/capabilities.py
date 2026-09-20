@@ -17,6 +17,8 @@ when their prerequisite is present:
   (``idb`` for UI drive).
 - ``mvgrind`` — GPU grinding of vanity NodeNums / app colours. Needs the ``mvgrind``
   binary + an OpenCL driver.
+- ``ble_sniffer`` — off-device BLE capture of the phone-to-node link. Needs an nRF
+  Sniffer for Bluetooth LE dongle attached.
 
 Tool registration in ``server.py`` consults these so a ``pip install meshtastic-mcp``
 with no firmware tree still exposes the full device/admin/recorder surface.
@@ -147,6 +149,20 @@ def has_discord() -> bool:
     return discord.available()
 
 
+def has_ble_sniffer() -> bool:
+    """True when an nRF Sniffer for Bluetooth LE dongle is attached.
+
+    Gates the BLE *capture* tools (``ble_sniff_start`` / ``ble_sniff_poll`` /
+    ``ble_sniff_stop``). ``ble_sniff_status`` is core, on the same reasoning as
+    ``pa_meter_status``: the tool whose job is to report missing hardware must
+    not be hidden by that hardware being missing. Pure pyserial VID/PID
+    enumeration — no port is opened. See ``docs/ble-sniffer.md``.
+    """
+    from . import ble_sniffer
+
+    return ble_sniffer.available()
+
+
 def has_mvgrind() -> bool:
     """True when the ``mvgrind`` GPU vanity grinder is resolvable.
 
@@ -174,6 +190,7 @@ class Capabilities:
     tak: bool
     sdk_cli: bool
     discord: bool
+    ble_sniffer: bool
     mvgrind: bool
 
     def summary(self) -> str:
@@ -191,6 +208,7 @@ class Capabilities:
                 ("tak", self.tak),
                 ("sdk_cli", self.sdk_cli),
                 ("discord", self.discord),
+                ("ble_sniffer", self.ble_sniffer),
                 ("mvgrind", self.mvgrind),
             )
             if on
@@ -211,5 +229,6 @@ def detect() -> Capabilities:
         tak=has_tak(),
         sdk_cli=has_sdk_cli(),
         discord=has_discord(),
+        ble_sniffer=has_ble_sniffer(),
         mvgrind=has_mvgrind(),
     )

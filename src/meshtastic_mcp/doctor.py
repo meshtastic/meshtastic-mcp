@@ -972,6 +972,54 @@ def _uhubctl_check() -> Check:
     )
 
 
+def _ble_sniffer_check() -> Check:
+    """Off-device BLE capture (`ble_sniff_start`/`_poll`/`_stop`): needs an nRF Sniffer
+    dongle attached *and* Nordic's `nrfutil-ble-sniffer` plugin binary. Reports the
+    more specific missing piece; `ble_sniff_status` stays available either way and
+    returns the same detail.
+    """
+    from . import ble_sniffer
+
+    needed = "off-device BLE capture of the phone-to-node link (ble_sniff_start / _poll / _stop)"
+    sniffers = ble_sniffer.list_sniffers()
+    binary = ble_sniffer.sniffer_bin_or_none()
+    if not sniffers:
+        return Check(
+            "ble-sniffer-dongle",
+            "ble_sniffer",
+            STATUS_MISSING,
+            needed,
+            detail="no nRF Sniffer dongle (Nordic VID 0x1915, PID 0x522A) found",
+            fix="flash an nRF52840 Dongle with the nRF Sniffer for Bluetooth LE firmware: "
+            "https://www.nordicsemi.com/Products/Development-tools/nRF-Sniffer-for-Bluetooth-LE "
+            "(the dongle must run the sniffer *application*, not its bootloader)",
+        )
+    ports = ", ".join(str(s["port"]) for s in sniffers)
+    if binary is None:
+        # The dongle is the hard-to-get half and it's already here — say so, so
+        # this doesn't read as "no hardware".
+        return Check(
+            "nrfutil-ble-sniffer",
+            "ble_sniffer",
+            STATUS_DEGRADED,
+            needed,
+            detail=f"dongle present ({ports}) but the nrfutil-ble-sniffer plugin binary "
+            "is not installed",
+            fix="download nrfutil from "
+            "https://www.nordicsemi.com/Products/Development-tools/nRF-Util "
+            "&& nrfutil install ble-sniffer",
+            env_override=ble_sniffer.SNIFFER_BIN_ENV,
+        )
+    return Check(
+        "ble-sniffer-dongle",
+        "ble_sniffer",
+        STATUS_OK,
+        needed,
+        detail=f"{len(sniffers)} dongle(s): {ports}; plugin {binary}",
+        env_override=ble_sniffer.SNIFFER_BIN_ENV,
+    )
+
+
 def _mvgrind_check() -> Check:
     """Vanity-identity grinding (`vanity_grind_*`): needs the `mvgrind` GPU grinder
     plus an OpenCL driver. Optional — `vanity_preview`/`vanity_apply` are core, so a
@@ -1091,6 +1139,8 @@ def run() -> DoctorReport:
         _sdk_cli_check(),
         # discord capability (read-only community-server source)
         _discord_check(),
+        # ble_sniffer capability (off-device BLE capture of the app<->node link)
+        _ble_sniffer_check(),
         # vanity capability (GPU NodeNum/colour grinding)
         _mvgrind_check(),
     ]

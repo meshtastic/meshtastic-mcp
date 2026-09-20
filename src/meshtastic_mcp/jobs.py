@@ -114,3 +114,11 @@ def state_of(job_id: str) -> dict[str, Any] | None:
     """The raw mutable state dict for `job_id` (read/update under `LOCK`)."""
     with LOCK:
         return _active.get(job_id)
+
+
+def running_of_kind(kind: str) -> list[dict[str, Any]]:
+    """Every still-running job of `kind` — for tools that must find a job they
+    did not start (a capture left running by an earlier session's tool call) or
+    refuse to start a second one on the same hardware."""
+    with LOCK:
+        return [s for s in _active.values() if s["kind"] == kind and s["status"] == "running"]

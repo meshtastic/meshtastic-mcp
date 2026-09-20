@@ -22,7 +22,7 @@ in a full meshtastic-mcp session:
 | Leg | Tools |
 |---|---|
 | Private data | `device_info`, `list_nodes`, `get_config`, `get_channel_url` |
-| Untrusted content | `logs_window`, `packets_window` — return user-authored payloads from remote mesh nodes; `android_ui_dump`, `android_screenshot`, `android_read_logcat` — return app UI / device logcat content that can echo those same remote-node payloads (node names, text messages); `cot_relay_status` — surfaces per-peer **callsigns** supplied by connected TAK clients (the full CoT events, incl. GeoChat bodies, are written to capture files on disk, not returned by this tool); the `discord_*` tools — return messages / channel topics / member names authored by anyone on the public Meshtastic Discord server (the per-message `trust` tier is derived from public roles and is a reading aid, not authentication) |
+| Untrusted content | `logs_window`, `packets_window` — return user-authored payloads from remote mesh nodes; `android_ui_dump`, `android_screenshot`, `android_read_logcat` — return app UI / device logcat content that can echo those same remote-node payloads (node names, text messages); `cot_relay_status` — surfaces per-peer **callsigns** supplied by connected TAK clients (the full CoT events, incl. GeoChat bodies, are written to capture files on disk, not returned by this tool); the `discord_*` tools — return messages / channel topics / member names authored by anyone on the public Meshtastic Discord server (the per-message `trust` tier is derived from public roles and is a reading aid, not authentication); `ble_sniff_poll`, `ble_sniff_stop` — return BLE device names captured off the air, which are arbitrary text chosen by whoever owns the radio broadcasting them (this is the widest of these sources: it needs no mesh membership and no app, only radio proximity) |
 | Exfiltration | `send_text` — broadcasts a mesh message |
 
 A hostile node on the same mesh could embed instructions in a packet payload. If an agent
@@ -31,9 +31,9 @@ could exfiltrate the device's channel URL or node list.
 
 **Mitigations in place:**
 - `logs_window`, `packets_window`, `android_ui_dump`, `android_screenshot`,
-  `android_read_logcat`, `cot_relay_status`, and the `discord_*` tools are classified
-  `openWorldHint: true` so clients can detect that untrusted content has entered
-  the session. (`atak_fleet_status` is also `openWorldHint` — it drives external
+  `android_read_logcat`, `cot_relay_status`, `ble_sniff_poll`, `ble_sniff_stop`, and the
+  `discord_*` tools are classified `openWorldHint: true` so clients can detect that
+  untrusted content has entered the session. (`atak_fleet_status` is also `openWorldHint` — it drives external
   emulators — but returns only fleet/route run-state, no remote-authored content.)
 - `send_text` is `destructiveHint: true` — clients should prompt before broadcasting.
 - The `confirm=True` gate on destructive ops adds a human-in-the-loop layer.
@@ -41,8 +41,8 @@ could exfiltrate the device's channel URL or node list.
 **Recommended operational posture:**
 - Do not process untrusted mesh content and send text in the same agentic task without
   explicit human review.
-- When SEP #1561 (`unsafeOutputHint`) is finalised, add it to `logs_window` and
-  `packets_window`.
+- When SEP #1561 (`unsafeOutputHint`) is finalised, add it to `logs_window`,
+  `packets_window`, and the `ble_sniff_*` capture readers.
 
 ## Tools with elevated risk
 
