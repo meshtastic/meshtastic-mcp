@@ -83,13 +83,15 @@ _CM_GETIDLIST_FILTER_ENUMERATOR = 0x00000001
 _VIDPID_RE = re.compile(r"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})")
 
 
-def _cfgmgr() -> ctypes.WinDLL:
+def _cfgmgr() -> ctypes.CDLL:
     if not IS_WINDOWS:
         raise VhfilterError("cfgmgr32 is Windows-only")
-    return ctypes.WinDLL("cfgmgr32")
+    # WinDLL exists only on Windows, but mypy also checks this file on Linux,
+    # where the name is absent. The annotation is CDLL, its base class.
+    return ctypes.WinDLL("cfgmgr32")  # type: ignore[attr-defined]
 
 
-def _device_id_list(lib: ctypes.WinDLL, enumerator: str = "USB") -> list[str]:
+def _device_id_list(lib: ctypes.CDLL, enumerator: str = "USB") -> list[str]:
     """Every device instance id under the `USB` enumerator."""
     size = wintypes.ULONG()
     flt = ctypes.c_wchar_p(enumerator)
@@ -113,7 +115,7 @@ def _device_id_list(lib: ctypes.WinDLL, enumerator: str = "USB") -> list[str]:
     return [s for s in blob.split("\0") if s]
 
 
-def _devnode(lib: ctypes.WinDLL, device_id: str) -> wintypes.DWORD | None:
+def _devnode(lib: ctypes.CDLL, device_id: str) -> wintypes.DWORD | None:
     """Locate a devnode. Returns None for a device that is not present, which
     is how absent-but-remembered entries get filtered out."""
     inst = wintypes.DWORD()
@@ -121,19 +123,19 @@ def _devnode(lib: ctypes.WinDLL, device_id: str) -> wintypes.DWORD | None:
     return inst if rc == _CR_SUCCESS else None
 
 
-def _device_id(lib: ctypes.WinDLL, inst: wintypes.DWORD) -> str | None:
+def _device_id(lib: ctypes.CDLL, inst: wintypes.DWORD) -> str | None:
     buf = ctypes.create_unicode_buffer(512)
     rc = lib.CM_Get_Device_IDW(inst, buf, 512, 0)
     return buf.value if rc == _CR_SUCCESS else None
 
 
-def _parent_id(lib: ctypes.WinDLL, inst: wintypes.DWORD) -> str | None:
+def _parent_id(lib: ctypes.CDLL, inst: wintypes.DWORD) -> str | None:
     parent = wintypes.DWORD()
     rc = lib.CM_Get_Parent(ctypes.byref(parent), inst, 0)
     return _device_id(lib, parent) if rc == _CR_SUCCESS else None
 
 
-def _address(lib: ctypes.WinDLL, inst: wintypes.DWORD) -> int | None:
+def _address(lib: ctypes.CDLL, inst: wintypes.DWORD) -> int | None:
     """`CM_DRP_ADDRESS` is the hub port number for a device whose parent is a
     hub. (For a composite interface it is the interface number instead, but
     those hang off the device, not off a hub, so they never join a hub row.)"""
@@ -308,6 +310,22 @@ def available() -> bool:
 # ---------- Public API (mirrors uhubctl's shapes) --------------------------
 
 
+def _raw_hubs() -> list[dict[str, Any]]:
+    """`--list-hubs`, parsed, with the exit code checked.
+
+    Shared by `list_hubs` and `_switch_target` so a driver failure reports
+    itself rather than surfacing later as a hub that is merely absent from
+    an empty listing.
+    """
+    result = _run(["--list-hubs"], timeout=20.0)
+    if result["exit_code"] != 0:
+        raise VhfilterError(
+            f"vhfilter --list-hubs failed (exit {result['exit_code']}): "
+            f"{result.get('stderr_tail')!r}"
+        )
+    return parse_list_hubs(result["stdout"])
+
+
 def list_hubs() -> list[dict[str, Any]]:
     """Enumerate PPPS-capable hubs with their per-port device attachments.
 
@@ -320,14 +338,7 @@ def list_hubs() -> list[dict[str, Any]]:
     port-status register is exactly the thing Windows will not let a
     user-mode caller do, which is why this backend exists at all.
     """
-    result = _run(["--list-hubs"], timeout=20.0)
-    if result["exit_code"] != 0:
-        raise VhfilterError(
-            f"vhfilter --list-hubs failed (exit {result['exit_code']}): "
-            f"{result.get('stderr_tail')!r}"
-        )
-
-    raw = parse_list_hubs(result["stdout"])
+    raw = _raw_hubs()
     attachments = usb_attachments()
 
     hubs: list[dict[str, Any]] = []
@@ -379,7 +390,7 @@ def _switch_target(location: str, port: int) -> tuple[str, str | None]:
     numbered. If a hub is ever found that renumbers between halves, pin the
     port explicitly with the MESHTASTIC_UHUBCTL_LOCATION_/_PORT_ env vars.
     """
-    hubs = parse_list_hubs(_run(["--list-hubs"], timeout=20.0)["stdout"])
+    hubs = _raw_hubs()
     by_location = {hub["location"].upper(): hub for hub in hubs}
     current = by_location.get(location.upper())
     if current is None:
