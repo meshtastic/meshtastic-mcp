@@ -40,6 +40,19 @@ reads the connect bit out of the hub's own port-status register, whereas
 here presence comes from the OS PnP tree. Windows tears a devnode down off
 the hub's connect-change interrupt, so it is prompt, but it is still the
 OS's view rather than the hub's.
+
+Hardware gotchas, both of which make a switch report success and do
+nothing, and neither of which the hub will tell us about:
+
+- Hubs with per-port mechanical switches (the Rosonway RSH-A37S this was
+  developed against has seven latching ones) wire them in series with the
+  controller's power switching. A disengaged latch holds the port dead no
+  matter what PPPS is told, so `power_on` returns success and the device
+  never comes back. If a port will not wake, check the physical switch
+  before suspecting this code.
+- USB Selective Suspend powers an idle hub down entirely, and it then
+  never sees the request; that one at least surfaces as error 0x000003e3
+  and is translated below.
 """
 
 from __future__ import annotations
@@ -382,7 +395,13 @@ def _switch_target(location: str, port: int) -> tuple[str, str | None]:
 
 
 def switch_port(location: str, port: int, on: bool) -> dict[str, Any]:
-    """Drive a single port's VBUS. `location` is the hub's PnP device path."""
+    """Drive a single port's VBUS. `location` is the hub's PnP device path.
+
+    A success here means the hub accepted the request, not that the port
+    changed state: a disengaged mechanical port switch overrides PPPS
+    silently. Callers that need to know a device actually came back should
+    poll `device_on_port` rather than trust this return.
+    """
     target, redirected_from = _switch_target(location, port)
     state = "on" if on else "off"
     result = _run(["--switch-port", str(port), state, target], timeout=30.0)
