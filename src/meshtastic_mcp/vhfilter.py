@@ -104,7 +104,13 @@ def _device_id_list(lib: ctypes.WinDLL, enumerator: str = "USB") -> list[str]:
         != _CR_SUCCESS
     ):
         return []
-    return [s for s in buf[: size.value].split("\0") if s]
+    # The buffer is a NUL-separated, double-NUL-terminated multi-string, so
+    # `buf.value` is no good: it would stop at the first id. Slicing the
+    # array yields the whole thing at runtime but is typed as `list[str]`,
+    # hence `wstring_at`, which reads a fixed character count and keeps the
+    # embedded NULs.
+    blob = ctypes.wstring_at(ctypes.addressof(buf), size.value)
+    return [s for s in blob.split("\0") if s]
 
 
 def _devnode(lib: ctypes.WinDLL, device_id: str) -> wintypes.DWORD | None:
