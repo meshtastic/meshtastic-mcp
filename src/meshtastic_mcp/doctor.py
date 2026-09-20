@@ -37,6 +37,7 @@ from . import capabilities, config
 # ---------------------------------------------------------------------------
 _IS_MAC = sys.platform == "darwin"
 _IS_LINUX = sys.platform.startswith("linux")
+_IS_WINDOWS = sys.platform == "win32"
 
 
 def _pkg(mac: str, debian: str = "", *, note: str = "") -> str:
@@ -802,10 +803,88 @@ def _gh_auth_check() -> Check:
     return Check("gh-auth", "nightly-report", STATUS_OK, needed, detail=path)
 
 
+_VHFILTER_URL = "https://www.virtualhere.com/sites/default/files/usbserver/vhfilterexe/vhfilter.exe"
+
+
+def _vhfilter_check(needed: str) -> Check:
+    """Windows stand-in for the uhubctl check.
+
+    uhubctl cannot switch port power on Windows at any version, so looking
+    for it there only produces a misleading `apt install` hint. What is
+    checked instead is VirtualHere's `vhfilter.exe` plus its kernel filter
+    driver, which needs an elevated install and a reboot before it does
+    anything — a binary on PATH alone is not enough, so a registered but
+    not-yet-started service is reported as degraded rather than ok.
+    """
+    path = _which("vhfilter") or os.environ.get("MESHTASTIC_VHFILTER_BIN")
+    install = (
+        f"curl -o vhfilter.exe {_VHFILTER_URL}\n"
+        "# then from an ELEVATED prompt:\n"
+        "vhfilter --install-filter   # and reboot afterwards"
+    )
+    if not path:
+        return Check(
+            "vhfilter",
+            "observability",
+            STATUS_MISSING,
+            needed,
+            detail="uhubctl cannot drive port power on Windows; vhfilter replaces it",
+            fix=install,
+            env_override="MESHTASTIC_VHFILTER_BIN",
+        )
+
+    driver = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "drivers"
+    if not (driver / "vhfilter.sys").is_file():
+        return Check(
+            "vhfilter",
+            "observability",
+            STATUS_DEGRADED,
+            needed,
+            detail=f"{path} found but the filter driver is not installed",
+            fix="vhfilter --install-filter   # elevated, then reboot",
+            env_override="MESHTASTIC_VHFILTER_BIN",
+        )
+
+    # The driver only attaches to the hub stack at boot, so a freshly
+    # installed filter reports as present but switches nothing until then.
+    try:
+        res = subprocess.run([path, "--list-hubs"], capture_output=True, text=True, timeout=20)
+        hub_lines = [ln for ln in res.stdout.splitlines() if ln.strip().startswith("USB\\")]
+        if not hub_lines:
+            return Check(
+                "vhfilter",
+                "observability",
+                STATUS_OK,
+                needed,
+                detail=f"{path} (no PPPS-capable hub detected — plug one in to use)",
+                env_override="MESHTASTIC_VHFILTER_BIN",
+            )
+        return Check(
+            "vhfilter",
+            "observability",
+            STATUS_OK,
+            needed,
+            detail=f"{path} ({len(hub_lines)} PPPS hub(s) visible)",
+            env_override="MESHTASTIC_VHFILTER_BIN",
+        )
+    except Exception:
+        return Check(
+            "vhfilter",
+            "observability",
+            STATUS_OK,
+            needed,
+            detail=path,
+            env_override="MESHTASTIC_VHFILTER_BIN",
+        )
+
+
 def _uhubctl_check() -> Check:
     """Check uhubctl presence *and* whether it works without root (udev rules)."""
-    path = _which("uhubctl") or os.environ.get("MESHTASTIC_UHUBCTL_BIN")
     needed = "USB power-cycle fault injection / flash recovery (optional)"
+    if _IS_WINDOWS:
+        return _vhfilter_check(needed)
+
+    path = _which("uhubctl") or os.environ.get("MESHTASTIC_UHUBCTL_BIN")
 
     if not path:
         return Check(

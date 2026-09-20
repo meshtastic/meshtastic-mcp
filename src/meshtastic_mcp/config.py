@@ -285,3 +285,21 @@ def uhubctl_bin() -> Path:
         "with certain hubs, you may need to run via `sudo`: "
         "https://github.com/mvp/uhubctl#linux-usb-permissions",
     )
+
+
+def vhfilter_bin() -> Path:
+    """VirtualHere's `vhfilter.exe` — the Windows stand-in for uhubctl.
+
+    uhubctl cannot drive port power on Windows at all (libusb goes through
+    `winusb.sys`, which will not pass hub-class control requests), so on
+    Windows the `uhubctl_*` tools route through this instead. It needs its
+    kernel filter driver installed once, from an elevated prompt, followed
+    by a reboot.
+    """
+    return _hw_tool(
+        "MESHTASTIC_VHFILTER_BIN",
+        ("vhfilter.exe", "vhfilter"),
+        "Download it from "
+        "https://www.virtualhere.com/sites/default/files/usbserver/vhfilterexe/vhfilter.exe "
+        "then, from an elevated prompt, run `vhfilter --install-filter` and reboot.",
+    )

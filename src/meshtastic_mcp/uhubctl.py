@@ -28,16 +28,31 @@ driver quirks) still needs it. We run uhubctl non-root; if stderr
 matches the classic permission pattern we raise `UhubctlError` with an
 install hint pointing at the uhubctl docs. Auto-wrapping with `sudo`
 would prompt in the middle of test runs — bad for CI.
+
+Windows: uhubctl itself cannot work there — libusb talks to devices
+through `winusb.sys`, which will not pass the hub-class control requests
+that per-port power switching is made of, and every documented way around
+that is closed (see `vhfilter.py`). So on Windows the two primitives that
+touch the hub — `list_hubs` and `_action` — delegate to VirtualHere's
+`vhfilter.exe`, which drives the same PPPS hardware through a kernel
+filter driver. Everything layered on top (`find_port_for_vid`,
+`device_on_port`, `resolve_target`, the role/env pinning) is written
+against those two and so is platform-independent. Failures are
+re-raised as `UhubctlError` to keep one exception type at the tool
+boundary.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import sys
 from collections.abc import Sequence
 from typing import Any
 
 from . import config, hw_tools
+
+_IS_WINDOWS = sys.platform == "win32"
 
 # ---------- Parser ---------------------------------------------------------
 
@@ -174,7 +189,19 @@ def list_hubs() -> list[dict[str, Any]]:
 
     Pure read — no power state changes. Useful as a pre-flight check before
     a destructive `power_off` call.
+
+    On Windows this is `vhfilter --list-hubs` joined against the PnP tree;
+    the record shape is identical, except that every hub listed is PPPS by
+    construction and the raw port-status register is not readable.
     """
+    if _IS_WINDOWS:
+        from . import vhfilter
+
+        try:
+            return vhfilter.list_hubs()
+        except vhfilter.VhfilterError as exc:
+            raise UhubctlError(str(exc)) from exc
+
     result = _run_uhubctl([], timeout=15.0)
     if result["exit_code"] != 0:
         raise UhubctlError(
@@ -303,6 +330,16 @@ def _action(
     delay_s: int | None = None,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
+    if _IS_WINDOWS:
+        from . import vhfilter
+
+        try:
+            if action == "cycle":
+                return vhfilter.cycle(location, port, delay_s=delay_s or 2)
+            return vhfilter.switch_port(location, port, on=action == "on")
+        except vhfilter.VhfilterError as exc:
+            raise UhubctlError(str(exc)) from exc
+
     args: list[str] = ["-a", action, "-l", location, "-p", str(port)]
     if delay_s is not None:
         args.extend(["-d", str(delay_s)])
