@@ -46,6 +46,7 @@ content `logs_window` returns. See `SECURITY.md`.
 from __future__ import annotations
 
 import os
+import shutil
 import struct
 import subprocess
 import threading
@@ -140,10 +141,12 @@ def sniffer_bin() -> Path:
     for bin_dir in bin_dirs:
         for name in _SNIFFER_BIN_NAMES:
             p = bin_dir / name
-            if p.is_file():
+            # Execute bit checked here too, matching `config._hw_tool` and the env
+            # branch above. A non-executable file would otherwise be selected, and
+            # `capture_start` would return a running job whose worker then dies on
+            # `Popen`'s PermissionError — a failure the caller cannot see coming.
+            if p.is_file() and os.access(p, os.X_OK):
                 return p
-
-    import shutil
 
     for name in _SNIFFER_BIN_NAMES:
         found = shutil.which(name)
@@ -318,6 +321,10 @@ _SNIFFER_PROTOVER = 3
 # add a v2 branch in `_parse_meta` if a legacy dongle ever needs supporting.
 """
 
+_MIN_META_LEN = 10
+"""Smallest packet-metadata block `_parse_meta` can read: it decodes through
+offset 16, which is 10 bytes from the block's start at offset 7."""
+
 
 @dataclass(frozen=True)
 class SniffedPacket:
@@ -424,7 +431,13 @@ def _parse_meta(raw: bytes, epoch_s: float) -> tuple[SniffedPacket, bytes] | Non
     protover = raw[3]
     meta_len = raw[7]
     ble_at = 7 + meta_len
-    if protover != _SNIFFER_PROTOVER or ble_at > len(raw):
+    # `meta_len` is checked as well as `ble_at`: a corrupt or truncated block
+    # shorter than the fields read below would have flags/channel/RSSI/timestamp
+    # decoded out of BLE link-layer bytes, and the link layer taken from the wrong
+    # offset. A garbage flags bit 0 reads as CRC-OK, which would let the record
+    # create an advertiser row — the outcome `summarize`'s CRC exclusion exists to
+    # prevent. Count it as unparsed instead.
+    if protover != _SNIFFER_PROTOVER or meta_len < _MIN_META_LEN or ble_at > len(raw):
         return None
     flags = raw[8]
     meta = SniffedPacket(

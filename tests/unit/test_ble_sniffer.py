@@ -17,6 +17,7 @@ the parser, resolution) plus the guards, with `jobs` stubbed.
 
 from __future__ import annotations
 
+import os
 import struct
 from pathlib import Path
 
@@ -284,6 +285,17 @@ def test_unknown_protover_is_skipped_not_misparsed(tmp_path):
     assert summary["packets"] == 0, "a layout we cannot read must be dropped, not guessed at"
 
 
+def test_short_metadata_block_is_skipped_not_misparsed(tmp_path):
+    """A pseudo-header claiming a metadata block shorter than the fields the parser
+    reads would have flags/channel/RSSI/timestamp decoded out of BLE link-layer
+    bytes, and a garbage CRC-OK bit could then admit a fabricated advertiser."""
+    truncated = bytearray(_nordic(_adv(0x00, bytes.fromhex("010203040506"))))
+    truncated[7] = 2  # claims a 2-byte metadata block; the parser reads 10
+    summary = ble_sniffer.summarize(_write(tmp_path, bytes(truncated)))
+    assert summary["packets"] == 0
+    assert summary["advertisers"] == []
+
+
 def test_wrong_link_type_is_rejected(tmp_path):
     path = tmp_path / "wrong.pcap"
     path.write_bytes(_pcap(FRAME_NAMED, linktype=1))  # LINKTYPE_ETHERNET
@@ -330,8 +342,25 @@ def test_nrfutil_home_is_searched_for_the_plugin(tmp_path, monkeypatch):
     bin_dir.mkdir()
     plugin = bin_dir / "nrfutil-ble-sniffer"
     plugin.write_text("#!/bin/sh\n")
+    plugin.chmod(0o755)
     monkeypatch.setenv(ble_sniffer.NRFUTIL_HOME_ENV, str(tmp_path))
     assert ble_sniffer.sniffer_bin() == plugin
+
+
+def test_a_non_executable_plugin_is_not_selected(tmp_path, monkeypatch):
+    """The directory branches check the execute bit too, like the env branch and
+    `config._hw_tool`. Otherwise `capture_start` returns a running job whose worker
+    then dies on Popen's PermissionError, which the caller cannot see coming."""
+    if os.name == "nt":
+        pytest.skip("Windows has no execute bit for os.access(..., X_OK) to test")
+    monkeypatch.delenv(ble_sniffer.SNIFFER_BIN_ENV, raising=False)
+    monkeypatch.setenv(ble_sniffer.NRFUTIL_HOME_ENV, str(tmp_path))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "nrfutil-ble-sniffer").write_text("#!/bin/sh\n")  # left mode 0644
+    monkeypatch.setattr(ble_sniffer.shutil, "which", lambda name: None)
+    with pytest.raises(ble_sniffer.BleSnifferError, match="Could not find"):
+        ble_sniffer.sniffer_bin()
 
 
 def test_resolve_port_without_hardware_explains_itself(monkeypatch):
