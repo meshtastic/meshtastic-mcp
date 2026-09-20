@@ -335,7 +335,9 @@ def _action(
 
         try:
             if action == "cycle":
-                return vhfilter.cycle(location, port, delay_s=delay_s or 2)
+                # Not `delay_s or 2`: the tool surface accepts delay_s=0 and
+                # that must stay 0, not silently become a 2 second wait.
+                return vhfilter.cycle(location, port, delay_s=2 if delay_s is None else delay_s)
             return vhfilter.switch_port(location, port, on=action == "on")
         except vhfilter.VhfilterError as exc:
             raise UhubctlError(str(exc)) from exc

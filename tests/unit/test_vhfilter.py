@@ -302,3 +302,84 @@ def test_list_hubs_is_consumable_by_the_uhubctl_helpers() -> None:
                 assert uhubctl.device_on_port(SS_STAGE2, 1) is False
                 with pytest.raises(uhubctl.UhubctlError, match="no port 9"):
                     uhubctl.device_on_port(SS_STAGE2, 9)
+
+
+# --- enumeration failures must not read as "device absent" -----------------
+
+
+class _FakeCfgmgr:
+    """Minimal cfgmgr32 stand-in driven by a scripted CONFIGRET sequence."""
+
+    def __init__(self, size_rc=0, list_rcs=(0,), ids=(r"USB\VID_1234&PID_5678\AAA",)):
+        self.size_rc = size_rc
+        self.list_rcs = list(list_rcs)
+        self.ids = ids
+        self.list_calls = 0
+
+    def CM_Get_Device_ID_List_SizeW(self, size_ptr, flt, flags):
+        if self.size_rc == 0:
+            size_ptr._obj.value = sum(len(i) + 1 for i in self.ids) + 1
+        return self.size_rc
+
+    def CM_Get_Device_ID_ListW(self, flt, buf, size, flags):
+        rc = self.list_rcs[min(self.list_calls, len(self.list_rcs) - 1)]
+        self.list_calls += 1
+        if rc == 0:
+            blob = "\0".join(self.ids) + "\0\0"
+            buf[: len(blob)] = blob
+        return rc
+
+
+def test_device_id_list_raises_instead_of_reporting_an_empty_bus() -> None:
+    """A cfgmgr32 failure must not look like "no USB devices attached".
+
+    `list_hubs` would turn an empty list into ports with no attachment, and
+    `device_on_port` reads that as nothing plugged in. A caller polling for
+    absence after a power cut would then pass having never seen a
+    disconnect. Absence has to be observed, not inferred from a failure.
+    """
+    with pytest.raises(vhfilter.VhfilterError, match="CM_Get_Device_ID_List_SizeW"):
+        vhfilter._device_id_list(_FakeCfgmgr(size_rc=0x16))
+
+    with pytest.raises(vhfilter.VhfilterError, match="CM_Get_Device_ID_ListW"):
+        vhfilter._device_id_list(_FakeCfgmgr(list_rcs=(0x16,)))
+
+
+def test_device_id_list_retries_when_the_buffer_grew_under_it() -> None:
+    """The size query and the fetch are not atomic; CR_BUFFER_SMALL means a
+    device appeared in between, so re-query rather than return a short list."""
+    lib = _FakeCfgmgr(list_rcs=(vhfilter._CR_BUFFER_SMALL, 0))
+    assert vhfilter._device_id_list(lib) == [r"USB\VID_1234&PID_5678\AAA"]
+    assert lib.list_calls == 2
+
+
+def test_device_id_list_gives_up_if_it_never_gets_a_stable_snapshot() -> None:
+    lib = _FakeCfgmgr(list_rcs=(vhfilter._CR_BUFFER_SMALL,))
+    with pytest.raises(vhfilter.VhfilterError, match="grew on every one of"):
+        vhfilter._device_id_list(lib)
+    assert lib.list_calls == vhfilter._ID_LIST_ATTEMPTS
+
+
+def test_enumeration_failure_propagates_out_of_device_on_port() -> None:
+    """End to end: the raise must reach the caller rather than being
+    flattened into False somewhere in the layers above."""
+    from meshtastic_mcp import uhubctl
+
+    with patch.object(vhfilter, "_run", return_value=_result(LIST_HUBS)):
+        with patch.object(
+            vhfilter, "usb_attachments", side_effect=vhfilter.VhfilterError("cfgmgr32 exploded")
+        ):
+            with patch.object(uhubctl, "_IS_WINDOWS", True):
+                with pytest.raises(uhubctl.UhubctlError, match="cfgmgr32 exploded"):
+                    uhubctl.device_on_port(SS_STAGE1, 1)
+
+
+def test_cycle_keeps_an_explicit_zero_delay() -> None:
+    """`delay_s=0` is inside the tool surface's documented 0..60 range and
+    must not be rewritten to the default."""
+    from meshtastic_mcp import uhubctl
+
+    with patch.object(uhubctl, "_IS_WINDOWS", True):
+        with patch.object(vhfilter, "cycle", return_value={}) as cyc:
+            uhubctl.cycle(SS_STAGE1, 1, delay_s=0)
+    assert cyc.call_args.kwargs["delay_s"] == 0

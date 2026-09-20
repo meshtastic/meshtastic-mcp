@@ -847,35 +847,54 @@ def _vhfilter_check(needed: str) -> Check:
 
     # The driver only attaches to the hub stack at boot, so a freshly
     # installed filter reports as present but switches nothing until then.
+    # A probe that cannot run is not a healthy probe. Reporting ok here would
+    # tell someone their power-cycle path is fine when it is unusable, which
+    # is the one thing a doctor must not do.
     try:
         res = subprocess.run([path, "--list-hubs"], capture_output=True, text=True, timeout=20)
-        hub_lines = [ln for ln in res.stdout.splitlines() if ln.strip().startswith("USB\\")]
-        if not hub_lines:
-            return Check(
-                "vhfilter",
-                "observability",
-                STATUS_OK,
-                needed,
-                detail=f"{path} (no PPPS-capable hub detected — plug one in to use)",
-                env_override="MESHTASTIC_VHFILTER_BIN",
-            )
+    except Exception as exc:
+        return Check(
+            "vhfilter",
+            "observability",
+            STATUS_DEGRADED,
+            needed,
+            detail=f"{path} could not be run: {type(exc).__name__}: {exc}".strip()[:300],
+            fix="check MESHTASTIC_VHFILTER_BIN points at a working vhfilter.exe",
+            env_override="MESHTASTIC_VHFILTER_BIN",
+        )
+
+    if res.returncode != 0:
+        return Check(
+            "vhfilter",
+            "observability",
+            STATUS_DEGRADED,
+            needed,
+            detail=(
+                f"{path} --list-hubs exited {res.returncode}: "
+                f"{(res.stderr or res.stdout or '').strip()[:200]}"
+            ),
+            fix="vhfilter --install-filter   # elevated, then reboot",
+            env_override="MESHTASTIC_VHFILTER_BIN",
+        )
+
+    hub_lines = [ln for ln in res.stdout.splitlines() if ln.strip().startswith("USB\\")]
+    if not hub_lines:
         return Check(
             "vhfilter",
             "observability",
             STATUS_OK,
             needed,
-            detail=f"{path} ({len(hub_lines)} PPPS hub(s) visible)",
+            detail=f"{path} (no PPPS-capable hub detected — plug one in to use)",
             env_override="MESHTASTIC_VHFILTER_BIN",
         )
-    except Exception:
-        return Check(
-            "vhfilter",
-            "observability",
-            STATUS_OK,
-            needed,
-            detail=path,
-            env_override="MESHTASTIC_VHFILTER_BIN",
-        )
+    return Check(
+        "vhfilter",
+        "observability",
+        STATUS_OK,
+        needed,
+        detail=f"{path} ({len(hub_lines)} PPPS hub(s) visible)",
+        env_override="MESHTASTIC_VHFILTER_BIN",
+    )
 
 
 def _uhubctl_check() -> Check:

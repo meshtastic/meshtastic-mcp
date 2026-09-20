@@ -77,8 +77,12 @@ class VhfilterError(RuntimeError):
 # ---------- PnP enumeration (cfgmgr32) -------------------------------------
 
 _CR_SUCCESS = 0
+_CR_BUFFER_SMALL = 0x1A
 _CM_DRP_ADDRESS = 0x1D
 _CM_GETIDLIST_FILTER_ENUMERATOR = 0x00000001
+
+# Attempts at a consistent device-list snapshot before giving up.
+_ID_LIST_ATTEMPTS = 3
 
 _VIDPID_RE = re.compile(r"VID_([0-9A-Fa-f]{4})&PID_([0-9A-Fa-f]{4})")
 
@@ -92,27 +96,42 @@ def _cfgmgr() -> ctypes.CDLL:
 
 
 def _device_id_list(lib: ctypes.CDLL, enumerator: str = "USB") -> list[str]:
-    """Every device instance id under the `USB` enumerator."""
-    size = wintypes.ULONG()
+    """Every device instance id under the `USB` enumerator.
+
+    Raises rather than returning `[]` on a cfgmgr32 failure. An empty list
+    means "no USB devices", and `list_hubs` turns that into ports with no
+    attachment, which `device_on_port` reads as "nothing plugged in". A
+    caller polling for absence after a power cut would take an enumeration
+    blip as proof the device went away, and pass having never observed a
+    disconnect. Absence has to be observed, not inferred from a failure.
+    """
     flt = ctypes.c_wchar_p(enumerator)
-    if (
-        lib.CM_Get_Device_ID_List_SizeW(ctypes.byref(size), flt, _CM_GETIDLIST_FILTER_ENUMERATOR)
-        != _CR_SUCCESS
-    ):
-        return []
-    buf = ctypes.create_unicode_buffer(size.value)
-    if (
-        lib.CM_Get_Device_ID_ListW(flt, buf, size.value, _CM_GETIDLIST_FILTER_ENUMERATOR)
-        != _CR_SUCCESS
-    ):
-        return []
-    # The buffer is a NUL-separated, double-NUL-terminated multi-string, so
-    # `buf.value` is no good: it would stop at the first id. Slicing the
-    # array yields the whole thing at runtime but is typed as `list[str]`,
-    # hence `wstring_at`, which reads a fixed character count and keeps the
-    # embedded NULs.
-    blob = ctypes.wstring_at(ctypes.addressof(buf), size.value)
-    return [s for s in blob.split("\0") if s]
+    # The size query and the fetch are not atomic: devices can appear in
+    # between, and cfgmgr32 then reports CR_BUFFER_SMALL instead of
+    # truncating. Re-query rather than returning a short list.
+    for _ in range(_ID_LIST_ATTEMPTS):
+        size = wintypes.ULONG()
+        rc = lib.CM_Get_Device_ID_List_SizeW(
+            ctypes.byref(size), flt, _CM_GETIDLIST_FILTER_ENUMERATOR
+        )
+        if rc != _CR_SUCCESS:
+            raise VhfilterError(f"CM_Get_Device_ID_List_SizeW failed (CONFIGRET 0x{rc:08x})")
+        buf = ctypes.create_unicode_buffer(size.value)
+        rc = lib.CM_Get_Device_ID_ListW(flt, buf, size.value, _CM_GETIDLIST_FILTER_ENUMERATOR)
+        if rc == _CR_SUCCESS:
+            # A NUL-separated, double-NUL-terminated multi-string, so
+            # `buf.value` is no good: it would stop at the first id. Slicing
+            # the array yields the whole thing at runtime but is typed as
+            # `list[str]`, hence `wstring_at`, which reads a fixed character
+            # count and keeps the embedded NULs.
+            blob = ctypes.wstring_at(ctypes.addressof(buf), size.value)
+            return [s for s in blob.split("\0") if s]
+        if rc != _CR_BUFFER_SMALL:
+            raise VhfilterError(f"CM_Get_Device_ID_ListW failed (CONFIGRET 0x{rc:08x})")
+    raise VhfilterError(
+        f"the USB device list grew on every one of {_ID_LIST_ATTEMPTS} attempts; "
+        "cannot read a consistent snapshot"
+    )
 
 
 def _devnode(lib: ctypes.CDLL, device_id: str) -> wintypes.DWORD | None:
