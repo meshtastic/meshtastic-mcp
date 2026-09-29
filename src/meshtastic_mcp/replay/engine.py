@@ -74,6 +74,10 @@ START2 = 0xC3
 NONCE_CONFIG = 69420
 NONCE_DB = 69421
 
+# A radio's want-config carries every channel slot, unused ones DISABLED; strict clients
+# (Apple) refuse a channel set that is missing any slot.
+MAX_CHANNELS = 8
+
 # Synthetic observer node the app connects "as" (must not collide with capture).
 # Overridable so multiple replay instances can present distinct radios (node num, device id,
 # and the mDNS identity all derive from this) — required for driving app node-SWITCH flows.
@@ -634,6 +638,12 @@ class ReplaySession:
                 fr.channel.role = channel_pb2.Channel.Role.SECONDARY
                 fr.channel.settings.psk = bytes([(0x10 + idx) & 0xFF] * 16)
                 fr.channel.settings.name = name
+            send(fr)
+        for idx in range(len(self.capture.channels), MAX_CHANNELS):
+            fr = mesh_pb2.FromRadio()
+            fr.channel.index = idx
+            fr.channel.role = channel_pb2.Channel.Role.DISABLED
+            fr.channel.settings.SetInParent()
             send(fr)
 
         fr = mesh_pb2.FromRadio()

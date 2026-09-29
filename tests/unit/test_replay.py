@@ -20,7 +20,7 @@ import time
 from collections import Counter
 
 import pytest
-from meshtastic.protobuf import mesh_pb2, portnums_pb2, telemetry_pb2
+from meshtastic.protobuf import channel_pb2, mesh_pb2, portnums_pb2, telemetry_pb2
 
 from meshtastic_mcp.replay import Capture, ReplayParams, ReplaySession, capture, fuzz, sim
 from meshtastic_mcp.replay import engine as replay_engine
@@ -166,11 +166,28 @@ def test_session_handshake_and_stream():
         assert my_node is not None
         # observer + all generated nodes streamed during the DB phase
         assert node_infos >= len(cap.nodes)
-        assert variants["channel"] == len(cap.channels)
+        assert variants["channel"] == replay_engine.MAX_CHANNELS
         assert packets >= 1
         assert sess.state.packets_sent >= packets
     finally:
         sess.stop()
+
+
+def test_config_phase_sends_every_channel_slot():
+    """Unused slots arrive as DISABLED, so a strict client gets the full 0-7 set."""
+    cap = sim.generate(nodes=5, days=1, seed=11, start=1_700_000_000)
+    assert len(cap.channels) < replay_engine.MAX_CHANNELS
+    sess = ReplaySession("slots", cap, ReplayParams(host="127.0.0.1", port=0, node_delay=0))
+    frames: list[mesh_pb2.FromRadio] = []
+    sess._send_config_phase(frames.append, 1)
+
+    channels = [f.channel for f in frames if f.HasField("channel")]
+    assert [c.index for c in channels] == list(range(replay_engine.MAX_CHANNELS))
+    disabled = channel_pb2.Channel.Role.DISABLED
+    used = len(cap.channels)
+    assert all(c.role != disabled for c in channels[:used])
+    assert all(c.role == disabled for c in channels[used:])
+    assert all(c.HasField("settings") for c in channels)
 
 
 def test_observer_local_stats_precede_bulk_database():
