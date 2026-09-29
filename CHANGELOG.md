@@ -5,7 +5,12 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-29
+
 ### Added
+- **MCP Registry listing** - a `v*` tag now also publishes `server.json` to the official MCP
+  Registry as `io.github.meshtastic/meshtastic-mcp`, stamped with the tag's version. The
+  README carries the `mcp-name` line the registry checks on PyPI to prove ownership.
 - **BLE sniffer capture** (`ble_sniffer` capability + one core tool) — watch the
   phone-to-node BLE link from outside both ends with an nRF Sniffer for Bluetooth LE dongle.
   This is the independent oracle for the one failure neither end reports honestly: the app
@@ -136,6 +141,9 @@ All notable changes are documented here. Format loosely follows
   `achieved_rate`, so a stress run is self-verifying.
 
 ### Fixed
+- **Replay sends every channel slot** - want-config sent only the capture's channels, so the
+  Apple app refused the incomplete set and showed nodes but no messages. Unused slots now
+  arrive `DISABLED`, as they do from a radio.
 - **`discord_channels` listed channels the bot cannot read** — `GET /guilds/{id}/channels`
   returns the whole guild regardless of the bot's permissions, so the tool advertised every
   channel while claiming to list "readable" ones. On the Meshtastic server that meant all 235,
