@@ -45,6 +45,9 @@ uv tool install 'meshtastic-mcp[ui]'       # includes camera/OCR support
 uv tool install meshtastic-mcp
 # other extras: [web] FleetSuite bench UI · [sdr] RF-compliance oracle · [test] pytest harness
 
+# Unreleased master, straight from git (no build step):
+uv tool install 'meshtastic-mcp[ui] @ git+https://github.com/meshtastic/meshtastic-mcp'
+
 # Install from a local checkout (dev):
 uv tool install --editable '/path/to/meshtastic-mcp[ui]'
 
@@ -64,6 +67,16 @@ meshtastic-mcp skills uninstall         # remove them
 right config path per `--client` (claude-code / claude-desktop / cursor / windsurf) and `--scope`
 (user / project), or pass `--config PATH`. Add capability env vars with `--env KEY=VALUE`.
 Restart the MCP client to pick up the change.
+
+### Updating
+
+```bash
+uv tool upgrade meshtastic-mcp        # PyPI install: latest release
+uv tool install 'meshtastic-mcp[ui] @ git+https://github.com/meshtastic/meshtastic-mcp'   # git install: re-run to take master's head
+git -C /path/to/meshtastic-mcp pull   # editable install: re-run its install when dependencies change
+```
+
+The MCP client keeps running the old server until you restart it.
 
 ### Source repos (optional capabilities)
 

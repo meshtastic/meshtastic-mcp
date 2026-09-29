@@ -187,6 +187,7 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
 ```bash
 # Install (end-user / CI)
 uv tool install 'meshtastic-mcp[ui]'       # installs meshtastic-mcp on PATH
+uv tool upgrade meshtastic-mcp             # update to the latest release; restart the MCP client after
 
 # Dev install (editable, picks up source changes immediately)
 uv tool install --editable '/path/to/meshtastic-mcp[ui]'
