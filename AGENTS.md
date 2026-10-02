@@ -13,7 +13,10 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 - **core** (always registered): `devices`, `serial_session`, `registry`, `connection`
   (serial + TCP), `info`, `admin`, `recorder/` + `log_query`, `replay/` (simulated-device
   streaming + `sim` synthetic mesh + `fuzz` adversary layer), `inject` (frame injection into
-  real hardware — see below), `input_events`, `camera`/`ocr`, `uhubctl`, `hw_tools`,
+  real hardware — see below), `input_events`, `camera`/`ocr`, `display_mirror`
+  (`capture_display` — the device's own framebuffer over the phone API, the on-device
+  counterpart to the webcam `capture_screen`; needs firmware with screen-mirror
+  support), `uhubctl`, `hw_tools`,
   `cot_relay/` (ATAK/iTAK CoT capture + N-way relay — `cot_relay_*`; pure stdlib, so core).
 - **firmware capability** (needs `MESHTASTIC_FIRMWARE_ROOT` + `pio`): `flash`, `boards`,
   `userprefs`, `pio`, `fixtures`.
@@ -92,10 +95,10 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
 decorator (`_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled tools only when
-`CAPS.firmware` is active — 65 always-on tools (includes the 3 power-meter tools,
+`CAPS.firmware` is active — 66 always-on tools (includes the 3 power-meter tools,
 `vanity_preview`/`vanity_apply` and `ble_sniff_status`, always registered); +14 android,
 +17 firmware, +2 sdr, +3 mvgrind, +3 ble-sniffer, and the apple/sdk-cli/local-model gates
-on top (≈129 with everything active).
+on top (≈130 with everything active).
 Counts drift — `doctor` and the startup log are the source of truth.
 
 **Provisioning:** `doctor.py` (the `doctor` MCP tool / `meshtastic-mcp doctor` CLI) probes every
