@@ -313,7 +313,7 @@ flash_start(env="tbeam", port=<port>, confirm=True)   # then flash_poll(job_id)
 ```
 recorder_status()                   # confirm capture is running (auto-starts on open)
 logs_window(port=<port>, start="-5m")       # last 5 min of log lines
-events_window(start="-5m")                  # mesh events (TX/RX/node-change)
+events_window(start="-5m")                  # connection lifecycle, node updates, marks
 telemetry_timeline(port=<port>, window="1h")  # battery/environment over time
 ```
 
