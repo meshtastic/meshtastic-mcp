@@ -14,7 +14,7 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   (serial + TCP), `info`, `admin`, `recorder/` + `log_query`, `replay/` (simulated-device
   streaming + `sim` synthetic mesh + `fuzz` adversary layer), `inject` (frame injection into
   real hardware — see below), `input_events`, `camera`/`ocr`, `uhubctl`, `hw_tools`,
-  `cot_relay/` (ATAK/iTAK CoT capture + N-way relay — `cot_relay_*`; pure stdlib, so core).
+  `replay/cot_relay.py` (ATAK/iTAK CoT capture + N-way relay — `cot_relay_*`; pure stdlib, so core).
 - **firmware capability** (needs `MESHTASTIC_FIRMWARE_ROOT` + `pio`): `flash`, `boards`,
   `userprefs`, `pio`, `fixtures`.
 - **android capability** (needs `android` + `adb`): `emulator/` native-node + AVD
@@ -150,9 +150,8 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   is a single checkout, and clients set it identically for every session and
   every worktree on the machine — so concurrent agents build in one `.pio`
   tree. PlatformIO rewrites `project.checksum` and cleans `.pio/build/*` when
-  the env changes, so another session's build silently deletes yours: on
-  2026-08-26 a finished 8-minute `seeed-xiao-s3` artifact vanished between
-  `build_poll` returning `done` and the next `ls`. Treat a `done` build as
+  the env changes, so another session's build silently deletes yours, even
+  between `build_poll` returning `done` and the next `ls`. Treat a `done` build as
   perishable — flash immediately, don't re-poll and assume. Before a
   multi-device session, check for other builders (`pgrep -af 'pio run'`).
 - **One MCP call per serial port** (non-blocking exclusive lock): open → act → close.
@@ -226,7 +225,7 @@ MESHTASTIC_FIRMWARE_ROOT=/path/to/firmware uv run --extra test python -m pytest 
 
 ## Common workflows
 
-These are the canonical happy paths. Follow them in order — skipping steps is the #1 source of agent errors.
+These are the canonical happy paths. Where a step depends on an earlier one (`set_debug_log_api` before `send_text`, `reboot` after `set_config`), keep that order.
 
 **Discover and inspect a device**
 
@@ -296,7 +295,7 @@ use `want_ack=True` on a direct message, or observe on a second node.
 **Read or write config**
 ```
 get_config(port=<port>, section="lora")     # read — safe, no side effects
-set_config(port=<port>, section="lora", config={…})  # write — requires confirm=True
+set_config(path="lora.region", value="US", port=<port>)  # write one field by dot-path
 reboot(port=<port>, confirm=True)           # commit NVS — needed after set_config
 get_config(port=<port>, section="lora")     # verify round-trip
 ```
@@ -306,16 +305,16 @@ get_config(port=<port>, section="lora")     # verify round-trip
 doctor()                            # check every dep including source repo roots
 # fix_commands lists both binary installs and git clone commands
 # or: shell out to `meshtastic-mcp provision` to clone all three repos at once
-build(env="tbeam", confirm=True)
-pio_flash(port=<port>, env="tbeam", confirm=True)
+build_start(env="tbeam")            # then build_poll(job_id) until done
+flash_start(env="tbeam", port=<port>, confirm=True)   # then flash_poll(job_id)
 ```
 
 **Diagnose a device with the recorder**
 ```
-recorder_status(port=<port>)        # confirm capture is running (auto-starts on open)
+recorder_status()                   # confirm capture is running (auto-starts on open)
 logs_window(port=<port>, start="-5m")       # last 5 min of log lines
-events_window(port=<port>, start="-5m")     # mesh events (TX/RX/node-change)
-telemetry_timeline(port=<port>, start="-1h")  # battery/environment over time
+events_window(start="-5m")                  # mesh events (TX/RX/node-change)
+telemetry_timeline(port=<port>, window="1h")  # battery/environment over time
 ```
 
 **Serve a simulated mesh to an app (replay — the recorder's inverse)**
@@ -367,8 +366,8 @@ logs_window(port=P, start="-30m",  end="-10m",  max_lines=200)   # sweep the ear
 `list_nodes` is unbounded (returns all peers). On large meshes (80+ nodes) this can be
 slow; call it once and cache, don't poll.
 
-`build` is synchronous and blocks for the full PlatformIO compile (typically 2–5 minutes).
-No progress is streamed; plan accordingly and don't set a short timeout.
+`build` is synchronous and blocks for the full PlatformIO compile (typically 2–5 minutes),
+past the 60 s MCP call limit; use `build_start` + `build_poll`.
 
 ## Physical Android vs. emulator
 
@@ -412,6 +411,6 @@ These will produce flaky, slow, or incorrect results:
 - **Confirming a local send with `packets_window`.** A self-originated packet never reaches that stream — the library drops the firmware's echo as "a packet we sent" — so it reads as failure on a working mesh. Use `wait_for_tx=True` with `set_debug_log_api(True)`, and treat `tx_confirmed: null` as "not observable", not "failed". See *Send a message and confirm delivery*.
 - **Calling a firmware tool without checking `doctor()` first.** If `MESHTASTIC_FIRMWARE_ROOT` is unset, firmware tools are not registered at all. Call `doctor()` on first failure; parse `fix_commands` and surface them to the user.
 - **Omitting `confirm=True` on destructive tools then retrying.** The confirm gate is intentional — don't loop-retry without it. Surface the confirmation requirement to the user.
-- **Letting a test suite reach the bench.** Anything that shells out to a real `pio run -t upload` can flash an attached board, and an *invalid* `--upload-port` is the guaranteed trigger for PlatformIO's auto-detect fallback — most dangerous exactly when the port doesn't exist. Real incidents: a `meshnology_w10` 16 MB image boot-looping an 8 MB Heltec Wireless Tracker V2 (2026-08-25, fixed in #73), and a unit-test run in a worktree orphaning a `pio run -t upload --upload-port /dev/cu.usbmodem1201` (a macOS path) to `systemd --user` on Linux (2026-08-26). Mock the subprocess; never let a port string a test invented reach `pio`.
+- **Letting a test suite reach the bench.** Anything that shells out to a real `pio run -t upload` can flash an attached board, and an *invalid* `--upload-port` is the guaranteed trigger for PlatformIO's auto-detect fallback — most dangerous exactly when the port doesn't exist. A stray upload flashes whatever board answers, wrong image included, and can outlive the test run as an orphaned process. Mock the subprocess; never let a port string a test invented reach `pio`.
 - **Assuming the recorder has data immediately.** It starts capturing when a serial session opens. If you just opened the port, query with `start="-5s"` and check `line_count > 0` before asserting content.
 - **Using `serial_open`/`serial_read`/`serial_close` for admin work.** Those are low-level transport tools for raw byte inspection. Use the admin tools (`get_config`, `send_text`, `device_info`, etc.) which manage the session for you.
