@@ -114,7 +114,7 @@ def _derive_tx_linger_s(ctx: dict[str, Any]) -> float:
             channel_name=ctx.get("channel_name", ""),
             channel_num=ctx.get("channel_num", 0),
             use_preset=ctx.get("use_preset", True),
-            bandwidth_khz=ctx.get("bandwidth"),
+            bandwidth=ctx.get("bandwidth"),
             spread_factor=ctx.get("spread_factor"),
             coding_rate=ctx.get("coding_rate"),
             override_frequency_mhz=ctx.get("override_frequency", 0.0),

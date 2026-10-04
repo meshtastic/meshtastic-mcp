@@ -145,7 +145,7 @@ def test_resolve_band_mhz_real_region_names() -> None:
     assert power_meter.nearest_freq_index(pa_sweep.resolve_band_mhz("US")) == 4  # -> 900 MHz curve
     assert pa_sweep.resolve_band_mhz("EU_868") == pytest.approx((869.4 + 869.65) / 2)
     assert power_meter.nearest_freq_index(pa_sweep.resolve_band_mhz("EU_868")) == 3  # -> 868
-    assert pa_sweep.resolve_band_mhz("EU_433") == pytest.approx(433.5)
+    assert pa_sweep.resolve_band_mhz("EU_433") == pytest.approx((433.05 + 434.79) / 2)
     assert power_meter.nearest_freq_index(pa_sweep.resolve_band_mhz("EU_433")) == 2  # -> 433
 
 
@@ -353,12 +353,12 @@ def test_derive_tx_linger_scales_with_preset() -> None:
         "device_role": "CLIENT",
     }
     fast = pa_sweep._derive_tx_linger_s({**base, "region": "US", "modem_preset": "LONG_FAST"})
-    slow = pa_sweep._derive_tx_linger_s({**base, "region": "US", "modem_preset": "LONG_SLOW"})
+    slow = pa_sweep._derive_tx_linger_s({**base, "region": "US", "modem_preset": "LONG_MODERATE"})
     # politeness (~4 s) + airtime + margin: a fast preset is single-digit seconds,
-    # LONG_SLOW is much longer (its ~200 B airtime alone is ~12 s).
+    # LONG_MODERATE (SF11 at 125 kHz, CR 4/8) is longer (its ~200 B airtime alone is ~6 s).
     assert 5.0 < fast < 10.0
     assert slow > fast
-    assert slow > 12.0
+    assert slow > 11.0
 
 
 def test_derive_tx_linger_falls_back_on_bad_ctx() -> None:

@@ -4,9 +4,9 @@
 """Correctness of the firmware region/preset → RF-parameter port.
 
 No hardware, no firmware checkout needed — these pin the pure-Python port in
-`lora_compliance.py` against hand-derived values from the firmware source it
-mirrors (see that module's docstring for file:line citations), so a future
-re-sync with upstream has a regression net.
+`lora_compliance.py`, which reads the registry the meshtastic package bundles,
+against values from the 3.0 region-layout conformance table that firmware's
+`test_slot_plan` suite pins too.
 """
 
 from __future__ import annotations
@@ -46,9 +46,10 @@ def test_eu_868_narrow_band_and_duty_cycle() -> None:
     assert pred.power_limit_dbm == 27
 
 
-def test_eu_866_duty_cycle_is_role_dependent() -> None:
-    mobile = lc.predict_lora_params("EU_866", "LITE_FAST", device_role="CLIENT")
-    router = lc.predict_lora_params("EU_866", "LITE_FAST", device_role="ROUTER")
+@pytest.mark.parametrize("region", ["EU_866", "EU_874", "EU_917"])
+def test_eu_data_network_duty_cycle_is_role_dependent(region: str) -> None:
+    mobile = lc.predict_lora_params(region, "LITE_FAST", device_role="CLIENT")
+    router = lc.predict_lora_params(region, "LITE_FAST", device_role="ROUTER_LATE")
     assert mobile.duty_cycle_pct == 2.5
     assert router.duty_cycle_pct == 10.0
 
@@ -68,10 +69,62 @@ def test_frequency_offset_is_additive() -> None:
 
 
 def test_explicit_channel_num_resolves_slot_deterministically() -> None:
-    # channel_num is 1-based on the wire; slot 1 -> resolved channel_num 0 -> band edge + half BW.
+    # channel_num is 1-based on the wire. 26 MHz holds exactly 104 slots of 250 kHz; edge
+    # clearance drops one, and centring puts slot 1 a full bandwidth above the band edge.
     pred = lc.predict_lora_params("US", "LONG_FAST", channel_num=1)
     assert pred.channel_num == 0
-    assert pred.freq_mhz == pytest.approx(902.0 + 250.0 / 2000.0)
+    assert pred.num_freq_slots == 103
+    assert pred.freq_mhz == pytest.approx(902.25)
+
+
+@pytest.mark.parametrize(
+    ("region", "preset", "slots", "first_mhz"),
+    [
+        ("JP", "MEDIUM_FAST", 7, 920.7),  # raster: a two-channel bond centre, not 920.8
+        ("JP", "NARROW_FAST", 15, 920.6),
+        ("EU_866", "LITE_FAST", 4, 865.7),
+        ("EU_917", "LITE_FAST", 6, 917.375),
+        ("PH_868", "LONG_MODERATE", 8, 868.1125),
+        ("EU_N_868", "NARROW_SLOW", 3, 869.4417),
+        ("ITU1_2M", "TINY_FAST", 100, 144.01),
+        ("LORA_24", "LONG_FAST", 102, 2400.71875),
+    ],
+)
+def test_slot_plan_matches_the_conformance_table(
+    region: str, preset: str, slots: int, first_mhz: float
+) -> None:
+    pred = lc.predict_lora_params(region, preset, channel_num=1)
+    assert pred.num_freq_slots == slots
+    assert pred.freq_mhz == pytest.approx(first_mhz, abs=1e-6)
+
+
+def test_sub_band_slots_skip_the_gap() -> None:
+    # EU_917 slot 4 is the first of the upper block, past the 917.7-918.5 MHz gap
+    pred = lc.predict_lora_params("EU_917", "LITE_FAST", channel_num=4)
+    assert pred.freq_mhz == pytest.approx(918.575, abs=1e-6)
+
+
+def test_custom_bandwidth_code_is_nominal_hertz() -> None:
+    # Code 200 is 203.125 kHz; LORA_24 then has 411 slots with half-hertz centres
+    pred = lc.predict_lora_params(
+        "LORA_24",
+        "LONG_FAST",
+        use_preset=False,
+        bandwidth=200,
+        spread_factor=7,
+        coding_rate=5,
+        channel_num=1,
+    )
+    assert pred.bw_khz == 203.125
+    assert pred.num_freq_slots == 411
+    assert pred.freq_mhz == pytest.approx(2400.109375, abs=1e-7)
+
+
+def test_custom_bandwidth_without_a_slot_raises() -> None:
+    with pytest.raises(ValueError):
+        lc.predict_lora_params(
+            "EU_874", "LITE_FAST", use_preset=False, bandwidth=250, spread_factor=9, coding_rate=5
+        )
 
 
 def test_wide_lora_region_uses_wide_bandwidth_table() -> None:

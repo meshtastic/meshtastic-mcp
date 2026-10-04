@@ -70,7 +70,7 @@ _MIN_SAFE_SAMPLE_RATE_HZ = 2_048_000.0
 def read_lora_context(port: str | None = None) -> dict[str, Any]:
     """One `connect()` round-trip: everything `lora_compliance.predict_lora_params`
     needs, read straight off a live device — configured LoRa settings, device
-    role (for the EU_866 duty-cycle split), and the primary channel's name
+    role (for the EU data-network duty-cycle split), and the primary channel's name
     (empty string if unset, matching firmware's own default-name fallback).
     """
     with connect(port=port) as iface:
@@ -106,7 +106,7 @@ def _predict_from_context(ctx: dict[str, Any]) -> lora_compliance.PredictedRf:
         channel_name=ctx["channel_name"],
         channel_num=ctx["channel_num"],
         use_preset=ctx["use_preset"],
-        bandwidth_khz=ctx["bandwidth"],
+        bandwidth=ctx["bandwidth"],
         spread_factor=ctx["spread_factor"],
         coding_rate=ctx["coding_rate"],
         override_frequency_mhz=ctx["override_frequency"],
