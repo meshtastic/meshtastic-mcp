@@ -11,27 +11,26 @@ unconditionally.
 from __future__ import annotations
 
 import pytest
-from meshtastic.protobuf import packet_pb2
+from meshtastic.protobuf import packet_pb2, portnums_pb2
 
 from meshtastic_mcp.replay import metrics, sim, tak
 
 requires_tak = pytest.mark.skipif(not tak.available(), reason="[tak] extra not installed")
 
 
-# ATAK_PLUGIN (legacy v1) and ATAK_PLUGIN_V2 (compressed v2) portnums.
-TAK_V1_PORT = 72
-TAK_V2_PORT = 78
+# 3.0 has one TAK portnum; the v1 (uncompressed) and v2 (compressed) wires share it.
+TAK_PORT = portnums_pb2.PortNum.ATAK_PLUGIN
 
 
-def _tak_payloads(cap, port=None):
-    """Yield decoded TAK payloads; ``port`` filters to a specific TAK portnum."""
+def _tak_payloads(cap):
+    """Yield decoded TAK payloads."""
     for _t, raw, _ch in cap.packets:
         mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
         if mp.WhichOneof("payload_variant") != "decoded":
             continue
         pn = mp.decoded.portnum
-        if pn in (TAK_V1_PORT, TAK_V2_PORT) and (port is None or pn == port):
+        if pn == TAK_PORT:
             yield mp.decoded.payload
 
 
@@ -112,11 +111,9 @@ def test_sim_v2_emits_valid_lora_sized_wire():
     prof = {"tak": {"team_nodes": 4, "pli_interval": 60, "chat_per_hour": 3, "wire": "v2"}}
     cap = sim.generate(nodes=150, days=1, seed=8, start=1_700_000_000, profile=prof)
     assert metrics.capture_stats(cap)["tak_packets"] > 0
-    # v2 wire must ride ATAK_PLUGIN_V2 (78), not the legacy ATAK_PLUGIN (72)
-    assert not list(_tak_payloads(cap, port=TAK_V1_PORT))
     decoder = TakCompressor()
     sizes = []
-    for payload in _tak_payloads(cap, port=TAK_V2_PORT):
+    for payload in _tak_payloads(cap):
         pkt = decoder.decompress(payload)  # SDK-native decode of sim output
         assert pkt.uid.startswith("MESH-")
         sizes.append(len(payload))
@@ -138,15 +135,12 @@ def test_v1_and_v2_wire_differ():
     v2 = sim.generate(
         nodes=80, days=1, seed=4, start=1_700_000_000, profile={"tak": {**common, "wire": "v2"}}
     )
-    v1_payloads = list(_tak_payloads(v1, port=TAK_V1_PORT))
-    v2_payloads = list(_tak_payloads(v2, port=TAK_V2_PORT))
+    v1_payloads = list(_tak_payloads(v1))
+    v2_payloads = list(_tak_payloads(v2))
     assert v1_payloads and v2_payloads
-    # v1 rides portnum 72, v2 rides 78 (no crossover)
-    assert not list(_tak_payloads(v1, port=TAK_V2_PORT))
-    assert not list(_tak_payloads(v2, port=TAK_V1_PORT))
-    # legacy payloads parse as V1 TAKPacket with a nested contact callsign
+    # v1 payloads parse as an uncompressed TAKPacket with a callsign
     legacy = atak_pb2.TAKPacket()
     legacy.ParseFromString(v1_payloads[0])
-    assert legacy.contact.callsign
+    assert legacy.callsign
     # the v2 wire is a different byte-shape (1-byte dict id + zstd body)
     assert v2_payloads[0] != v1_payloads[0]

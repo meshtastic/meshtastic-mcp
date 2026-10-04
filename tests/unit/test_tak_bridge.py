@@ -5,7 +5,7 @@
 
 Meshtastic apps (≥2.8) run an in-app local TAK server that bridges mesh TAK
 traffic to a connected ATAK/iTAK client: it decompresses the TAKPacketV2 wire
-(portnum 78) and rebuilds a Cursor-on-Target (CoT) XML event over the TAK
+(ATAK_PLUGIN) and rebuilds a Cursor-on-Target (CoT) XML event over the TAK
 stream. These tests take the *exact* v2 payloads our sim emits and run them
 through the SDK's decompress → CoT-XML build path — i.e. what the bridge does —
 asserting the resulting CoT is well-formed and carries the right identity,
@@ -26,14 +26,14 @@ from meshtastic_mcp.replay import metrics, sim, tak
 
 requires_tak = pytest.mark.skipif(not tak.available(), reason="[tak] extra not installed")
 
-TAK_V2_PORT = 78
+TAK_PORT = portnums_pb2.PortNum.ATAK_PLUGIN
 
 
 def _v2_payloads(cap):
     for _t, raw, _ch in cap.packets:
         mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
-        if mp.WhichOneof("payload_variant") == "decoded" and mp.decoded.portnum == TAK_V2_PORT:
+        if mp.WhichOneof("payload_variant") == "decoded" and mp.decoded.portnum == TAK_PORT:
             yield mp.decoded.payload
 
 
@@ -142,7 +142,7 @@ _ATAK_GEOCHAT = (
 @requires_tak
 def test_atak_cot_converts_to_mesh_wire_send_leg():
     """Send leg (TAK client -> mesh): an ATAK-authored CoT becomes a valid
-    portnum-78 mesh payload that decompresses back to the same identity/pos."""
+    ATAK_PLUGIN mesh payload that decompresses back to the same identity/pos."""
     wire = tak.cot_to_wire(_ATAK_PLI)
     assert 0 < len(wire) <= 184  # LoRa-sized after mesh stripping
     pkt = tak.decompress(wire)
@@ -150,12 +150,12 @@ def test_atak_cot_converts_to_mesh_wire_send_leg():
     assert pkt.callsign == "RANGER-1"
     assert abs(pkt.latitude_i - 407_900_000) <= 1
     assert abs(pkt.longitude_i - -1_192_100_000) <= 1
-    # and it rides ATAK_PLUGIN_V2 (78) on the wire
+    # and it rides ATAK_PLUGIN, the one 3.0 TAK port, on the wire
     mp = packet_pb2.MeshPacket()
     setattr(mp, "from", 0x1234)
-    mp.decoded.portnum = 78
+    mp.decoded.portnum = TAK_PORT
     mp.decoded.payload = wire
-    assert mp.decoded.portnum == portnums_pb2.PortNum.ATAK_PLUGIN
+    assert mp.decoded.payload == wire
 
 
 @requires_tak

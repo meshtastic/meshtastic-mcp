@@ -154,7 +154,7 @@ def cot_to_wire(cot_xml: str, *, strip_for_mesh: bool = True) -> bytes:
     """Convert an ATAK/iTAK-authored CoT event to a mesh TAKPacketV2 wire payload.
 
     What an app's TAK server does when a connected client sends a marker/PLI/
-    GeoChat: parse → (strip) → compress. The bytes belong on portnum 78
-    (``ATAK_PLUGIN_V2``).
+    GeoChat: parse → (strip) → compress. The bytes belong on ``ATAK_PLUGIN``,
+    the one 3.0 TAK portnum.
     """
     return compress(parse_cot(cot_xml, strip_for_mesh=strip_for_mesh))

@@ -107,7 +107,8 @@ def test_telemetry_attributed_to_originating_node():
         {
             "from": 0x11,
             "decoded": {
-                "telemetry": {"deviceMetrics": {"batteryLevel": 91, "channelUtilization": 4.5}}
+                # 3.0 sends channel utilization in hundredths of a percent
+                "telemetry": {"deviceMetrics": {"batteryLevel": 91, "channelUtilization": 450}}
             },
         },
         interface=FakeIface("/dev/a"),
