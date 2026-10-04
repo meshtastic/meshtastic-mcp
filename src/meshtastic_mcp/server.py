@@ -1464,10 +1464,10 @@ def userprefs_testing_profile(
         channel_name: primary channel name (≤11 chars). Default "McpTest".
         channel_num: 1-indexed LoRa slot (0 = fall back to name-hash). Default
             88 — mid-upper US band, unlikely to collide with production slots.
-        region: short code — one of US, EU_433, EU_868, CN, JP, ANZ, KR, TW,
-            RU, IN, NZ_865, TH, UA_433, UA_868, MY_433, MY_919, SG_923, LORA_24.
-        modem_preset: one of LONG_FAST, LONG_SLOW, LONG_MODERATE, VERY_LONG_SLOW,
-            MEDIUM_SLOW, MEDIUM_FAST, SHORT_SLOW, SHORT_FAST, SHORT_TURBO.
+        region: RegionCode name without REGION_ (US, EU_868, EU_917, JP, ...);
+            any region in the bundled region registry except UNSET.
+        modem_preset: ModemPreset name without MODEM_ (LONG_FAST, MEDIUM_FAST,
+            SHORT_TURBO, ...); any preset in the bundled preset registry.
         short_name: optional owner short name (≤4 chars) stamped into the build.
         long_name: optional owner long name stamped into the build.
         disable_mqtt: disable MQTT module + uplink/downlink (default True).

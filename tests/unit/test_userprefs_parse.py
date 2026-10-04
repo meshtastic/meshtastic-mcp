@@ -22,7 +22,7 @@ from meshtastic_mcp import userprefs
 def sample_jsonc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Write a minimal userPrefs.jsonc into tmp_path and point config at it."""
     content = """{
-  "USERPREFS_CONFIG_LORA_REGION": "meshtastic_Config_LoRaConfig_RegionCode_US",
+  "USERPREFS_CONFIG_LORA_REGION": "meshtastic_RegionCode_REGION_US",
   "USERPREFS_LORACONFIG_CHANNEL_NUM": "88",
   // "USERPREFS_CHANNEL_0_NAME": "McpTest",
   "USERPREFS_CHANNEL_0_PSK": "{ 0x01, 0x02, 0x03 }",
@@ -60,7 +60,7 @@ def test_infer_type_matches_platformio_custom_py() -> None:
     assert userprefs.infer_type("-1.5") == "number"
     assert userprefs.infer_type("true") == "bool"
     assert userprefs.infer_type("false") == "bool"
-    assert userprefs.infer_type("meshtastic_Config_DeviceConfig_Role_ROUTER") == "enum"
+    assert userprefs.infer_type("meshtastic_Role_ROUTER") == "enum"
     assert userprefs.infer_type("plain string value") == "string"
     assert userprefs.infer_type(None) == "unknown"
 

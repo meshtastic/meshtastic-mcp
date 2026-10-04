@@ -67,8 +67,9 @@ def test_testing_profile_contains_expected_keys() -> None:
     assert required <= set(profile.keys())
 
     # Defaults from the plan
-    assert profile["USERPREFS_CONFIG_LORA_REGION"].endswith("_US")
-    assert profile["USERPREFS_LORACONFIG_MODEM_PRESET"].endswith("_LONG_FAST")
+    # The 3.0 C enum symbols; the 2.x meshtastic_Config_LoRaConfig_* names no longer compile
+    assert profile["USERPREFS_CONFIG_LORA_REGION"] == "meshtastic_RegionCode_REGION_US"
+    assert profile["USERPREFS_LORACONFIG_MODEM_PRESET"] == "meshtastic_ModemPreset_MODEM_LONG_FAST"
     assert profile["USERPREFS_LORACONFIG_CHANNEL_NUM"] == 88
     assert profile["USERPREFS_CHANNEL_0_NAME"] == "McpTest"
 
@@ -76,6 +77,15 @@ def test_testing_profile_contains_expected_keys() -> None:
 def test_testing_profile_rejects_unknown_region() -> None:
     with pytest.raises(ValueError, match="Unknown region"):
         userprefs.build_testing_profile(region="ATLANTIS")
+
+
+def test_testing_profile_offers_every_registry_region() -> None:
+    profile = userprefs.build_testing_profile(region="EU_917", modem_preset="LITE_FAST")
+    assert profile["USERPREFS_CONFIG_LORA_REGION"] == "meshtastic_RegionCode_REGION_EU_917"
+    assert profile["USERPREFS_LORACONFIG_MODEM_PRESET"] == "meshtastic_ModemPreset_MODEM_LITE_FAST"
+    for retired in ("UA_433", "UA_868", "UNSET"):
+        assert retired not in userprefs.KNOWN_REGIONS
+    assert "LONG_SLOW" not in userprefs.KNOWN_MODEM_PRESETS
 
 
 def test_testing_profile_rejects_unknown_modem_preset() -> None:
@@ -103,7 +113,7 @@ def test_disable_mqtt_false_drops_mqtt_keys() -> None:
 
 def test_disable_position_adds_gps_disabled() -> None:
     profile = userprefs.build_testing_profile(psk_seed="x", disable_position=True)
-    assert profile["USERPREFS_CONFIG_GPS_MODE"].endswith("_DISABLED")
+    assert profile["USERPREFS_CONFIG_GPS_MODE"] == "meshtastic_PositionConfig_GpsMode_DISABLED"
     assert profile["USERPREFS_CONFIG_SMART_POSITION_ENABLED"] is False
 
 

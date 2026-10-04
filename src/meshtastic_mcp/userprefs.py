@@ -39,7 +39,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from . import config
+from . import config, lora_compliance
 
 USERPREFS_FILE = "userPrefs.jsonc"
 BACKUP_SUFFIX = ".mcp.bak"
@@ -346,39 +346,16 @@ def generate_psk(seed: str | None = None) -> str:
     return _psk_from_bytes(raw)
 
 
-# Meshtastic region enum name → short description (for the manifest tool).
-# Not exhaustive; these are the regions a US-based test lab is likely to pick.
+# Short region / preset code -> the C enum symbol userPrefs.jsonc takes. Every
+# region and preset in the protobufs registry the meshtastic package bundles.
 KNOWN_REGIONS = {
-    "US": "meshtastic_Config_LoRaConfig_RegionCode_US",
-    "EU_433": "meshtastic_Config_LoRaConfig_RegionCode_EU_433",
-    "EU_868": "meshtastic_Config_LoRaConfig_RegionCode_EU_868",
-    "CN": "meshtastic_Config_LoRaConfig_RegionCode_CN",
-    "JP": "meshtastic_Config_LoRaConfig_RegionCode_JP",
-    "ANZ": "meshtastic_Config_LoRaConfig_RegionCode_ANZ",
-    "KR": "meshtastic_Config_LoRaConfig_RegionCode_KR",
-    "TW": "meshtastic_Config_LoRaConfig_RegionCode_TW",
-    "RU": "meshtastic_Config_LoRaConfig_RegionCode_RU",
-    "IN": "meshtastic_Config_LoRaConfig_RegionCode_IN",
-    "NZ_865": "meshtastic_Config_LoRaConfig_RegionCode_NZ_865",
-    "TH": "meshtastic_Config_LoRaConfig_RegionCode_TH",
-    "UA_433": "meshtastic_Config_LoRaConfig_RegionCode_UA_433",
-    "UA_868": "meshtastic_Config_LoRaConfig_RegionCode_UA_868",
-    "MY_433": "meshtastic_Config_LoRaConfig_RegionCode_MY_433",
-    "MY_919": "meshtastic_Config_LoRaConfig_RegionCode_MY_919",
-    "SG_923": "meshtastic_Config_LoRaConfig_RegionCode_SG_923",
-    "LORA_24": "meshtastic_Config_LoRaConfig_RegionCode_LORA_24",
+    name: f"meshtastic_RegionCode_REGION_{name}"
+    for name in lora_compliance.REGIONS
+    if name != "UNSET"
 }
 
 KNOWN_MODEM_PRESETS = {
-    "LONG_FAST": "meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST",
-    "LONG_SLOW": "meshtastic_Config_LoRaConfig_ModemPreset_LONG_SLOW",
-    "LONG_MODERATE": "meshtastic_Config_LoRaConfig_ModemPreset_LONG_MODERATE",
-    "VERY_LONG_SLOW": "meshtastic_Config_LoRaConfig_ModemPreset_VERY_LONG_SLOW",
-    "MEDIUM_SLOW": "meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_SLOW",
-    "MEDIUM_FAST": "meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_FAST",
-    "SHORT_SLOW": "meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW",
-    "SHORT_FAST": "meshtastic_Config_LoRaConfig_ModemPreset_SHORT_FAST",
-    "SHORT_TURBO": "meshtastic_Config_LoRaConfig_ModemPreset_SHORT_TURBO",
+    name: f"meshtastic_ModemPreset_MODEM_{name}" for name in lora_compliance.PRESETS
 }
 
 
@@ -467,7 +444,7 @@ def build_testing_profile(
     if disable_position:
         prefs.update(
             {
-                "USERPREFS_CONFIG_GPS_MODE": "meshtastic_Config_PositionConfig_GpsMode_DISABLED",
+                "USERPREFS_CONFIG_GPS_MODE": "meshtastic_PositionConfig_GpsMode_DISABLED",
                 "USERPREFS_CONFIG_SMART_POSITION_ENABLED": False,
             }
         )

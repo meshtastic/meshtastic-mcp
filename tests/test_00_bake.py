@@ -206,10 +206,12 @@ def _bake_role(
             # A device sharing region/name but flashed with a different slot or preset must
             # NOT be treated as already baked — and if either value can't be observed on this
             # device, fall through and bake rather than risk a false-positive skip.
-            expected_region_short = test_profile["USERPREFS_CONFIG_LORA_REGION"].rsplit("_", 1)[-1]
+            expected_region_short = test_profile["USERPREFS_CONFIG_LORA_REGION"].rsplit(
+                "REGION_", 1
+            )[-1]
             expected_channel_num = test_profile["USERPREFS_LORACONFIG_CHANNEL_NUM"]
             expected_modem_preset = test_profile["USERPREFS_LORACONFIG_MODEM_PRESET"].rsplit(
-                "ModemPreset_", 1
+                "MODEM_", 1
             )[-1]
             if (
                 live.get("region") == expected_region_short
