@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
@@ -1552,8 +1552,8 @@ wheels = [
 
 [[package]]
 name = "meshtastic"
-version = "2.7.9"
-source = { registry = "https://pypi.org/simple" }
+version = "2.7.11"
+source = { git = "https://github.com/meshtastic/python.git?rev=trident#8af25a4d7f93311ead5a25358c38225d4275223a" }
 dependencies = [
     { name = "bleak" },
     { name = "packaging" },
@@ -1563,10 +1563,6 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "tabulate" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3d/c8/d1ef12b2e02a61202a1a21344a23746d5dfa4e9298e5c6d5dabdc0b87097/meshtastic-2.7.9.tar.gz", hash = "sha256:e56c20a0ce816fa302ddb2e6aa0390cb32f0d0e017803716c0048904f92706d1", size = 350430, upload-time = "2026-06-09T02:01:52.939Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/43/7d/35de57753e947214bbeb17f9c85ca7f6231fbdca933255b3d844833ab814/meshtastic-2.7.9-py3-none-any.whl", hash = "sha256:6e4c4c58cd392469e88df1a86abcdebff942ac15520963fac500a4296ed87675", size = 401826, upload-time = "2026-06-09T02:01:50.848Z" },
 ]
 
 [[package]]
@@ -1649,7 +1645,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.110" },
     { name = "fastmcp", specifier = ">=3.4.5,<4" },
     { name = "mcp", specifier = ">=1.2" },
-    { name = "meshtastic", specifier = ">=2.7.8" },
+    { name = "meshtastic", git = "https://github.com/meshtastic/python.git?rev=trident" },
     { name = "meshtastic-tak", marker = "extra == 'tak'", git = "https://github.com/meshtastic/TAKPacket-SDK.git?subdirectory=python" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "numpy", marker = "extra == 'sdr'", specifier = ">=1.26" },
