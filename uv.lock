@@ -1553,7 +1553,7 @@ wheels = [
 [[package]]
 name = "meshtastic"
 version = "2.7.11"
-source = { git = "https://github.com/meshtastic/python.git?rev=trident#d8cee7d6be31d23b9bd9f5c654e35ea1205fa2ee" }
+source = { git = "https://github.com/meshtastic/python.git?rev=trident#ccde9f97bb45bfe4e9e4b5c75cecd80dd022c1b8" }
 dependencies = [
     { name = "bleak" },
     { name = "packaging" },
