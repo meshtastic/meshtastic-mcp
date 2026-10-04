@@ -197,11 +197,9 @@ def parse_log_line(line: str) -> dict[str, Any]:
 _TELEMETRY_VARIANTS = (
     ("device_metrics", "device"),
     ("local_stats", "local"),
-    ("environment_metrics", "environment"),
-    ("power_metrics", "power"),
-    ("air_quality_metrics", "airQuality"),
-    ("health_metrics", "health"),
+    ("sensor_readings", "sensors"),  # 3.0: environment, air quality, power and health
     ("host_metrics", "host"),
+    ("traffic_management_stats", "traffic"),
 )
 
 
@@ -225,12 +223,24 @@ def extract_telemetry(packet: dict[str, Any]) -> dict[str, Any] | None:
         for key in (snake, camel):
             value = telem.get(key)
             if isinstance(value, dict):
+                raw = telem.get("raw")
+                if snake == "sensor_readings" and raw is not None:
+                    # keyed columns, not fields: the latest value of each quantity
+                    from meshtastic.util import sensor_readings_to_list
+
+                    value = sensor_readings_to_list(raw.sensor_readings, raw.time)[-1]
+                    value.pop("time", None)
                 return {
                     "variant": label,
                     "fields": {k: _scalarize(v) for k, v in value.items()},
                     "time": telem.get("time"),
                 }
     return None
+
+
+def _half_db(value: Any) -> float | None:
+    """dB from a 3.0 SNR, which travels in half-dB steps."""
+    return value / 2 if isinstance(value, (int, float)) else None
 
 
 def _snake_to_camel(name: str) -> str:
@@ -276,7 +286,7 @@ def summarize_packet(packet: dict[str, Any], *, payload_hex_len: int = 64) -> di
         "hop_limit": packet.get("hopLimit"),
         "want_ack": packet.get("wantAck"),
         "rx_rssi": packet.get("rxRssi"),
-        "rx_snr": packet.get("rxSnr"),
+        "rx_snr": _half_db(packet.get("rxSnr")),
         "channel": packet.get("channel"),
         "id": packet.get("id"),
         "payload_size": payload_size,

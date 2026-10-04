@@ -8,8 +8,12 @@ port-busy detection, and cleanup are handled uniformly.
 
 Config writes use a dot-path: the first segment names a section (e.g.
 `"lora"` in LocalConfig or `"mqtt"` in LocalModuleConfig), remaining segments
-walk protobuf fields. Enum fields accept their string names (`"US"` for
-`lora.region`) so callers don't need to know the numeric values.
+walk protobuf fields. Enum fields accept their string names (`"US"` or
+`"REGION_US"` for `lora.region`) so callers don't need to know the numeric values.
+
+3.0 packs most booleans into bitfields (`lora.flags`); each named bit reads and
+writes as if it were a bool field (`lora.tx_enabled`), and config dumps show the
+bits by name.
 """
 
 from __future__ import annotations
@@ -18,7 +22,9 @@ from typing import Any
 
 from google.protobuf import descriptor as pb_descriptor
 from google.protobuf import json_format
+from meshtastic.node import channel_role
 from meshtastic.protobuf import localonly_pb2
+from meshtastic.util import find_bit, message_to_dict
 
 from .connection import connect
 
@@ -37,6 +43,7 @@ def _require_confirm(confirm: bool, operation: str) -> None:
 
 
 def _message_to_dict(msg: Any) -> dict[str, Any]:
+    """snake_case dict of a message, every packed bitfield shown bit by bit."""
     # `including_default_value_fields` was renamed to
     # `always_print_fields_with_no_presence` in protobuf 5.26+. Pick whichever
     # kwarg the installed version accepts so we work against both.
@@ -48,7 +55,7 @@ def _message_to_dict(msg: Any) -> dict[str, Any]:
         kwargs["always_print_fields_with_no_presence"] = False
     elif "including_default_value_fields" in sig.parameters:
         kwargs["including_default_value_fields"] = False
-    return json_format.MessageToDict(msg, **kwargs)
+    return message_to_dict(msg, all_bits=True, **kwargs)
 
 
 # ---------- owner ----------------------------------------------------------
@@ -130,6 +137,9 @@ def _coerce_enum(field: pb_descriptor.FieldDescriptor, value: Any) -> int:
     if isinstance(value, str):
         upper = value.upper()
         ev = enum_type.values_by_name.get(upper)
+        if ev is None:  # a 3.0 name without its prefix: "US" for REGION_US
+            matches = [v for n, v in enum_type.values_by_name.items() if n.endswith("_" + upper)]
+            ev = matches[0] if len(matches) == 1 else None
         if ev is None:
             valid = sorted(enum_type.values_by_name.keys())
             raise AdminError(
@@ -197,6 +207,30 @@ def _walk_to_field(
     raise AdminError("Empty config path")
 
 
+def _set_bit(container: Any, path_segments: list[str], value: Any) -> tuple[bool, bool] | None:
+    """Set a named bit of a packed bitfield as if it were a bool field.
+    Returns (old, new), or None when the path names no bit."""
+    if not path_segments:
+        return None
+    msg = container
+    for name in path_segments[:-1]:
+        if name not in msg.DESCRIPTOR.fields_by_name:
+            return None
+        msg = getattr(msg, name)
+    bit = find_bit(msg.DESCRIPTOR, path_segments[-1])
+    if bit is None:
+        return None
+    field_name, mask = bit
+    word = getattr(msg, field_name)
+    on = (
+        value
+        if isinstance(value, bool)
+        else str(value).strip().lower() in ("true", "yes", "1", "on")
+    )
+    setattr(msg, field_name, word | mask if on else word & ~mask)
+    return bool(word & mask), on
+
+
 def set_config(path: str, value: Any, port: str | None = None) -> dict[str, Any]:
     """Set a single config field by dot-path and write it to the device.
 
@@ -204,7 +238,7 @@ def set_config(path: str, value: Any, port: str | None = None) -> dict[str, Any]
         set_config("lora.region", "US")
         set_config("lora.modem_preset", "LONG_FAST")
         set_config("device.role", "ROUTER")
-        set_config("mqtt.enabled", True)
+        set_config("mqtt.enabled", True)          # a named bit of mqtt.flags
         set_config("mqtt.address", "mqtt.example.com")
 
     Flash write must complete before close/DTR reset, so linger before exit.
@@ -219,7 +253,21 @@ def set_config(path: str, value: Any, port: str | None = None) -> dict[str, Any]
         container, parent_name = _section_container(node, section)
 
         # Treat the section as the root; the rest of the path walks into it.
-        leaf_parent, field = _walk_to_field(container, segments[1:] or [])
+        try:
+            leaf_parent, field = _walk_to_field(container, segments[1:] or [])
+        except AdminError:
+            bit = _set_bit(container, segments[1:], value)
+            if bit is None:
+                raise
+            node.writeConfig(section)
+            return {
+                "ok": True,
+                "path": path,
+                "section": section,
+                "parent": parent_name,
+                "old_value": bit[0],
+                "new_value": bit[1],
+            }
         # Use `is_repeated` (modern upb protobuf API) rather than the
         # deprecated `label == LABEL_REPEATED` check — the C-extension
         # FieldDescriptor in protobuf >= 5.x doesn't expose `.label` at
@@ -279,7 +327,7 @@ def set_channel_url(url: str, port: str | None = None) -> dict[str, Any]:
         # return a count; we infer by counting non-DISABLED channels after.
         iface.localNode.setURL(url)
         channels = iface.localNode.channels or []
-        active = sum(1 for c in channels if getattr(c, "role", 0) != 0)
+        active = sum(1 for c in channels if channel_role(c) != "DISABLED")
     return {"ok": True, "channels_imported": active}
 
 
@@ -317,7 +365,7 @@ def send_text(
 
 
 def set_debug_log_api(enabled: bool, port: str | None = None) -> dict[str, Any]:
-    """Toggle `config.security.debug_log_api_enabled` on the local node.
+    """Toggle `config.security.debug_log_api_enabled` (a bit of `security.flags`) on the local node.
 
     When enabled, firmware emits log lines as protobuf `LogRecord` messages
     over the StreamAPI instead of raw text. meshtastic-python surfaces them
@@ -339,7 +387,8 @@ def set_debug_log_api(enabled: bool, port: str | None = None) -> dict[str, Any]:
     """
     with connect(port=port) as iface:
         sec = iface.localNode.localConfig.security
-        sec.debug_log_api_enabled = bool(enabled)
+        bit = sec.SECURITY_DEBUG_LOG_API_ENABLED
+        sec.flags = sec.flags | bit if enabled else sec.flags & ~bit
         iface.localNode.writeConfig("security")
     return {"ok": True, "debug_log_api_enabled": bool(enabled)}
 

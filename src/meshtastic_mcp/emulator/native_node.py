@@ -93,7 +93,7 @@ class NativeNode:
         module is importable without the radio stack.
         """
         import meshtastic.tcp_interface as tcp
-        from meshtastic import config_pb2
+        from meshtastic.protobuf import common_pb2
 
         # Explicit timeout so the library's blocking waitForConfig fails fast
         # against the acknowledged boot race instead of hanging on its internal
@@ -102,8 +102,9 @@ class NativeNode:
         i = tcp.TCPInterface("127.0.0.1", portNumber=self.tcp_port, timeout=15)
         try:
             n = i.localNode
-            n.localConfig.lora.region = getattr(
-                config_pb2.Config.LoRaConfig.RegionCode, self.region
+            region = self.region.upper()
+            n.localConfig.lora.region = common_pb2.RegionCode.Value(  # type: ignore[assignment]
+                region if region.startswith("REGION_") else f"REGION_{region}"
             )
             n.localConfig.network.enabled_protocols = 1  # UDP_BROADCAST
             n.writeConfig("lora")

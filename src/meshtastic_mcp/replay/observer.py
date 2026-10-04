@@ -53,7 +53,7 @@ import random
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from meshtastic.protobuf import mesh_pb2
+from meshtastic.protobuf import packet_pb2
 
 _EARTH_RADIUS_M = 6_371_000.0
 _RSSI_MIN, _RSSI_MAX = -128, -12
@@ -135,9 +135,9 @@ def _clamp_rssi(rssi_db: float) -> int:
     return max(_RSSI_MIN, min(_RSSI_MAX, round(rssi_db)))
 
 
-def _quantize_snr(snr_db: float) -> float:
-    """Clamp to LoRa's reportable range and quantize to quarter-dB steps."""
-    return max(_SNR_MIN, min(_SNR_MAX, round(snr_db * 4.0) / 4.0))
+def _quantize_snr(snr_db: float) -> int:
+    """Quantize to MeshPacket.rx_snr's half-dB steps, inside LoRa's reportable range."""
+    return max(math.ceil(_SNR_MIN * 2.0), min(math.floor(_SNR_MAX * 2.0), round(snr_db * 2.0)))
 
 
 def observe(
@@ -175,7 +175,7 @@ def observe(
                 good = not good
                 dwell = params.fade_good_s if good else params.fade_bad_s
                 switch_t += rng.expovariate(1.0 / dwell)
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         try:
             mp.ParseFromString(raw)
         except Exception:
@@ -209,7 +209,7 @@ def observe(
             hop = orig_hop
             offset = 0.0
             for i in range(k):
-                copy = mesh_pb2.MeshPacket()
+                copy = packet_pb2.MeshPacket()
                 copy.CopyFrom(mp)
                 if i == 0:
                     # Direct copy: at most one hop consumed on the way in.
@@ -232,9 +232,9 @@ def observe(
 
         if mqtt_heard:
             # Bridged copy: no radio metadata, hop fields untouched.
-            copy = mesh_pb2.MeshPacket()
+            copy = packet_pb2.MeshPacket()
             copy.CopyFrom(mp)
-            copy.via_mqtt = True
+            copy.flags |= packet_pb2.MeshPacket.PACKET_VIA_MQTT
             rx_time = int(t + rng.uniform(0.5, 3.0))
             copy.rx_time = rx_time
             out.append((rx_time, copy.SerializeToString(), channel))

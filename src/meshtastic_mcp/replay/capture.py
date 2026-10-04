@@ -10,7 +10,9 @@ normalised to the same :class:`Capture` shape so the engine is source-agnostic:
   1. **SQLite** (`from_sqlite`) — full fidelity. Reads the schema shared by the
      Burning Man / DEF CON / MeshCon captures (`node`, `packet`, `packet_seen`),
      where ``packet.payload`` is an already-decoded ``MeshPacket`` protobuf blob.
-     This is the canonical path; DEF CON datasets drop straight in here.
+     The blob must be a 3.0 MeshPacket (as ``sim`` writes): a 2.x recording
+     encodes MeshPacket and its payloads with the 2.x field numbers and does not
+     decode under this schema.
   2. **Recorder JSONL** (`from_recorder_jsonl`) — best-effort. Reconstructs
      minimal ``MeshPacket``s from the recorder's *summaries* (`packets.jsonl`).
      Payloads beyond the recorded 64-byte hex prefix are lost, so this is good
@@ -42,7 +44,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from meshtastic.protobuf import config_pb2, mesh_pb2, portnums_pb2
+from meshtastic.protobuf import api_pb2, common_pb2, packet_pb2, portnums_pb2
+
+from .build import hw_model_value as _hw_model
 
 # MQTT topic labels that aren't real channels (PKI = public-key direct messages).
 _NON_CHANNEL_TOPICS = {"PKI"}
@@ -56,12 +60,12 @@ class NodeRow:
     node_id: str
     long_name: str | None = None
     short_name: str | None = None
-    hw_model: str | None = None
+    hw_model: str | int | None = None  # registry slug or packed number
     role: str | None = None
     lat_i: int | None = None
     lon_i: int | None = None
-    # 2.8 signed node data: the node's PKC public key (32 bytes) and whether the
-    # connected device has manually verified it. None => a pre-2.8 / keyless node.
+    # Signed node data: the node's PKC public key (32 bytes) and whether the
+    # connected device has manually verified it. None => a keyless node.
     public_key: bytes | None = None
     key_verified: bool = False
 
@@ -72,7 +76,7 @@ class ChannelSpec:
 
     ``psk`` is the real key, so an app given these specs live-decrypts the
     still-encrypted packets the engine streams. A capture packet carries its true
-    channel hash in ``MeshPacket.channel``; routing matches that against this
+    channel hash in ``MeshPacket.channel_hash``; routing matches that against this
     channel's hashes — ``ota_hashes`` if given, otherwise the hash derived from
     ``(name, psk)``. Set ``catch_all`` on one channel to receive packets whose
     hash matches nothing (e.g. an "Encrypted"/"Unknown" bucket).
@@ -230,7 +234,7 @@ def from_sqlite(
 
     When ``channel_specs`` is given (a caller-supplied list of channels, each with
     a name + PSK and optionally explicit OTA hashes), packets are routed into
-    those channels by their OTA channel hash (``MeshPacket.channel``) and the
+    those channels by their OTA channel hash (``MeshPacket.channel_hash``) and the
     engine advertises the real PSKs so the app live-decrypts encrypted packets.
     Otherwise channels come from the capture's ``packet.channel`` name column
     with placeholder keys.
@@ -290,7 +294,7 @@ def from_sqlite(
             hash_to_name = {h: s.name for s in specs for h in s.hashes()}
             catch = next((s for s in specs if s.catch_all), specs[-1])
             fallback = catch.name
-            mp = mesh_pb2.MeshPacket()
+            mp = packet_pb2.MeshPacket()
             packets = []
             for payload, _ch, rxt in cur:
                 if not payload:
@@ -300,7 +304,9 @@ def from_sqlite(
                     mp.ParseFromString(bytes(payload))
                 except Exception:
                     continue
-                packets.append((int(rxt), bytes(payload), hash_to_name.get(mp.channel, fallback)))
+                packets.append(
+                    (int(rxt), bytes(payload), hash_to_name.get(mp.channel_hash, fallback))
+                )
             cap.packets = packets
         else:
             cap.packets = [
@@ -383,7 +389,7 @@ def from_recorder_jsonl(path: str | os.PathLike[str], *, label: str | None = Non
             ts = row.get("ts") or row.get("rx_time")
             if ts is None:
                 continue
-            mp = mesh_pb2.MeshPacket()
+            mp = packet_pb2.MeshPacket()
             frm = _coerce_num(pkt.get("from_node") or pkt.get("from"))
             to = _coerce_num(pkt.get("to_node") or pkt.get("to"), default=0xFFFFFFFF) or 0xFFFFFFFF
             if frm is not None:
@@ -396,7 +402,7 @@ def from_recorder_jsonl(path: str | os.PathLike[str], *, label: str | None = Non
             if isinstance(pn, str):
                 pn = _enum(portnums_pb2.PortNum, pn)
             if pn:
-                mp.decoded.portnum = pn
+                mp.decoded.portnum = pn  # type: ignore[assignment]
             hx = pkt.get("payload_hex_prefix")
             if hx:
                 try:
@@ -430,21 +436,24 @@ def _coerce_num(v: Any, default: int | None = None) -> int | None:
 
 
 # ── Protobuf builders the engine reuses (kept here so capture owns the schema) ─
-def node_to_nodeinfo(n: NodeRow, *, last_heard: int) -> mesh_pb2.NodeInfo:
-    ni = mesh_pb2.NodeInfo()
+def node_to_nodeinfo(n: NodeRow, *, last_heard: int) -> api_pb2.NodeInfo:
+    ni = api_pb2.NodeInfo()
     ni.num = n.num & 0xFFFFFFFF
-    ni.user.id = n.node_id or f"!{ni.num:08x}"
-    ni.user.long_name = n.long_name or ni.user.id
-    ni.user.short_name = n.short_name or ni.user.id[-4:]
-    ni.user.hw_model = _enum(mesh_pb2.HardwareModel, n.hw_model)
-    ni.user.role = _enum(config_pb2.Config.DeviceConfig.Role, n.role)
-    if n.public_key:  # 2.8 signed node data: PKC key + manual-verification flag
+    node_id = n.node_id or f"!{ni.num:08x}"  # 3.0 User has no id: names default from it
+    ni.user.long_name = n.long_name or node_id
+    ni.user.short_name = n.short_name or node_id[-4:]
+    ni.user.hw_model = _hw_model(n.hw_model)
+    ni.user.role = _enum(common_pb2.Role, n.role)  # type: ignore[assignment]
+    ni.flags = common_pb2.NODE_FLAG_HAS_USER
+    if n.public_key:  # signed node data: PKC key + manual-verification flag
         ni.user.public_key = n.public_key
-        ni.is_key_manually_verified = n.key_verified
+        if n.key_verified:
+            ni.flags |= common_pb2.NODE_FLAG_IS_KEY_MANUALLY_VERIFIED
     if n.lat_i and n.lon_i:
-        ni.position.latitude_i = n.lat_i
-        ni.position.longitude_i = n.lon_i
+        ni.position.latitude = n.lat_i
+        ni.position.longitude = n.lon_i
     ni.last_heard = last_heard
     ni.hops_away = 1
-    ni.snr = 6.0
+    ni.snr = 12  # 6 dB, in half-dB steps
+    ni.flags |= common_pb2.NODE_FLAG_HAS_SNR
     return ni

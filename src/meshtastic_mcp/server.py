@@ -3068,7 +3068,7 @@ def replay_inject_beacon(
     offer_preset: str = "LONG_FAST",
     count: int = 1,
 ) -> dict[str, Any]:
-    """Inject a MESH_BEACON_APP packet (portnum 37) into a running replay session.
+    """Inject a MESH_BEACON_APP packet into a running replay session.
 
     Convenience wrapper around `replay_inject(sid, "beacon", …)` that lets the
     Apple app (and others) exercise the "Local Mesh Discovery" flow — capturing
@@ -3187,50 +3187,30 @@ def replay_inject_traceroute(
     destination_node: int,
     *,
     route: list[int] | None = None,
-    snr_towards: list[int] | None = None,
-    route_back: list[int] | None = None,
-    snr_back: list[int] | None = None,
+    request_id: int = 0,
     from_node: int | None = None,
     channel: str = "LongFast",
 ) -> dict[str, Any]:
-    """Inject a TRACEROUTE_APP RouteDiscovery packet into a running replay session.
+    """Inject a traceroute reply into a running replay session.
 
-    Convenience wrapper that lets you test the traceroute UI (hop list, SNR
-    colouring, map flyover) without real hardware.
+    3.0 has no traceroute message: a client traces a route by asking a node for a
+    reply with the path recorded (PACKET_RECORD_PATH), and the reply's path tail
+    is the route back. This injects such a reply — a device-metrics telemetry
+    packet from `destination_node` that recorded its way back through `route`
+    (relay node nums, oldest first; one synthetic relay when omitted) — so the
+    traceroute UI can be exercised without real hardware. `request_id` ties it to
+    a request the client sent.
 
-    `destination_node` is the node num the traceroute is addressed *from*
-    (i.e. the node "responding" — the source of the RouteDiscovery reply).
-    `route` is the list of node nums along the path (destination last); if
-    omitted a synthetic multi-hop route (origin → relay → destination) is used
-    so the hop-list/SNR UI has something meaningful to render. `snr_towards` /
-    `snr_back` are per-hop SNR values; if omitted realistic random values are
-    generated.
-
-    The replay engine also answers live traceroute *requests* sent by a connected
-    client automatically — this tool lets you push an unsolicited RouteDiscovery
-    to exercise the display path.
+    The replay engine also answers live path-recording requests sent by a
+    connected client automatically — this tool pushes an unsolicited reply to
+    exercise the display path.
     """
     frm = from_node if from_node is not None else destination_node
-    if route:
-        effective_route = route
-    elif frm != destination_node:
-        effective_route = [frm, destination_node]
-    else:
-        # Only session_id + destination_node given: fabricate a plausible
-        # three-hop path through a synthetic origin and relay so the client's
-        # hop list / SNR colouring has more than a single degenerate node.
-        synthetic_origin = 0x0A1B2C3D
-        synthetic_relay = 0x0A1B2C3E
-        effective_route = [synthetic_origin, synthetic_relay, destination_node]
+    relays = route if route is not None else [0x0A1B2C3E]
     pkts = [
         replay_build.from_kind(
             "traceroute",
-            {
-                "route": effective_route,
-                "snr_towards": snr_towards,
-                "route_back": route_back,
-                "snr_back": snr_back,
-            },
+            {"route": relays, "request_id": request_id},
             from_node=frm,
             to_node=replay_build.BROADCAST,
         )
@@ -3256,7 +3236,7 @@ def replay_inject_waypoint(
     channel: str = "LongFast",
     count: int = 1,
 ) -> dict[str, Any]:
-    """Inject a WAYPOINT_APP packet (portnum 8) into a running replay session.
+    """Inject a WAYPOINT_APP packet into a running replay session.
 
     Convenience wrapper with full geofence support — populates
     `geofence_radius`, `bounding_box`, `notify_on_enter`, `notify_on_exit`,
@@ -3945,7 +3925,7 @@ _DESTRUCTIVE = {
     "replay_inject_beacon",  # emits a MESH_BEACON_APP packet
     "replay_inject_client_notification",  # emits a ClientNotification FromRadio to the client
     "replay_inject_fileinfo",  # emits a FileInfo FromRadio onto the live connection
-    "replay_inject_traceroute",  # emits a TRACEROUTE_APP RouteDiscovery packet
+    "replay_inject_traceroute",  # emits a reply that recorded its path (3.0 traceroute)
     "replay_inject_waypoint",  # emits a WAYPOINT_APP packet (with optional geofence)
     "local_model_serve",  # spawns a detached llama-server process (and may install it)
     "local_model_serve_stop",  # terminates the managed llama-server process

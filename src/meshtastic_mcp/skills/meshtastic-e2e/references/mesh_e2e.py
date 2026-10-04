@@ -84,7 +84,7 @@ def cmd_recv_text(args) -> int:
                     {
                         "from": packet.get("fromId"),
                         "text": txt,
-                        "snr": packet.get("rxSnr"),
+                        "snr": packet.get("rxSnr", 0) / 2,  # half-dB steps
                         "rssi": packet.get("rxRssi"),
                     }
                 )
@@ -125,18 +125,23 @@ def cmd_watch_tx(args) -> int:
 
 
 def cmd_traceroute(args) -> int:
-    from meshtastic import mesh_pb2, portnums_pb2
+    # 3.0 has no traceroute message: ask for device metrics with the path recorded;
+    # the reply's path tail is the route back (relay_node is its last hop).
+    from meshtastic import portnums_pb2, telemetry_pb2
 
     replies: list[dict] = []
     i = _iface(args.port)
     try:
+        req = telemetry_pb2.Telemetry()
+        req.device_metrics.SetInParent()
         i.sendData(
-            mesh_pb2.RouteDiscovery(),
+            req,
             destinationId=args.dest,
-            portNum=portnums_pb2.PortNum.TRACEROUTE_APP,
+            portNum=portnums_pb2.PortNum.TELEMETRY_APP,
             wantResponse=True,
             onResponse=lambda p: replies.append(p),
             hopLimit=7,
+            recordPath=True,
         )
         t0 = time.time()
         while time.time() - t0 < args.secs and not replies:
@@ -147,15 +152,12 @@ def cmd_traceroute(args) -> int:
         print(f"FAIL traceroute {args.dest} no reply within {args.secs}s (stale/unreachable)")
         return 1
     for p in replies:
-        rd = (p.get("decoded") or {}).get("traceroute") or {}
-        toward = [hex(x) for x in rd.get("route", [])]
-        back = [hex(x) for x in rd.get("routeBack", [])]
-        snr_t = [s / 4 for s in rd.get("snrTowards", [])]
-        snr_b = [s / 4 for s in rd.get("snrBack", [])]
+        raw = p["raw"]
+        hops = raw.hop_start - raw.hop_limit
+        tail = [f"{b:02x}" for b in raw.path] + ([f"{raw.relay_node:02x}"] if hops else [])
         print(
-            f"PASS traceroute {args.dest} hops_toward={len(toward)} "
-            f"route={toward or 'direct'} snrTowards={snr_t} "
-            f"routeBack={back or 'direct'} snrBack={snr_b}"
+            f"PASS traceroute {args.dest} hops_back={hops} "
+            f"routeBack={tail or 'direct'} snr={raw.rx_snr / 2}"
         )
     return 0
 

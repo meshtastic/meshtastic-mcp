@@ -11,7 +11,7 @@ unconditionally.
 from __future__ import annotations
 
 import pytest
-from meshtastic.protobuf import mesh_pb2
+from meshtastic.protobuf import packet_pb2
 
 from meshtastic_mcp.replay import metrics, sim, tak
 
@@ -26,7 +26,7 @@ TAK_V2_PORT = 78
 def _tak_payloads(cap, port=None):
     """Yield decoded TAK payloads; ``port`` filters to a specific TAK portnum."""
     for _t, raw, _ch in cap.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
         if mp.WhichOneof("payload_variant") != "decoded":
             continue

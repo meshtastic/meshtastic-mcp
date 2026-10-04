@@ -25,32 +25,17 @@ import sqlite3
 from collections import Counter, defaultdict
 from typing import Any
 
-from meshtastic.protobuf import mesh_pb2, telemetry_pb2
+from meshtastic.protobuf import packet_pb2, portnums_pb2, telemetry_pb2, wire_pb2
+from meshtastic.util import sensor_readings_to_list
 
 from .capture import Capture
 
 BROADCAST = 0xFFFFFFFF
 SCHEMA_VERSION = 1
 
-# Friendly names for the portnums that matter here (see portnums.proto).
-PORT_NAMES = {
-    1: "TEXT_MESSAGE",
-    3: "POSITION",
-    4: "NODEINFO",
-    5: "ROUTING",
-    6: "ADMIN",
-    8: "WAYPOINT",
-    34: "PAXCOUNTER",
-    37: "MESH_BEACON",
-    65: "STORE_FORWARD",
-    66: "RANGE_TEST",
-    67: "TELEMETRY",
-    70: "TRACEROUTE",
-    71: "NEIGHBORINFO",
-    72: "ATAK_PLUGIN",
-    78: "ATAK_PLUGIN_V2",
-    257: "ATAK_FORWARDER",
-}
+# Friendly names for the portnums (see portnums.proto), without the _APP suffix.
+PortNum = portnums_pb2.PortNum
+PORT_NAMES = {n: name.removesuffix("_APP") for name, n in portnums_pb2.PortNum.items()}
 
 
 def _percentile(sorted_vals: list[float], p: float) -> float | None:
@@ -111,7 +96,7 @@ def capture_stats(cap: Capture) -> dict[str, Any]:
     pos_times: dict[int, list[int]] = defaultdict(list)
     total = encrypted = text_n = dm_text = want_resp = 0
 
-    mp = mesh_pb2.MeshPacket()
+    mp = packet_pb2.MeshPacket()
     for rxt, raw, _ch in cap.packets:
         mp.Clear()
         try:
@@ -126,7 +111,7 @@ def capture_stats(cap: Capture) -> dict[str, Any]:
         if mp.id:
             pkt_ids[mp.id] += 1
         if mp.rx_snr:
-            rx_snr.append(round(mp.rx_snr, 2))
+            rx_snr.append(mp.rx_snr / 2.0)  # half-dB steps
         if mp.rx_rssi:
             rx_rssi.append(float(mp.rx_rssi))
         if rxt > 100_000:  # ignore epoch-0 garbage rows
@@ -137,22 +122,22 @@ def capture_stats(cap: Capture) -> dict[str, Any]:
             continue
         pn = mp.decoded.portnum
         portnums[pn] += 1
-        if mp.decoded.want_response:
+        if mp.decoded.bitfield & 0x02:  # BITFIELD_WANT_RESPONSE
             want_resp += 1
-        if pn == 1:  # text
+        if pn == PortNum.TEXT_MESSAGE_APP:
             text_n += 1
             text_lens.append(float(len(mp.decoded.payload)))
             if mp.to != BROADCAST:
                 dm_text += 1
-        elif pn == 3:  # position
-            pos = mesh_pb2.Position()
+        elif pn == PortNum.POSITION_APP:
+            pos = wire_pb2.Position()
             try:
                 pos.ParseFromString(mp.decoded.payload)
             except Exception:
                 continue
             precision[pos.precision_bits] += 1
             pos_times[frm].append(rxt)
-        elif pn == 67:  # telemetry
+        elif pn == PortNum.TELEMETRY_APP:
             tel = telemetry_pb2.Telemetry()
             try:
                 tel.ParseFromString(mp.decoded.payload)
@@ -161,15 +146,18 @@ def capture_stats(cap: Capture) -> dict[str, Any]:
             variant = tel.WhichOneof("variant") or "?"
             variant_mix[variant] += 1
             if variant == "device_metrics":
-                d = tel.device_metrics
+                d = tel.device_metrics  # utilisation in hundredths of a percent
                 battery[min(d.battery_level, 101)] += 1
-                chutil.append(round(d.channel_utilization, 1))
-                air_util.append(round(d.air_util_tx, 2))
-            elif variant == "environment_metrics":
-                for fld, _v in tel.environment_metrics.ListFields():
-                    env_fields[fld.name] += 1
-                if tel.environment_metrics.HasField("temperature"):
-                    env_temp.append(round(tel.environment_metrics.temperature, 1))
+                chutil.append(round(d.channel_utilization / 100, 1))
+                air_util.append(round(d.air_util_tx / 100, 2))
+            elif variant == "sensor_readings":
+                for sample in sensor_readings_to_list(tel.sensor_readings, tel.time):
+                    for quantity, value in sample.items():
+                        if quantity == "time":
+                            continue
+                        env_fields[quantity] += 1
+                        if quantity == "AIR_TEMPERATURE_C_CENTI":
+                            env_temp.append(round(value, 1))
 
     times.sort()
     span_h = (times[-1] - times[0]) / 3600 if len(times) > 1 else 0.0
@@ -224,7 +212,8 @@ def capture_stats(cap: Capture) -> dict[str, Any]:
         },
         "rx": {"snr": summarize(rx_snr), "rssi": summarize(rx_rssi)},
         "dup_id_multiplicity": {str(k): v for k, v in dup_mult.most_common(8)},
-        "tak_packets": portnums.get(72, 0) + portnums.get(78, 0) + portnums.get(257, 0),
+        "tak_packets": portnums.get(PortNum.ATAK_PLUGIN, 0)
+        + portnums.get(PortNum.ATAK_FORWARDER, 0),
     }
 
 

@@ -19,6 +19,10 @@ Usage:
 
 Channel name per record is inferred from the filename's modem preset
 (``LongFast`` / ``ShortTurbo``); override with ``--channel``.
+
+Records must come from a 3.0 node: the MeshPacket text and the payloads in it
+are read with the 3.0 schema, so a 2.x log (such as the DEF CON 33 dataset)
+does not parse.
 """
 
 from __future__ import annotations
@@ -32,7 +36,10 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from google.protobuf import text_format
-from meshtastic.protobuf import config_pb2, mesh_pb2
+from meshtastic.protobuf import common_pb2, packet_pb2, portnums_pb2, wire_pb2
+from meshtastic.util import hw_model_name
+
+PortNum = portnums_pb2.PortNum
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS node (
@@ -51,7 +58,7 @@ CREATE TABLE IF NOT EXISTS packet_seen (
 """
 
 # The top-level MeshPacket text block always starts at `from:`; nested `raw:`
-# blocks (telemetry starts at `time:`, User starts at `id:`) never do.
+# blocks (telemetry starts at `time:`, User at `long_name:`) never do.
 RAW_RE = re.compile(r"'raw': (from:.*?)(?=, 'fromId'|, 'toId'|\}\s*$)", re.S)
 
 
@@ -83,11 +90,11 @@ def _gateway_id(path: Path) -> int:
     return 0xDF000000 | (zlib.crc32(path.name.encode()) & 0x00FFFFFF)
 
 
-def _parse_packet(record: str) -> mesh_pb2.MeshPacket | None:
+def _parse_packet(record: str) -> packet_pb2.MeshPacket | None:
     m = RAW_RE.search(record)
     if not m:
         return None
-    mp = mesh_pb2.MeshPacket()
+    mp = packet_pb2.MeshPacket()
     try:
         text_format.Parse(m.group(1), mp, allow_unknown_field=True)
     except text_format.ParseError:
@@ -103,24 +110,37 @@ def _enum_name(enum_type: object, value: int) -> str:
         return str(value)
 
 
-def _upsert_node(conn: sqlite3.Connection, mp: mesh_pb2.MeshPacket) -> None:
+def _coordinates(pos: wire_pb2.Position) -> tuple[int, int]:
+    """(latitude_i, longitude_i) in 1e-7 degrees, from either 3.0 coordinate form."""
+    bits = pos.precision_bits
+
+    def unscale(full: str, scaled: str) -> int:
+        if pos.WhichOneof(f"{full}_variant") == scaled:
+            v = getattr(pos, scaled)
+            return v << (32 - bits) if 0 < bits < 32 else v
+        return getattr(pos, full)
+
+    return unscale("latitude", "latitude_scaled"), unscale("longitude", "longitude_scaled")
+
+
+def _upsert_node(conn: sqlite3.Connection, mp: packet_pb2.MeshPacket) -> None:
     frm = getattr(mp, "from") & 0xFFFFFFFF
     pn = mp.decoded.portnum
-    if pn == 4:  # NODEINFO -> User
-        user = mesh_pb2.User()
+    if pn == PortNum.NODEINFO_APP:  # NODEINFO -> User
+        user = wire_pb2.User()
         try:
             user.ParseFromString(mp.decoded.payload)
         except Exception:
             return
-        hw = _enum_name(mesh_pb2.HardwareModel, user.hw_model) if user.hw_model else None
-        role = _enum_name(config_pb2.Config.DeviceConfig.Role, user.role) if user.role else "CLIENT"
+        hw = hw_model_name(user.hw_model) if user.hw_model else None
+        role = _enum_name(common_pb2.Role, user.role) if user.role else "CLIENT"
         conn.execute(
             "INSERT INTO node (id, node_id, long_name, short_name, hw_model, role, last_update)"
             " VALUES (?,?,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET"
             " long_name=excluded.long_name, short_name=excluded.short_name,"
             " hw_model=excluded.hw_model, role=excluded.role, last_update=excluded.last_update",
             (
-                user.id or f"!{frm:08x}",
+                f"!{frm:08x}",  # 3.0 User carries no id: it is the NodeNum
                 frm,
                 user.long_name,
                 user.short_name,
@@ -129,13 +149,14 @@ def _upsert_node(conn: sqlite3.Connection, mp: mesh_pb2.MeshPacket) -> None:
                 mp.rx_time,
             ),
         )
-    elif pn == 3:  # POSITION -> last fix
-        pos = mesh_pb2.Position()
+    elif pn == PortNum.POSITION_APP:  # POSITION -> last fix
+        pos = wire_pb2.Position()
         try:
             pos.ParseFromString(mp.decoded.payload)
         except Exception:
             return
-        if pos.latitude_i or pos.longitude_i:
+        lat, lon = _coordinates(pos)
+        if lat or lon:
             # A node's first-seen record is often a POSITION (beacons outnumber
             # NodeInfo), so ensure a row exists before updating — a bare UPDATE
             # would silently drop the fix.
@@ -145,7 +166,7 @@ def _upsert_node(conn: sqlite3.Connection, mp: mesh_pb2.MeshPacket) -> None:
             )
             conn.execute(
                 "UPDATE node SET last_lat=?, last_long=? WHERE node_id=?",
-                (pos.latitude_i, pos.longitude_i, frm),
+                (lat, lon, frm),
             )
 
 
@@ -187,12 +208,12 @@ def import_logs(out_db: str, paths: list[Path], channel: str | None = None) -> d
                         mp.hop_limit,
                         mp.hop_start,
                         ch,
-                        round(mp.rx_snr, 2) if mp.rx_snr else None,
+                        mp.rx_snr / 2 if mp.rx_snr else None,  # half-dB steps
                         mp.rx_rssi or None,
                     ),
                 )
                 stats["seen"] += cur.rowcount
-                if pn in (3, 4):
+                if pn in (PortNum.POSITION_APP, PortNum.NODEINFO_APP):
                     _upsert_node(conn, mp)
             conn.commit()
             print(f"{path.name}: cumulative {stats}", file=sys.stderr)

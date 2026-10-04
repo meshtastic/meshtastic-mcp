@@ -11,8 +11,9 @@ The generator is statistics-driven: node-DB size, hardware/role mix, channel
 lineup, conference length, and a diurnal activity envelope (quiet overnight →
 morning arrival ramp → daytime sessions → evening-social text spike). Every
 Meshtastic portnum/flavor is represented (NodeInfo, Position, Telemetry
-device+environment+power, Text, Routing ACKs, Traceroute, NeighborInfo,
-Waypoint, PaxCounter, StoreForward, Admin).
+device+sensor readings, Text, Routing ACKs, path-recording request/reply pairs
+(the 3.0 traceroute), NeighborInfo, Waypoint, PaxCounter, StoreForward, Admin).
+Packets follow the 3.0 schema, in the form a node hands its client.
 
 The ``PROFILE`` dict holds the tunable parameters. When real captures (e.g. the
 DEF CON datasets) are available, fit those distributions and drop the values in
@@ -30,17 +31,38 @@ import time
 from meshtastic.protobuf import (
     admin_pb2,
     atak_pb2,
-    config_pb2,
-    mesh_pb2,
+    common_pb2,
+    packet_pb2,
     paxcount_pb2,
+    portnums_pb2,
     storeforward_pb2,
     telemetry_pb2,
+    wire_pb2,
 )
 
-from .build import MESH_BEACON_APP, beacon_payload
+from .build import (
+    MESH_BEACON_APP,
+    beacon_payload,
+    device_metrics_payload,
+    hw_model_value,
+    record_path,
+)
 from .capture import Capture, NodeRow
 
 BROADCAST = 0xFFFFFFFF
+
+PortNum = portnums_pb2.PortNum
+TEXT = PortNum.TEXT_MESSAGE_APP
+POSITION = PortNum.POSITION_APP
+NODEINFO = PortNum.NODEINFO_APP
+ROUTING = PortNum.ROUTING_APP
+ADMIN = PortNum.ADMIN_APP
+WAYPOINT = PortNum.WAYPOINT_APP
+PAXCOUNTER = PortNum.PAXCOUNTER_APP
+STORE_FORWARD = PortNum.STORE_FORWARD_APP
+TELEMETRY = PortNum.TELEMETRY_APP
+NEIGHBORINFO = PortNum.NEIGHBORINFO_APP
+ATAK = PortNum.ATAK_PLUGIN
 
 # ── Tunable profile (fit to real captures as they become available) ──────────
 PROFILE: dict = {
@@ -80,7 +102,7 @@ PROFILE: dict = {
         ("CLIENT_MUTE", 40),
         ("TRACKER", 15),
         ("SENSOR", 10),
-        ("ROUTER_CLIENT", 4),
+        ("CLIENT_BASE", 4),
         ("CLIENT_HIDDEN", 4),
         ("ROUTER", 3),
         ("ROUTER_LATE", 3),
@@ -106,12 +128,12 @@ PROFILE: dict = {
     # keep re-requesting unknowns. Pairs per arrival + a background cadence.
     "nodeinfo_exchange_pairs": (2, 6),
     "nodeinfo_background_interval": 2700,
-    # Routing ACK economy: acks per ack-eligible event (DM text, traceroute,
+    # Routing ACK economy: acks per ack-eligible event (DM text, path request,
     # want_response exchange) plus a per-node background reliable-delivery hum.
     "ack_ratio": 0.8,
     "ack_background_interval": 3600,
-    # Traceroute request->response pairs per hour. The app pops a modal for each
-    # response addressed to the observer, so UI-driving sessions set this to 0.
+    # Traceroute (path-recording request -> reply) pairs per hour. The app pops a
+    # modal for each reply addressed to the observer, so UI-driving sessions set this to 0.
     "traceroute_pairs_per_hour": 12,
     # NeighborInfo is off by default in real firmware — only infra + a sliver
     # of enthusiasts emit it (BM: 0.04% of traffic).
@@ -139,11 +161,11 @@ PROFILE: dict = {
     # plugged and emits disproportionately, so the client fraction stays low.
     "plugged_fraction": 0.12,
     # ATAK squad (opt-in): when team_nodes > 0, a squad emits TAKPacket PLI +
-    # GeoChat + status (portnum 72). Off by default — no TAK traffic appeared
-    # in the real captures. See WS-A in docs/sim-realism-plan.md.
-    # ``wire``: "v1" (default) emits the legacy uncompressed TAKPacket; "v2"
-    # emits real zstd-dictionary-compressed TAKPacketV2 payloads and requires
-    # the [tak] extra (meshtastic-tak SDK) — see replay/tak.py.
+    # GeoChat (ATAK_PLUGIN). Off by default — no TAK traffic appeared in the
+    # real captures. See WS-A in docs/sim-realism-plan.md.
+    # ``wire``: "v1" (default) emits an uncompressed TAKPacket; "v2" emits
+    # zstd-dictionary-compressed payloads as apps send them and requires the
+    # [tak] extra (meshtastic-tak SDK) — see replay/tak.py.
     "tak": {
         "team_nodes": 0,
         "pli_interval": 45,
@@ -783,8 +805,8 @@ def _text_env(hod: float) -> float:
 _HOPS_TAKEN_WEIGHTS = [(0, 30), (1, 28), (2, 22), (3, 14), (4, 5), (5, 1)]
 
 # Per-portnum MeshPacket.priority (matches firmware behaviour: periodic beacons
-# are BACKGROUND, text is DEFAULT, ACKs are ACK, admin/traceroute RELIABLE).
-_PRIORITY = {1: 64, 5: 120, 6: 70, 70: 70}
+# are BACKGROUND, text is DEFAULT, ACKs are ACK, admin RELIABLE).
+_PRIORITY = {TEXT: 64, ROUTING: 120, ADMIN: 70}
 _PRIORITY_DEFAULT = 10  # BACKGROUND
 
 
@@ -807,8 +829,12 @@ def _mp(
     request_id: int = 0,
     reply_id: int = 0,
     emoji: bool = False,
+    record: bool = False,
+    relays: list[int] | None = None,
 ) -> bytes:
-    mp = mesh_pb2.MeshPacket()
+    """A serialized MeshPacket. ``record`` asks relays to record the path;
+    ``relays`` (NodeNums, oldest first) is the path a reply recorded on its way."""
+    mp = packet_pb2.MeshPacket()
     setattr(mp, "from", frm & 0xFFFFFFFF)
     mp.to = to & 0xFFFFFFFF
     mp.id = pid & 0xFFFFFFFF
@@ -816,11 +842,15 @@ def _mp(
     mp.hop_limit = max(0, min(hop_limit, mp.hop_start))
     mp.channel = ch_idx
     if priority:
-        mp.priority = priority
+        mp.priority = priority  # type: ignore[assignment]
     mp.decoded.portnum = portnum
     mp.decoded.payload = payload
     if want_response:
-        mp.decoded.want_response = True
+        mp.decoded.bitfield = wire_pb2.Data.BITFIELD_WANT_RESPONSE
+    if record:
+        mp.flags |= packet_pb2.MeshPacket.PACKET_RECORD_PATH
+    if relays is not None:
+        record_path(mp, relays, hop_start=mp.hop_start)
     if request_id:  # nonzero => this packet is a response to that request
         mp.decoded.request_id = request_id & 0xFFFFFFFF
     if reply_id:  # nonzero + emoji => a tapback (emoji reaction) on that message
@@ -848,13 +878,13 @@ def _mp_enc(rng, pid, frm, hop_start, ch_hash) -> bytes:
     """An encrypted (undecodable) packet — models traffic on a channel/key the
     viewer lacks (DEF CON ran ~45% such 'foreign' traffic). ``ch_hash`` is the
     OTA channel-hash byte a real radio would report (not a settings index)."""
-    mp = mesh_pb2.MeshPacket()
+    mp = packet_pb2.MeshPacket()
     setattr(mp, "from", frm & 0xFFFFFFFF)
     mp.to = 0xFFFFFFFF
     mp.id = pid & 0xFFFFFFFF
     mp.hop_start = max(0, hop_start)
     mp.hop_limit = max(0, hop_start - _hops_taken(rng, hop_start))
-    mp.channel = ch_hash & 0xFF
+    mp.channel_hash = ch_hash & 0xFF
     base = int(_weighted(rng, _ENC_LEN_WEIGHTS))
     mp.encrypted = bytes(rng.randint(0, 255) for _ in range(max(16, base + rng.randint(-6, 6))))
     return mp.SerializeToString()
@@ -962,7 +992,9 @@ def _emit_bots(
 
     def say(frm: int, t: int, body: str, ch: str, fame: float = 0.0) -> int:
         pid = next(pid_counter)
-        out.append((t, _mp(pid, frm, BROADCAST, 1, body.encode("utf-8"), 3, 3, ch_index[ch]), ch))
+        out.append(
+            (t, _mp(pid, frm, BROADCAST, TEXT, body.encode("utf-8"), 3, 3, ch_index[ch]), ch)
+        )
         if fame > 0:
             famous.append((pid, t, ch, fame))
         return pid
@@ -975,7 +1007,7 @@ def _emit_bots(
                     next(pid_counter),
                     frm,
                     BROADCAST,
-                    1,
+                    TEXT,
                     rng.choice(_TAPBACK_EMOJI).encode("utf-8"),
                     3,
                     3,
@@ -992,7 +1024,7 @@ def _emit_bots(
         out.append(
             (
                 start_epoch + rng.randint(0, 300),
-                _mp(next(pid_counter), b.num, BROADCAST, 4, _pl_nodeinfo(b), 3, 3, 0),
+                _mp(next(pid_counter), b.num, BROADCAST, NODEINFO, _pl_nodeinfo(b), 3, 3, 0),
                 chans[0],
             )
         )
@@ -1067,28 +1099,47 @@ def _emit_bots(
                 out.append((t, raw, chans[0]))
                 t += beacon_iv + rng.randint(-beacon_iv // 10, beacon_iv // 10)
 
-    # ── attendees tracerouting bots (request -> response pairs) ──
+    # ── attendees tracerouting bots (path-recording request -> reply pairs) ──
     for _ in range(int(float(cfg.get("traceroutes_per_day", 50)) * days)):
         t = start_epoch + rng.randrange(span)
         who, bot = rng.choice(attendees), rng.choice(bot_nums)
         ch = rng.choice(scene_chans)
         req_pid = next(pid_counter)
-        out.append((t, _mp(req_pid, who, bot, 70, b"", 3, 3, ch_index[ch], want_response=True), ch))
-        relay_pool = [r for r in routers if r != who]
-        relays = [rng.choice(relay_pool)] if relay_pool and rng.random() < 0.7 else []
         out.append(
             (
-                t + rng.randint(1, 8),
+                t,
+                _mp(
+                    req_pid,
+                    who,
+                    bot,
+                    TELEMETRY,
+                    _pl_tel_request(),
+                    3,
+                    3,
+                    ch_index[ch],
+                    want_response=True,
+                    record=True,
+                ),
+                ch,
+            )
+        )
+        relay_pool = [r for r in routers if r != who]
+        relays = [rng.choice(relay_pool)] if relay_pool and rng.random() < 0.7 else []
+        t_reply = t + rng.randint(1, 8)
+        out.append(
+            (
+                t_reply,
                 _mp(
                     next(pid_counter),
                     bot,
                     who,
-                    70,
-                    _pl_traceroute(rng, relays),
+                    TELEMETRY,
+                    device_metrics_payload(when=t_reply),
                     3 - len(relays),
                     3,
                     ch_index[ch],
                     request_id=req_pid,
+                    relays=relays,
                 ),
                 ch,
             )
@@ -1258,12 +1309,24 @@ def generate(
 
     tel_pending: list[tuple[int, dict]] = []
 
-    def add(t, frm, to, pn, payload, ch="LongFast", hop=None, want_response=False, request_id=0):
+    def add(
+        t,
+        frm,
+        to,
+        pn,
+        payload,
+        ch="LongFast",
+        hop=None,
+        want_response=False,
+        request_id=0,
+        record=False,
+        relays=None,
+    ):
         # hop_limit derives from the sender's configured hop_start minus a
         # realistic hops-already-taken draw; callers pass an explicit remaining
         # `hop` for DMs/ACKs/traceroute (clamped to the sender's hop_start).
         # Returns the packet id so a later packet can respond to this one
-        # (decoded.request_id — how a traceroute response references its request).
+        # (decoded.request_id — how a traceroute reply references its request).
         hs = hop_starts.get(frm & 0xFFFFFFFF, 3)
         hl = (hs - _hops_taken(rng, hs)) if hop is None else min(hop, hs)
         pid = next(pid_counter)
@@ -1282,6 +1345,8 @@ def generate(
                     priority=_PRIORITY.get(pn, _PRIORITY_DEFAULT),
                     want_response=want_response,
                     request_id=request_id,
+                    record=record,
+                    relays=relays,
                 ),
                 ch,
             )
@@ -1293,7 +1358,7 @@ def generate(
         jt = m["join_t"]
         node_end = min(end_epoch, m["leave_t"])
         if jt < node_end:
-            add(jt, m["num"], BROADCAST, 4, _pl_nodeinfo(nr))
+            add(jt, m["num"], BROADCAST, NODEINFO, _pl_nodeinfo(nr))
             # arrival exchange storm: peers swap NodeInfo with the newcomer
             # (want_response request -> reply, sometimes a routing ACK). This
             # is what makes real meshes NODEINFO-dominated.
@@ -1303,11 +1368,18 @@ def generate(
                     continue
                 t0 = jt + rng.randint(2, 90)
                 peer_info = _pl_nodeinfo(by_num[peer["num"]])
-                add(t0, peer["num"], m["num"], 4, peer_info, want_response=True)
+                add(t0, peer["num"], m["num"], NODEINFO, peer_info, want_response=True)
                 if rng.random() < 0.85:
-                    add(t0 + rng.randint(1, 6), m["num"], peer["num"], 4, _pl_nodeinfo(nr))
+                    add(t0 + rng.randint(1, 6), m["num"], peer["num"], NODEINFO, _pl_nodeinfo(nr))
                 if rng.random() < P["ack_ratio"] * 0.4:
-                    add(t0 + rng.randint(2, 9), m["num"], peer["num"], 5, _pl_routing_ack(), hop=0)
+                    add(
+                        t0 + rng.randint(2, 9),
+                        m["num"],
+                        peer["num"],
+                        ROUTING,
+                        _pl_routing_ack(),
+                        hop=0,
+                    )
         talk = m["talk"]
         pos_iv = (
             P["pos_interval"]["mobile"]
@@ -1325,7 +1397,7 @@ def generate(
         t = jt + rng.randint(0, 300)
         while t < node_end:
             if rng.random() < _activity(hod(t)) + 0.1:
-                add(t, m["num"], BROADCAST, 3, _pl_position(rng, m, t))
+                add(t, m["num"], BROADCAST, POSITION, _pl_position(rng, m, t))
             t += int(pos_iv * rng.uniform(0.8, 1.2))
         t = jt + rng.randint(0, 600)
         while t < node_end:
@@ -1336,7 +1408,7 @@ def generate(
             t += int(tel_iv * rng.uniform(0.8, 1.2))
         t = jt + P["nodeinfo_refresh"]
         while t < node_end:
-            add(t, m["num"], BROADCAST, 4, _pl_nodeinfo(nr))
+            add(t, m["num"], BROADCAST, NODEINFO, _pl_nodeinfo(nr))
             t += int(P["nodeinfo_refresh"] * rng.uniform(0.8, 1.2))
         # background NodeInfo exchanges: nodes keep requesting identities they
         # don't know (churn means there is always someone unknown around)
@@ -1345,13 +1417,13 @@ def generate(
             if rng.random() < _activity(hod(t)) + 0.2:
                 peer = rng.choice(meta)
                 if peer["num"] != m["num"]:
-                    add(t, m["num"], peer["num"], 4, _pl_nodeinfo(nr), want_response=True)
+                    add(t, m["num"], peer["num"], NODEINFO, _pl_nodeinfo(nr), want_response=True)
                     if rng.random() < 0.8:
                         add(
                             t + rng.randint(1, 6),
                             peer["num"],
                             m["num"],
-                            4,
+                            NODEINFO,
                             _pl_nodeinfo(by_num[peer["num"]]),
                         )
             t += int(P["nodeinfo_background_interval"] * rng.uniform(0.7, 1.3))
@@ -1362,11 +1434,11 @@ def generate(
             if rng.random() < _activity(hod(t)):
                 other = rng.choice(meta)
                 if other["num"] != m["num"]:
-                    add(t, m["num"], other["num"], 5, _pl_routing_ack(), hop=0)
+                    add(t, m["num"], other["num"], ROUTING, _pl_routing_ack(), hop=0)
             t += int(P["ack_background_interval"] * rng.uniform(0.7, 1.3))
 
-    # -- environment + power telemetry: sensors, a few routers, plus the ~3.5%
-    # of ordinary nodes that carry an attached sensor board --
+    # -- environment + power telemetry (SensorReadings): sensors, a few routers,
+    # plus the ~3.5% of ordinary nodes that carry an attached sensor board --
     env_extra = [m for m in meta if rng.random() < P["env_sensor_fraction"]]
     env_nodes = list({m["num"]: m for m in sensors + routers[:3] + env_extra}.values())
     for m in env_nodes:
@@ -1374,9 +1446,15 @@ def generate(
         persona = _weighted(rng, _ENV_PERSONAS)
         t = start_epoch + rng.randint(0, P["env_interval"])
         while t < end_epoch:
-            add(t, m["num"], BROADCAST, 67, _pl_tel_env(rng, P["climate"], persona, hod(t), t))
+            add(
+                t,
+                m["num"],
+                BROADCAST,
+                TELEMETRY,
+                _pl_tel_env(rng, P["climate"], persona, hod(t), t),
+            )
             if rng.random() < 0.9:
-                add(t + 5, m["num"], BROADCAST, 67, _pl_tel_power(rng, t))
+                add(t + 5, m["num"], BROADCAST, TELEMETRY, _pl_tel_power(rng, t))
             t += int(P["env_interval"] * rng.uniform(0.8, 1.2))
 
     # -- neighborinfo (off by default in real firmware: infra + a sliver) --
@@ -1390,18 +1468,17 @@ def generate(
                 t,
                 m["num"],
                 BROADCAST,
-                71,
+                NEIGHBORINFO,
                 _pl_neighborinfo(rng, m["num"], rng.sample(others, k)),
                 hop=4,
             )
             t += int(P["neighborinfo_interval"] * rng.uniform(0.85, 1.15))
 
-    # -- traceroutes (request -> response pairs) + routing ACKs --
-    # Real traceroutes are two packets: an in-flight request (empty
-    # RouteDiscovery, want_response, request_id 0) and — usually — a response
-    # from the destination whose decoded.request_id references the request.
-    # Apps only surface *responses* (their traceroute logs gate on a nonzero
-    # request_id), so a capture without pairs shows an empty traceroute log.
+    # -- traceroutes (path-recording request -> reply pairs) + routing ACKs --
+    # 3.0 has no traceroute message: a request asks the destination for a
+    # response with PACKET_RECORD_PATH set (here a device-metrics request, as the
+    # Python CLI sends), and the reply — whose decoded.request_id references the
+    # request — records the relays it took back in its path tail.
     # Child RNG: this block's draw count depends on route shapes, so isolating
     # it keeps later sections' draws (text chatter etc.) stable when it evolves.
     tr_rng = random.Random(rng.getrandbits(64))
@@ -1418,19 +1495,30 @@ def generate(
             else []
         )
         relay_nums = [r["num"] for r in relays]
-        req_id = add(t, na["num"], nb["num"], 70, b"", hop=len(relay_nums) + 1, want_response=True)
-        if tr_rng.random() < 0.75:  # most requests draw a response off-air
+        req_id = add(
+            t,
+            na["num"],
+            nb["num"],
+            TELEMETRY,
+            _pl_tel_request(),
+            hop=len(relay_nums) + 1,
+            want_response=True,
+            record=True,
+        )
+        if tr_rng.random() < 0.75:  # most requests draw a reply off-air
+            t_reply = t + tr_rng.randint(1, 8)
             add(
-                t + tr_rng.randint(1, 8),
+                t_reply,
                 nb["num"],
                 na["num"],
-                70,
-                _pl_traceroute(tr_rng, relay_nums),
+                TELEMETRY,
+                device_metrics_payload(when=t_reply),
                 hop=len(relay_nums) + 1,
                 request_id=req_id,
+                relays=list(reversed(relay_nums)),  # the way back
             )
         if tr_rng.random() < 0.7:
-            add(t + tr_rng.randint(1, 4), nb["num"], na["num"], 5, _pl_routing_ack(), hop=0)
+            add(t + tr_rng.randint(1, 4), nb["num"], na["num"], ROUTING, _pl_routing_ack(), hop=0)
 
     # -- text chatter: conversation bursts, not a uniform smear. A burst is a
     # few nodes trading messages ~45 s apart on one channel (real inter-arrival
@@ -1458,9 +1546,17 @@ def generate(
                 text = _pick_text(rng, ch, node_rows)
                 dm = rng.random() < P["text_dm_fraction"]
                 to = rng.choice(node_rows).num if dm else BROADCAST
-                add(t, sender.num, to, 1, text.encode("utf-8"), ch=ch)
+                add(t, sender.num, to, TEXT, text.encode("utf-8"), ch=ch)
                 if dm and rng.random() < P["ack_ratio"]:
-                    add(t + rng.randint(1, 5), to, sender.num, 5, _pl_routing_ack(), ch=ch, hop=0)
+                    add(
+                        t + rng.randint(1, 5),
+                        to,
+                        sender.num,
+                        ROUTING,
+                        _pl_routing_ack(),
+                        ch=ch,
+                        hop=0,
+                    )
                 t += 2 + int(rng.expovariate(1 / 45.0))
 
     # -- waypoints (some with geofence fields for client enter/exit alert testing) --
@@ -1480,32 +1576,22 @@ def generate(
                 t,
                 host["num"],
                 BROADCAST,
-                8,
+                WAYPOINT,
                 _pl_waypoint(rng, host, t, name, desc, icon, geofenced=geofenced),
                 ch="MeshCon" if "MeshCon" in ch_index else "LongFast",
                 hop=4,
             )
 
-    # -- range test: a couple of nodes beacon sequence numbers (DEF CON had ~4%) --
-    for m in rng.sample(meta, min(len(meta), 2)):
-        seq = 0
-        t = start_epoch + rng.randint(0, 600)
-        while t < end_epoch:
-            if rng.random() < _activity(hod(t)):
-                seq += 1
-                add(t, m["num"], BROADCAST, 66, f"seq {seq}".encode())
-            t += int(rng.uniform(150, 420))
-
     # -- paxcounter + storeforward + admin --
     for m in sensors[:3] or routers[:2]:
         t = start_epoch + rng.randint(0, 1800)
         while t < end_epoch:
-            add(t, m["num"], BROADCAST, 34, _pl_pax(rng), hop=2)
+            add(t, m["num"], BROADCAST, PAXCOUNTER, _pl_pax(rng), hop=2)
             t += int(1800 * rng.uniform(0.8, 1.2))
     for m in routers[:2]:
         t = start_epoch + rng.randint(0, 900)
         while t < end_epoch:
-            add(t, m["num"], BROADCAST, 65, _pl_sf(), hop=2)
+            add(t, m["num"], BROADCAST, STORE_FORWARD, _pl_sf(m["num"]), hop=2)
             t += int(900 * rng.uniform(0.85, 1.15))
     if routers:
         op = routers[0]
@@ -1517,12 +1603,12 @@ def generate(
                     t,
                     op["num"],
                     tgt["num"],
-                    6,
+                    ADMIN,
                     _pl_admin(),
                     ch="Staff" if "Staff" in ch_index else "LongFast",
                 )
 
-    # -- beacons (MESH_BEACON_APP = 37): a fraction of infra nodes periodically
+    # -- beacons (MESH_BEACON_APP): a fraction of infra nodes periodically
     # broadcast MeshBeacon packets so clients can exercise the "discover and
     # join a beaconed mesh" flow without real hardware. --
     beacon_iv = P.get("beacon_interval", 1800)
@@ -1546,9 +1632,9 @@ def generate(
 
     # -- ATAK squad (opt-in, off by default): a team of nodes emitting TAK PLI +
     # GeoChat + status, for exercising an app's TAK plane (the Meshtastic app's
-    # in-app TAK server bridges these to ATAK/iTAK over CoT). Legacy v1 rides
-    # ATAK_PLUGIN (72); v2 wire rides ATAK_PLUGIN_V2 (78). No TAK traffic
-    # appeared in the real captures, so this is a scenario knob, not fitted. --
+    # in-app TAK server bridges these to ATAK/iTAK over CoT). Both wires ride
+    # ATAK_PLUGIN; the firmware passes it through. No TAK traffic appeared in
+    # the real captures, so this is a scenario knob, not fitted. --
     tak_cfg = P.get("tak") or {}
     tak_n = int(tak_cfg.get("team_nodes", 0))
     if tak_n > 0 and meta:
@@ -1559,9 +1645,7 @@ def generate(
         pli_iv = int(tak_cfg.get("pli_interval", 45))
         chat_iv = 3600.0 / max(float(tak_cfg.get("chat_per_hour", 2.0)), 0.01)
         v2_wire = tak_cfg.get("wire", "v1") == "v2"
-        # Firmware >= 2.8 carries compressed TAKPacketV2 on ATAK_PLUGIN_V2 (78);
-        # legacy uncompressed TAKPacket stays on ATAK_PLUGIN (72).
-        tak_port = 78 if v2_wire else 72
+        tak_port = ATAK
         if v2_wire:
             from . import tak as _tak
 
@@ -1623,7 +1707,7 @@ def generate(
     peak_rate = max(hour_hist.values()) if hour_hist else 1
     for t, m in tel_pending:
         load = hour_hist.get((t - start_epoch) // 3600, 0) / peak_rate
-        add(t, m["num"], BROADCAST, 67, _pl_tel_device(rng, m, t, load))
+        add(t, m["num"], BROADCAST, TELEMETRY, _pl_tel_device(rng, m, t, load))
 
     _emit_encrypted(
         rng,
@@ -1713,7 +1797,7 @@ def fit_profile(capture, *, base: dict | None = None) -> dict:
     text_by_ch: Counter = Counter()
     text_n = text_dm = total = encrypted = 0
     for rxt, raw, ch in capture.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         try:
             mp.ParseFromString(raw)
         except Exception:
@@ -1726,12 +1810,12 @@ def fit_profile(capture, *, base: dict | None = None) -> dict:
             continue
         pn = mp.decoded.portnum
         portnums[pn] += 1
-        if pn == 1:
+        if pn == TEXT:
             text_n += 1
             text_by_ch[ch] += 1
             if mp.to != BROADCAST:
                 text_dm += 1
-        if pn in (3, 67):
+        if pn in (POSITION, TELEMETRY):
             times[(getattr(mp, "from"), pn)].append(rxt)
 
     span = capture.span
@@ -1757,9 +1841,9 @@ def fit_profile(capture, *, base: dict | None = None) -> dict:
             deltas += [b - a for a, b in itertools.pairwise(ts) if b > a]
         return int(statistics.median(deltas)) if deltas else default
 
-    pos_iv = _median_interval(3, prof["pos_interval"]["default"])
+    pos_iv = _median_interval(POSITION, prof["pos_interval"]["default"])
     prof["pos_interval"] = {"mobile": max(pos_iv // 3, 30), "router": pos_iv * 2, "default": pos_iv}
-    prof["telemetry_interval"] = _median_interval(67, prof["telemetry_interval"])
+    prof["telemetry_interval"] = _median_interval(TELEMETRY, prof["telemetry_interval"])
     prof["portnum_mix"] = dict(portnums.most_common())  # informational
     return prof
 
@@ -1823,26 +1907,39 @@ _ENV_PERSONAS = [
 ]
 
 
+def _truncate(coord: int, bits: int) -> int:
+    """A coordinate kept to ``bits`` of precision, as a node expands a scaled one for its client."""
+    return coord if bits >= 32 else (coord >> (32 - bits)) << (32 - bits)
+
+
 def _pl_position(rng, m, t):
-    p = mesh_pb2.Position()
-    p.latitude_i = m["lat_i"] + (rng.randint(-3000, 3000) if m["mobile"] else 0)
-    p.longitude_i = m["lon_i"] + (rng.randint(-3000, 3000) if m["mobile"] else 0)
-    p.altitude = rng.randint(2100, 2400)
+    """A position in the client-link form: full-width coordinates holding only the
+    precision the sender shared. Precision 0 shares no position, only the time."""
+    lat = m["lat_i"] + (rng.randint(-3000, 3000) if m["mobile"] else 0)
+    lon = m["lon_i"] + (rng.randint(-3000, 3000) if m["mobile"] else 0)
+    altitude = rng.randint(2100, 2400)
+    sats = rng.randint(5, 11)
+    bits = int(_weighted(rng, _PRECISION_WEIGHTS))
+    pdop = rng.randint(90, 250)
+    p = wire_pb2.Position()
     p.time = t
-    p.sats_in_view = rng.randint(5, 11)
-    p.precision_bits = int(_weighted(rng, _PRECISION_WEIGHTS))
-    p.PDOP = rng.randint(90, 250)
+    if bits:
+        p.latitude = _truncate(lat, bits)
+        p.longitude = _truncate(lon, bits)
+        p.altitude = altitude
+        p.sats_in_view = sats
+        p.precision_bits = bits
+        p.PDOP = pdop
     return p.SerializeToString()
 
 
 def _pl_nodeinfo(nr: NodeRow):
-    u = mesh_pb2.User()
-    u.id = nr.node_id
+    u = wire_pb2.User()
     u.long_name = nr.long_name or nr.node_id
     u.short_name = nr.short_name or nr.node_id[-4:]
-    u.hw_model = _enum(mesh_pb2.HardwareModel, nr.hw_model)
-    u.role = _enum(config_pb2.Config.DeviceConfig.Role, nr.role)
-    if nr.public_key:  # 2.8 nodes advertise their PKC public key in NodeInfo
+    u.hw_model = hw_model_value(nr.hw_model)
+    u.role = _enum(common_pb2.Role, nr.role)
+    if nr.public_key:  # nodes advertise their PKC public key in NodeInfo
         u.public_key = nr.public_key
     return u.SerializeToString()
 
@@ -1858,20 +1955,18 @@ def _batt_level(m, t) -> int:
 
 
 def _pl_tak_pli(rng, callsign, team_val, role_val, lat_i, lon_i, batt) -> bytes:
-    """A TAKPacket (portnum 72) position/location-information report."""
+    """An uncompressed TAKPacket (ATAK_PLUGIN) position/location-information report."""
     tp = atak_pb2.TAKPacket()
-    tp.is_compressed = False
-    tp.contact.callsign = callsign
-    tp.contact.device_callsign = callsign
-    tp.group.team = team_val
-    tp.group.role = role_val
-    tp.status.battery = min(100, batt)
-    p = tp.pli
-    p.latitude_i = lat_i
-    p.longitude_i = lon_i
-    p.altitude = rng.randint(2000, 2500)
-    p.speed = rng.randint(0, 8)
-    p.course = rng.randint(0, 359)
+    tp.callsign = callsign
+    tp.device_callsign = callsign
+    tp.team = team_val
+    tp.role = role_val
+    tp.battery = min(100, batt)
+    tp.latitude_i = lat_i
+    tp.longitude_i = lon_i
+    tp.altitude = rng.randint(2000, 2500)
+    tp.speed = rng.randint(0, 8)
+    tp.course = rng.randint(0, 359)
     return tp.SerializeToString()
 
 
@@ -1890,14 +1985,13 @@ _TAK_CHAT = [
 
 
 def _pl_tak_chat(rng, callsign, team_val, role_val, batt) -> bytes:
-    """A TAKPacket (portnum 72) GeoChat message to the team room."""
+    """An uncompressed TAKPacket (ATAK_PLUGIN) GeoChat message to the team room."""
     tp = atak_pb2.TAKPacket()
-    tp.is_compressed = False
-    tp.contact.callsign = callsign
-    tp.contact.device_callsign = callsign
-    tp.group.team = team_val
-    tp.group.role = role_val
-    tp.status.battery = min(100, batt)
+    tp.callsign = callsign
+    tp.device_callsign = callsign
+    tp.team = team_val
+    tp.role = role_val
+    tp.battery = min(100, batt)
     tp.chat.message = rng.choice(_TAK_CHAT)
     tp.chat.to = "All Chat Rooms"
     return tp.SerializeToString()
@@ -1913,111 +2007,104 @@ def _pl_tel_device(rng, m, t, load):
     """
     tm = telemetry_pb2.Telemetry()
     tm.time = t
-    d = tm.device_metrics
+    d = tm.device_metrics  # 3.0 scales: millivolts, utilisation in hundredths of a percent
     lvl = _batt_level(m, t)
     d.battery_level = lvl
     if lvl >= 101:
-        d.voltage = 0.0 if rng.random() < 0.4 else round(rng.uniform(3.9, 4.25), 3)
+        d.voltage = 0 if rng.random() < 0.4 else round(rng.uniform(3.9, 4.25) * 1000)
     else:
-        d.voltage = round(3.0 + 1.25 * lvl / 100.0 + rng.uniform(-0.05, 0.05), 3)
+        d.voltage = round((3.0 + 1.25 * lvl / 100.0 + rng.uniform(-0.05, 0.05)) * 1000)
     gain = m.get("ch_gain", 0.5)
     d.channel_utilization = round(
-        min(60.0, 0.8 + 36.0 * load**1.6 * gain * rng.uniform(0.8, 1.2)), 3
+        min(60.0, 0.8 + 36.0 * load**1.6 * gain * rng.uniform(0.8, 1.2)) * 100
     )
     # air-util skews very low; occasional busy node
     d.air_util_tx = round(
-        rng.uniform(0.0, 0.2) if rng.random() < 0.85 else rng.uniform(0.2, 6.0), 4
+        (rng.uniform(0.0, 0.2) if rng.random() < 0.85 else rng.uniform(0.2, 6.0)) * 100
     )
     d.uptime_seconds = max(60, t - m["join_t"] + rng.randint(0, 900))
     return tm.SerializeToString()
 
 
-def _pl_tel_env(rng, climate, persona, hod_f, t):
-    """Environment metrics from the venue climate model + the node's persona.
+_Q = telemetry_pb2.SensorReadings
 
-    Temperature is a diurnal sinusoid (peak mid-afternoon), humidity is
-    anti-correlated with temperature and occasionally NaN (real sensors emit
-    NaN — clients must cope), lux follows solar elevation, pressure random-
-    walks around the venue-altitude mode.
-    """
+
+def _readings(t: int, columns: list[tuple[int, int]]) -> bytes:
+    """A single-sample SensorReadings Telemetry: one (quantity, scaled value) per column."""
     tm = telemetry_pb2.Telemetry()
     tm.time = t
-    e = tm.environment_metrics
+    tm.sensor_readings.keys.extend(q for q, _ in columns)
+    tm.sensor_readings.values.extend(v for _, v in columns)
+    return tm.SerializeToString()
+
+
+def _pl_tel_env(rng, climate, persona, hod_f, t):
+    """Environment readings from the venue climate model + the node's persona.
+
+    Temperature is a diurnal sinusoid (peak mid-afternoon), humidity is
+    anti-correlated with temperature and occasionally missing (a reading a
+    sensor fails to produce is left out — clients must cope), lux follows solar
+    elevation, pressure random-walks around the venue-altitude mode.
+    """
     temp = (
         climate["t_mean"]
         + climate["t_amp"] * math.cos(2.0 * math.pi * (hod_f - 15.0) / 24.0)
         + rng.gauss(0.0, 0.8)
     )
-    e.temperature = round(temp, 2)
-    if "H" in persona:
-        if rng.random() < climate.get("nan_fraction", 0.0):
-            e.relative_humidity = float("nan")
-        else:
-            hum = 75.0 - 1.8 * (temp - 10.0) + rng.gauss(0.0, 6.0)
-            e.relative_humidity = round(min(96.0, max(4.0, hum)), 2)
+    cols = [(_Q.AIR_TEMPERATURE_C_CENTI, round(temp * 100))]
+    if "H" in persona and rng.random() >= climate.get("nan_fraction", 0.0):
+        hum = 75.0 - 1.8 * (temp - 10.0) + rng.gauss(0.0, 6.0)
+        cols.append((_Q.AIR_HUMIDITY_PCT_CENTI, round(min(96.0, max(4.0, hum)) * 100)))
     if "P" in persona:
-        e.barometric_pressure = round(climate["pressure_hpa"] + rng.gauss(0.0, 2.5), 2)
+        cols.append(
+            (_Q.AIR_PRESSURE_PA, round((climate["pressure_hpa"] + rng.gauss(0.0, 2.5)) * 100))
+        )
     if "L" in persona:
         sun = math.sin(math.pi * (hod_f - 6.0) / 12.0) if 6.0 <= hod_f <= 18.0 else 0.0
-        e.lux = round(max(0.0, sun) * rng.uniform(20000.0, 90000.0) + rng.uniform(0.0, 40.0), 2)
+        lux = max(0.0, sun) * rng.uniform(20000.0, 90000.0) + rng.uniform(0.0, 40.0)
+        cols.append((_Q.ILLUMINANCE_LUX_DECI, round(lux * 10)))
     if "G" in persona:
-        e.gas_resistance = round(rng.uniform(10000.0, 200000.0), 1)
-        e.iaq = rng.randint(10, 150)
-    return tm.SerializeToString()
+        cols.append((_Q.SENSOR_GAS_RESISTANCE_KOHM, round(rng.uniform(10.0, 200.0))))
+        cols.append((_Q.IAQ_INDEX, rng.randint(10, 150)))
+    return _readings(t, cols)
 
 
 def _pl_tel_power(rng, t):
+    return _readings(
+        t,
+        [
+            (_Q.VOLTAGE_MV, round(rng.uniform(3.7, 4.2) * 1000)),
+            (_Q.CURRENT_MA, round(rng.uniform(20, 300))),
+        ],
+    )
+
+
+def _pl_tel_request() -> bytes:
+    """An empty device-metrics Telemetry: the request a 3.0 traceroute sends."""
     tm = telemetry_pb2.Telemetry()
-    tm.time = t
-    p = tm.power_metrics
-    p.ch1_voltage = round(rng.uniform(3.7, 4.2), 3)
-    p.ch1_current = round(rng.uniform(20, 300), 2)
+    tm.device_metrics.SetInParent()
     return tm.SerializeToString()
 
 
 def _pl_routing_ack():
-    r = mesh_pb2.Routing()
-    r.error_reason = mesh_pb2.Routing.Error.NONE
+    r = wire_pb2.Routing()
+    r.error_reason = wire_pb2.Routing.Error.NONE
     return r.SerializeToString()
 
 
-def _pl_traceroute(rng, relays):
-    """A RouteDiscovery *response* payload, firmware semantics.
-
-    ``route``/``route_back`` list the intermediate relays only — requester and
-    destination are implied by the enclosing packet's from/to (apps render the
-    endpoints themselves, so including them draws a duplicated hop list). SNR
-    lists carry one entry per *receiving* hop including the endpoint, so
-    ``len == len(route) + 1``, encoded as SNR×4 ints.
-    """
-    rd = mesh_pb2.RouteDiscovery()
-    for nn in relays:
-        rd.route.append(nn & 0xFFFFFFFF)
-    for _ in range(len(relays) + 1):
-        rd.snr_towards.append(rng.randint(-80, 48))
-    for nn in reversed(relays):
-        rd.route_back.append(nn & 0xFFFFFFFF)
-    for _ in range(len(relays) + 1):
-        rd.snr_back.append(rng.randint(-80, 48))
-    return rd.SerializeToString()
-
-
 def _pl_neighborinfo(rng, num, neighbors):
-    ni = mesh_pb2.NeighborInfo()
+    ni = wire_pb2.NeighborInfo()
     ni.node_id = num
     ni.last_sent_by_id = num
     ni.node_broadcast_interval_secs = 14400
-    for nb in neighbors:
-        e = ni.neighbors.add()
-        e.node_id = nb["num"]
-        e.snr = round(rng.uniform(-18, 12), 1)
+    for nb in neighbors:  # parallel columns; SNR in half-dB steps
+        ni.neighbor_ids.append(nb["num"])
+        ni.neighbor_snr.append(round(rng.uniform(-18, 12) * 2))
     return ni.SerializeToString()
 
 
 def _pl_waypoint(rng, m, t, name, desc, icon, *, geofenced: bool = False):
-    from .build import append_fields
-
-    w = mesh_pb2.Waypoint()
+    w = wire_pb2.Waypoint()
     w.id = rng.randint(1, 0x7FFFFFFF)
     w.latitude_i = m["lat_i"] + rng.randint(-2000, 2000)
     w.longitude_i = m["lon_i"] + rng.randint(-2000, 2000)
@@ -2025,11 +2112,10 @@ def _pl_waypoint(rng, m, t, name, desc, icon, *, geofenced: bool = False):
     w.name = name
     w.description = desc
     w.icon = icon
-    base = w.SerializeToString()
     if geofenced:
-        radius = rng.randint(50, 500)
-        base += append_fields({9: radius, 11: True, 12: True})
-    return base
+        w.geofence_radius = rng.randint(50, 500)
+        w.notify_flags = wire_pb2.Waypoint.NOTIFY_ON_ENTER | wire_pb2.Waypoint.NOTIFY_ON_EXIT
+    return w.SerializeToString()
 
 
 def _pl_pax(rng):
@@ -2052,7 +2138,7 @@ _BEACON_MESSAGES = [
 
 
 def _pl_beacon(rng: random.Random, chans: list[str]) -> bytes:
-    """A synthetic MeshBeacon payload (MESH_BEACON_APP = 37)."""
+    """A synthetic MeshBeacon payload (MESH_BEACON_APP)."""
     msg = rng.choice(_BEACON_MESSAGES)
     # Optionally advertise one of the conference channels
     offer_name = rng.choice(chans) if rng.random() < 0.6 else ""
@@ -2066,11 +2152,13 @@ def _pl_beacon(rng: random.Random, chans: list[str]) -> bytes:
     )
 
 
-def _pl_sf():
+def _pl_sf(server: int) -> bytes:
+    """A store-and-forward server's announce."""
     sf = storeforward_pb2.StoreAndForward()
-    sf.rr = storeforward_pb2.StoreAndForward.RequestResponse.ROUTER_HEARTBEAT
-    sf.heartbeat.period = 900
-    sf.heartbeat.secondary = 0
+    sf.type = storeforward_pb2.StoreAndForward.ANNOUNCE
+    sf.announce.server = server & 0xFFFFFFFF
+    sf.announce.max_per_sync = 10
+    sf.announce.capacity = 500
     return sf.SerializeToString()
 
 

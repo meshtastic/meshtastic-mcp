@@ -211,7 +211,7 @@ def _push_hardware(
     # Lazy imports so the module loads even when the meshtastic deps aren't
     # available (e.g. CI in a Python env without the package installed).
     try:
-        from meshtastic.protobuf import mesh_pb2, xmodem_pb2
+        from meshtastic.protobuf import api_pb2, xmodem_pb2
         from pubsub import pub
     except ImportError as exc:  # pragma: no cover — dep missing
         raise FixtureError(
@@ -269,7 +269,7 @@ def _push_hardware(
                 seq=0,
                 buffer=_DEFAULT_NODES_FILENAME.encode("utf-8"),
             )
-            iface._sendToRadio(mesh_pb2.ToRadio(xmodemPacket=init_pkt))
+            iface._sendToRadio(api_pb2.ToRadio(xmodem_packet=init_pkt))
             ack = _wait_for_response(response_q, _ACK_TIMEOUT_INIT_S)
             if ack.control != XMC.Value("ACK"):
                 raise FixtureError(
@@ -296,7 +296,7 @@ def _push_hardware(
                         buffer=chunk,
                         crc16=_crc16_ccitt(chunk),
                     )
-                    iface._sendToRadio(mesh_pb2.ToRadio(xmodemPacket=pkt))
+                    iface._sendToRadio(api_pb2.ToRadio(xmodem_packet=pkt))
                     ack = _wait_for_response(response_q, _ACK_TIMEOUT_CHUNK_S)
                     if ack.control == XMC.Value("ACK"):
                         chunks_sent += 1
@@ -309,8 +309,8 @@ def _push_hardware(
                             # Abort: send CAN so the firmware removes the half-
                             # written file via FSCom.remove(filename).
                             iface._sendToRadio(
-                                mesh_pb2.ToRadio(
-                                    xmodemPacket=xmodem_pb2.XModem(control=XMC.Value("CAN"))
+                                api_pb2.ToRadio(
+                                    xmodem_packet=xmodem_pb2.XModem(control=XMC.Value("CAN"))
                                 )
                             )
                             raise FixtureError(
@@ -322,7 +322,7 @@ def _push_hardware(
 
             # 3) Tell the device we're done.
             iface._sendToRadio(
-                mesh_pb2.ToRadio(xmodemPacket=xmodem_pb2.XModem(control=XMC.Value("EOT")))
+                api_pb2.ToRadio(xmodem_packet=xmodem_pb2.XModem(control=XMC.Value("EOT")))
             )
             ack = _wait_for_response(response_q, _ACK_TIMEOUT_CHUNK_S)
             if ack.control != XMC.Value("ACK"):

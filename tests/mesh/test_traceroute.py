@@ -3,18 +3,17 @@
 
 """Mesh: traceroute from TX to RX round-trips with no intermediate hops.
 
-TX sends a `TRACEROUTE_APP` request (RouteDiscovery with `want_response=True`)
-addressed to RX's node_num. RX's firmware (`modules/TraceRouteModule.cpp`)
-replies with a RouteDiscovery payload whose `route` / `route_back` lists
-contain any intermediate relays and `snr_towards` / `snr_back` carry per-hop
-SNRs. In a 2-device direct mesh there are no relays between TX and RX, so
-both route lists must be empty and each SNR list carries exactly one entry
-for the direct TX↔RX link.
+3.0 has no traceroute message: TX asks RX for its device metrics with
+`PACKET_RECORD_PATH` set (`MeshInterface.sendTraceRoute`), RX's firmware
+mirrors the flag onto its reply (`MeshModule::setReplyTo`), and the reply's
+path tail records the relays it passed on the way back. In a 2-device direct
+mesh there are none: the reply takes zero hops, its tail is empty, and its
+`relay_node` is RX's own suffix.
 
-Validates the full TRACEROUTE_APP portnum round-trip: request encoding, RX
-firmware dispatch, RouteDiscovery payload construction, wire response, and
-client-side decode through `meshtastic.__init__.py::protocols[TRACEROUTE_APP]`
-(which is what publishes the `meshtastic.receive.traceroute` pubsub topic).
+Validates the round-trip: request encoding, RX firmware dispatch, the reply
+mirroring the path flag, and client-side decode through
+`meshtastic.__init__.py::protocols[TELEMETRY_APP]` (which publishes the
+`meshtastic.receive.telemetry` pubsub topic).
 """
 
 from __future__ import annotations
@@ -31,14 +30,12 @@ from ._receive import ReceiveCollector, nudge_nodeinfo_port
 @pytest.mark.timeout(240)
 def test_traceroute_one_hop(mesh_pair: dict[str, Any]) -> None:
     """Runs for every directed pair. Asserts TX sends + RX responds, then
-    inspects the captured RouteDiscovery to confirm the path is direct.
+    inspects the reply's recorded path to confirm it is direct.
 
     Why the listener is on TX (not RX):
-        The traceroute RESPONSE is addressed to TX (the original requester).
-        The meshtastic Python client publishes `meshtastic.receive.traceroute`
-        on the interface that received that response — which is TX's iface.
-        A listener on RX would only see the inbound REQUEST, which lacks
-        the SNR-towards / SNR-back fields the firmware only fills on reply.
+        The traceroute reply is addressed to TX (the original requester).
+        The meshtastic Python client publishes `meshtastic.receive.telemetry`
+        on the interface that received that reply — which is TX's iface.
 
     Why we ping RX's NodeInfo before sending:
         Traceroute requests are directed sends (wantResponse=True, specific
@@ -54,7 +51,7 @@ def test_traceroute_one_hop(mesh_pair: dict[str, Any]) -> None:
     rx_role = mesh_pair["rx_role"]
     assert rx_node_num is not None, f"{rx_role} my_node_num missing"
 
-    with ReceiveCollector(tx_port, topic="meshtastic.receive.traceroute") as tx_listener:
+    with ReceiveCollector(tx_port, topic="meshtastic.receive.telemetry") as tx_listener:
         # Bilateral PKI warmup — traceroute requests are directed and
         # PKI-encrypted, so both sides need current pubkeys. See
         # `_receive.py::nudge_nodeinfo` and the test_direct_with_ack
@@ -101,8 +98,7 @@ def test_traceroute_one_hop(mesh_pair: dict[str, Any]) -> None:
                 time.sleep(5.0)
         assert ok, (
             f"sendTraceRoute {tx_role}→{rx_role} timed out twice; the mesh "
-            f"may be saturated or RX's TraceRouteModule is misrouting the "
-            f"reply"
+            f"may be saturated or RX is not answering the device-metrics request"
         )
 
         # sendTraceRoute already waited for the response internally, but
@@ -113,35 +109,23 @@ def test_traceroute_one_hop(mesh_pair: dict[str, Any]) -> None:
             timeout=5.0,
         )
         assert packet is not None, (
-            f"sendTraceRoute returned OK but no `receive.traceroute` packet "
+            f"sendTraceRoute returned OK but no `receive.telemetry` reply "
             f"from RX (0x{rx_node_num:08x}) arrived via pubsub. Captured: "
             f"{tx_listener.snapshot()!r}"
         )
 
-        # Inspect the decoded RouteDiscovery. The meshtastic client stores
-        # the parsed protobuf (as a plain dict via MessageToDict) under
-        # `decoded.traceroute` for this portnum; keys are camelCase because
-        # protobuf JSON conversion uses `preserving_proto_field_name=False`
-        # by default.
-        decoded = packet.get("decoded", {})
-        route_info = decoded.get("traceroute") or {}
-
-        forward_hops = route_info.get("route") or []
-        back_hops = route_info.get("routeBack") or []
-        snr_towards = route_info.get("snrTowards") or []
-
-        assert forward_hops == [], (
-            f"traceroute forward `route` should be empty on a 2-device direct "
-            f"mesh (no intermediaries between {tx_role} and {rx_role}); got "
-            f"{forward_hops!r}"
+        # Inspect the reply's recorded path. `raw` is the MeshPacket protobuf.
+        raw = packet["raw"]
+        assert raw.flags & raw.PACKET_RECORD_PATH, (
+            f"{rx_role}'s reply did not mirror PACKET_RECORD_PATH, so it recorded no "
+            f"path (firmware without MeshModule::setReplyTo mirroring the flag?)"
         )
-        assert back_hops == [], (
-            f"traceroute `routeBack` should be empty on a 2-device direct mesh; got {back_hops!r}"
+        hops = raw.hop_start - raw.hop_limit
+        assert hops == 0, (
+            f"the reply should come straight back on a 2-device direct mesh "
+            f"({tx_role}<-{rx_role}); took {hops} hops"
         )
-        # `snr_towards` has len(route) + 1 entries — one per hop plus a final
-        # entry for the destination's receive SNR. Direct mesh → len(route)
-        # is 0 → exactly 1 SNR entry.
-        assert len(snr_towards) == 1, (
-            f"traceroute `snrTowards` should carry exactly 1 entry (direct "
-            f"link SNR) on a 2-device mesh; got {snr_towards!r}"
+        assert raw.path == b"", f"a direct reply records no tail; got {raw.path.hex()}"
+        assert raw.relay_node == (rx_node_num & 0xFF or 0x01), (
+            f"a direct reply's relay_node is {rx_role}'s own suffix; got {raw.relay_node:#04x}"
         )

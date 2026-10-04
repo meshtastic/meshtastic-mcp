@@ -377,7 +377,7 @@ class Recorder:
                     "short": (user or {}).get("shortName"),
                     "long": (user or {}).get("longName"),
                     "hops_away": (node or {}).get("hopsAway"),
-                    "snr": (node or {}).get("snr"),
+                    "snr": parsers._half_db((node or {}).get("snr")),
                     "last_heard": (node or {}).get("lastHeard"),
                 },
             )

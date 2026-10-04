@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 from google.protobuf import text_format
-from meshtastic.protobuf import mesh_pb2
+from meshtastic.protobuf import packet_pb2, portnums_pb2, wire_pb2
 
 from meshtastic_mcp.replay import capture, metrics, sim
 
@@ -110,7 +110,7 @@ def test_summarize_and_skew_helpers():
 # ── DEF CON log importer round-trip (synthetic log, real format) ─────────────
 
 
-def _dict_record(mp: mesh_pb2.MeshPacket) -> str:
+def _dict_record(mp: packet_pb2.MeshPacket) -> str:
     """Render a MeshPacket the way the DEF CON gateway logs do: a str(dict)
     with a top-level `'raw': <text-format>` block."""
     raw = text_format.MessageToString(mp)
@@ -122,15 +122,15 @@ def _dict_record(mp: mesh_pb2.MeshPacket) -> str:
 
 def _mk_packet(
     pid: int, frm: int, portnum: int, payload: bytes, rx_time: int
-) -> mesh_pb2.MeshPacket:
-    mp = mesh_pb2.MeshPacket()
+) -> packet_pb2.MeshPacket:
+    mp = packet_pb2.MeshPacket()
     setattr(mp, "from", frm)
     mp.to = 0xFFFFFFFF
     mp.id = pid
     mp.rx_time = rx_time
     mp.hop_limit = 2
     mp.hop_start = 3
-    mp.rx_snr = 9.5
+    mp.rx_snr = 19  # 9.5 dB, in half-dB steps
     mp.rx_rssi = -80
     mp.decoded.portnum = portnum
     mp.decoded.payload = payload
@@ -139,12 +139,12 @@ def _mk_packet(
 
 def test_import_defcon_logs_roundtrip(tmp_path):
     imp = _load_importer()
-    user = mesh_pb2.User(id="!0000002a", long_name="Synth Node", short_name="SYNT", hw_model=43)
+    user = wire_pb2.User(long_name="Synth Node", short_name="SYNT", hw_model=43)
     text = _mk_packet(101, 42, 1, b"hello synthetic mesh", 1_700_000_100)
     info = _mk_packet(102, 42, 4, user.SerializeToString(), 1_700_000_050)
     dup = _mk_packet(101, 42, 1, b"hello synthetic mesh", 1_700_000_130)
     dup.hop_limit = 1  # rebroadcast copy, one hop later
-    enc = mesh_pb2.MeshPacket()
+    enc = packet_pb2.MeshPacket()
     setattr(enc, "from", 77)
     enc.to = 0xFFFFFFFF
     enc.id = 103
@@ -184,10 +184,10 @@ def test_import_defcon_position_before_nodeinfo(tmp_path):
     (beacons outnumber NodeInfo, so this is the common case) — a bare UPDATE
     would silently drop the fix."""
     imp = _load_importer()
-    pos = mesh_pb2.Position(latitude_i=407_864_000, longitude_i=-1_192_065_000)
+    pos = wire_pb2.Position(latitude=407_864_000, longitude=-1_192_065_000)
     # POSITION arrives first, NODEINFO only later
     pos_pkt = _mk_packet(201, 55, 3, pos.SerializeToString(), 1_700_000_010)
-    user = mesh_pb2.User(id="!00000037", long_name="Late Info", short_name="LATE", hw_model=43)
+    user = wire_pb2.User(long_name="Late Info", short_name="LATE", hw_model=43)
     info = _mk_packet(202, 55, 4, user.SerializeToString(), 1_700_000_500)
 
     log = tmp_path / "posfirst_LongFast.txt"
@@ -252,9 +252,12 @@ def _telemetry(cap, variant):
     from meshtastic.protobuf import telemetry_pb2
 
     for _t, raw, _ch in cap.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
-        if mp.WhichOneof("payload_variant") != "decoded" or mp.decoded.portnum != 67:
+        if (
+            mp.WhichOneof("payload_variant") != "decoded"
+            or mp.decoded.portnum != portnums_pb2.PortNum.TELEMETRY_APP
+        ):
             continue
         tel = telemetry_pb2.Telemetry()
         tel.ParseFromString(mp.decoded.payload)
@@ -285,9 +288,12 @@ def test_chutil_tracks_generated_load():
     by_hour_n = Counter((t - start) // 3600 for t, _r, _c in cap.packets)
     by_hour_util = defaultdict(list)
     for _t, raw, _ch in cap.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
-        if mp.WhichOneof("payload_variant") == "decoded" and mp.decoded.portnum == 67:
+        if (
+            mp.WhichOneof("payload_variant") == "decoded"
+            and mp.decoded.portnum == portnums_pb2.PortNum.TELEMETRY_APP
+        ):
             from meshtastic.protobuf import telemetry_pb2
 
             tel = telemetry_pb2.Telemetry()
@@ -304,27 +310,34 @@ def test_chutil_tracks_generated_load():
     assert rho > 0.5, f"chutil should track the diurnal load envelope (rho={rho:.2f})"
 
 
-def test_env_telemetry_personas_and_nan():
-    import math
+def _quantities(tel) -> set[int]:
+    return {k & 0x7F for k in tel.sensor_readings.keys}
 
+
+def test_env_telemetry_personas_and_nan():
+    from meshtastic.protobuf import telemetry_pb2
+
+    q = telemetry_pb2.SensorReadings
     cap = sim.generate(nodes=400, days=2, seed=3, start=1_700_000_000)
-    envs = list(_telemetry(cap, "environment_metrics"))
+    envs = [
+        t for t in _telemetry(cap, "sensor_readings") if q.AIR_TEMPERATURE_C_CENTI in _quantities(t)
+    ]
     assert envs
     # every persona reports temperature; only subsets report lux/humidity/pressure
-    assert all(t.environment_metrics.HasField("temperature") for t in envs)
-    n_lux = sum(t.environment_metrics.HasField("lux") for t in envs)
-    n_hum = sum(t.environment_metrics.HasField("relative_humidity") for t in envs)
+    n_lux = sum(q.ILLUMINANCE_LUX_DECI in _quantities(t) for t in envs)
+    n_hum = sum(q.AIR_HUMIDITY_PCT_CENTI in _quantities(t) for t in envs)
     assert 0 < n_lux < len(envs)
     assert 0 < n_hum < len(envs)
-    # a boosted NaN fraction survives serialization (real sensors emit NaN)
+    # a reading a sensor fails to produce (NaN on the sensor) is left out of the batch
     prof = {"climate": {"t_mean": 22.0, "t_amp": 9.0, "pressure_hpa": 780.0, "nan_fraction": 0.5}}
     cap2 = sim.generate(nodes=400, days=2, seed=3, start=1_700_000_000, profile=prof)
-    hums = [
-        t.environment_metrics.relative_humidity
-        for t in _telemetry(cap2, "environment_metrics")
-        if t.environment_metrics.HasField("relative_humidity")
+    envs2 = [
+        t
+        for t in _telemetry(cap2, "sensor_readings")
+        if q.AIR_TEMPERATURE_C_CENTI in _quantities(t)
     ]
-    assert sum(math.isnan(h) for h in hums) > 0
+    n_hum2 = sum(q.AIR_HUMIDITY_PCT_CENTI in _quantities(t) for t in envs2)
+    assert n_hum2 / len(envs2) < n_hum / len(envs)
 
 
 def test_text_spike_multiplies_hourly_budget():
@@ -335,7 +348,7 @@ def test_text_spike_multiplies_hourly_budget():
     cap = sim.generate(nodes=300, days=1, seed=5, start=start, profile=prof)
     texts = Counter()
     for t, raw, _ch in cap.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
         if mp.WhichOneof("payload_variant") == "decoded" and mp.decoded.portnum == 1:
             texts[(t - start) // 3600] += 1
@@ -424,7 +437,7 @@ def test_fit_profile_v2_emits_full_schema_and_round_trips():
 
 
 def test_ninja_fuzz_preset_spoofs_nodeinfo_without_key_change():
-    from meshtastic.protobuf import mesh_pb2
+    from meshtastic.protobuf import wire_pb2
 
     from meshtastic_mcp.replay import fuzz
     from meshtastic_mcp.replay import sim as _sim
@@ -444,7 +457,7 @@ def test_ninja_fuzz_preset_spoofs_nodeinfo_without_key_change():
     spoofed = 0
     for mp in out:
         assert mp.decoded.portnum == 4  # NODEINFO
-        u = mesh_pb2.User()
+        u = wire_pb2.User()
         u.ParseFromString(mp.decoded.payload)
         assert getattr(mp, "from") in real_nums  # uses a real node's number
         assert not u.public_key  # no key change -> dodges the app's warning
@@ -458,7 +471,7 @@ def test_ninja_fuzz_preset_spoofs_nodeinfo_without_key_change():
 
 
 def test_tak_squad_is_opt_in_and_well_formed():
-    from meshtastic.protobuf import atak_pb2
+    from meshtastic.protobuf import atak_pb2, packet_pb2
 
     from meshtastic_mcp.replay import sim as _sim
 
@@ -477,18 +490,21 @@ def test_tak_squad_is_opt_in_and_well_formed():
     callsigns = set()
     teams = set()
     for _t, raw, _ch in cap.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
-        if mp.WhichOneof("payload_variant") != "decoded" or mp.decoded.portnum != 72:
+        if (
+            mp.WhichOneof("payload_variant") != "decoded"
+            or mp.decoded.portnum != portnums_pb2.PortNum.ATAK_PLUGIN
+        ):
             continue
         tp = atak_pb2.TAKPacket()
         tp.ParseFromString(mp.decoded.payload)  # must be a valid TAKPacket
-        callsigns.add(tp.contact.callsign)
-        teams.add(tp.group.team)
-        assert tp.status.battery <= 100
-        if tp.HasField("pli"):
+        callsigns.add(tp.callsign)
+        teams.add(tp.team)
+        assert tp.battery <= 100
+        if tp.WhichOneof("payload_variant") is None:  # a PLI: position, no payload
             pli += 1
-            assert -900_000_000 <= tp.pli.latitude_i <= 900_000_000
+            assert -900_000_000 <= tp.latitude_i <= 900_000_000
         if tp.HasField("chat"):
             chat += 1
             assert tp.chat.message

@@ -92,12 +92,13 @@ def _wait_for_pubkey(tx_iface: Any, rx_num: int, rx_port: str, deadline_s: float
 
 
 def _traceroute_route(tx_port: str, rx_num: int, rx_port: str) -> list[int] | None:
-    """Run a traceroute TX→RX and return the forward `route` (list of relay node
-    numbers), or None if it couldn't be obtained. Mirrors test_traceroute's
-    request/PKI/retry pattern."""
+    """Run a traceroute TX→RX and return the route (relay node numbers, TX side
+    first), or None if it couldn't be obtained. Mirrors test_traceroute's
+    request/PKI/retry pattern. 3.0 records the route back in the reply's path
+    tail, one byte per relay, resolved here against TX's node DB."""
     from meshtastic.mesh_interface import MeshInterface
 
-    with ReceiveCollector(tx_port, topic="meshtastic.receive.traceroute") as tx:
+    with ReceiveCollector(tx_port, topic="meshtastic.receive.telemetry") as tx:
         nudge_nodeinfo_port(rx_port)
         tx.broadcast_nodeinfo_ping()
         if not _wait_for_pubkey(tx._iface, rx_num, rx_port, 60.0):
@@ -113,8 +114,17 @@ def _traceroute_route(tx_port: str, rx_num: int, rx_port: str) -> list[int] | No
         pkt = tx.wait_for(lambda p: p.get("from") == rx_num, timeout=8.0)
         if pkt is None:
             return None
-        tr = (pkt.get("decoded", {}) or {}).get("traceroute") or {}
-        return [int(n) for n in (tr.get("route") or [])]
+        raw = pkt["raw"]
+        hops = raw.hop_start - raw.hop_limit
+        suffixes = list(raw.path) + ([raw.relay_node] if hops else [])
+        known = list(tx._iface.nodesByNum or {})
+        route = []
+        for sfx in reversed(suffixes):  # the reply recorded the way back: flip it
+            nums = [n for n in known if (n & 0xFF or 0x01) == sfx]
+            if len(nums) != 1:
+                return None  # a suffix no known node, or several, ends in
+            route.append(nums[0])
+        return route
 
 
 @pytest.fixture(scope="session")

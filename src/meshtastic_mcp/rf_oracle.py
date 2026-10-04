@@ -36,7 +36,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-from meshtastic.protobuf import channel_pb2
+from meshtastic.node import channel_role
 
 if TYPE_CHECKING:  # numpy ships with the [sdr] extra — keep the base install slim
     import numpy as np
@@ -78,12 +78,13 @@ def read_lora_context(port: str | None = None) -> dict[str, Any]:
         lora = _message_to_dict(node.localConfig.lora)
         device = _message_to_dict(node.localConfig.device)
         channels = list(node.channels or [])
-        primary = next((c for c in channels if c.role == channel_pb2.Channel.Role.PRIMARY), None)
+        primary = next((c for c in channels if channel_role(c) == "PRIMARY"), None)
         channel_name = primary.settings.name if primary is not None else ""
 
     return {
-        "region": lora.get("region", "UNSET"),
-        "modem_preset": lora.get("modem_preset", "LONG_FAST"),
+        # 3.0 prefixes the enum names; the compliance tables use the bare names
+        "region": lora.get("region", "UNSET").removeprefix("REGION_"),
+        "modem_preset": lora.get("modem_preset", "LONG_FAST").removeprefix("MODEM_"),
         "use_preset": lora.get("use_preset", True),
         "bandwidth": lora.get("bandwidth") or None,
         "spread_factor": lora.get("spread_factor") or None,

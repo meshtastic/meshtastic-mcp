@@ -97,10 +97,10 @@ def test_telemetry_realism(preset_stats):
         batt = dict(tel["battery_top"])
         assert 101 in batt
         assert 0 in batt
-        # device metrics dominate, env + power present
+        # device metrics dominate, sensor readings (env + power) present
         vm = tel["variant_mix"]
-        assert vm.get("device_metrics", 0) > vm.get("environment_metrics", 0)
-        assert vm.get("environment_metrics", 0) > 0
+        assert vm.get("device_metrics", 0) > vm.get("sensor_readings", 0)
+        assert vm.get("sensor_readings", 0) > 0
 
 
 def test_observer_presets_produce_gateway_view(preset_stats):

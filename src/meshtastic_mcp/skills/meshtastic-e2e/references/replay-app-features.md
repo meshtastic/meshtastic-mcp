@@ -141,23 +141,21 @@ an actionable `error` hint; the **session still runs**, you just connect by IP.
 
 ## D. Traceroute log
 
-Apps surface only traceroute **responses** in their traceroute log (Settings → Traceroute Log on
-Apple): the handler ignores in-flight *requests* (`decoded.request_id == 0`) and persists only
-responses (nonzero `request_id`). The sim emits **request → response pairs** with firmware
-`RouteDiscovery` semantics (relays-only route, endpoints implied by from/to, `len(route)+1` SNR
-entries, `hop_start > 0`), so the log fills in on its own during any `conference-stress`/`defcon`
-replay.
+3.0 has no traceroute message: a client asks a node for a reply with `PACKET_RECORD_PATH` set, and
+the reply's path tail is the route back (`relay_node` the last relay, `path` the relays before it,
+one byte each, `hop_start - hop_limit` hops taken; no per-hop SNR). Apps surface the **replies**
+(nonzero `request_id`). The sim emits **request → reply pairs**, so the log fills in on its own
+during any `conference-stress`/`defcon` replay.
 
 - **Passive:** stream `conference-stress` (or any `defcon` sim with the bot plane — attendees trace
   the bots) and assert the traceroute log grows: `poll_for_text` a known hop-list row, or navigate
   Settings → Traceroute Log and read the entry count off the tree.
 - **App-initiated:** issue a traceroute from the app toward a synthetic node; the engine’s live
-  responder answers with a well-formed `RouteDiscovery` addressed back to you, echoing your
-  `request_id`, so the outgoing traceroute resolves in-UI (hop list + SNR + `route back`).
+  responder answers with a reply addressed back to you that recorded its path, echoing your
+  `request_id`, so the outgoing traceroute resolves in-UI.
 
-> Craft a response by hand with `replay_inject(sid, "traceroute", {route:[…relays], snr_towards:[…],
-> route_back:[…], snr_back:[…], request_id: <target>}, from_node=<dest>, to_node=<requester>)`.
-> `request_id` must be nonzero or the app treats it as a request and drops it.
+> Craft a reply by hand with `replay_inject(sid, "traceroute", {route:[…relays, oldest first],
+> request_id: <target>}, from_node=<dest>, to_node=<requester>)`.
 
 ---
 

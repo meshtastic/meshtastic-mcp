@@ -228,18 +228,18 @@ replay_status(); replay_stop()
   that event's channel names + PSKs; nothing event-specific is baked in.
 - **Synthetic mesh** (`replay/sim.py`): seeded, PII-free *MeshCon* generator — tunable node
   count (default 800, scales to thousands) / channels / duration, a diurnal activity envelope, and
-  every portnum/flavor (incl. RANGE_TEST). Its default distributions (hardware/role mix, telemetry
+  every portnum/flavor, in the 3.0 schema. Its default distributions (hardware/role mix, telemetry
   value ranges, position precision, hop-limit spread, text rate, **node presence/churn** — a
   persistent core plus transient attendees, which reproduces the real heavy activity skew —
   short-message lengths, and a share of encrypted/foreign traffic) are informed by the aggregate
   statistics of real ~1,800-node captures (Burning Man + DEF CON 33) — proportions only; every
   identity, position, and message is generated. `sim.fit_profile(capture)` derives such a profile
-  from any capture. Traceroutes are emitted as request→response pairs with firmware `RouteDiscovery`
-  semantics so app traceroute logs populate. **Node identity**: richer names via the optional
+  from any capture. Traceroutes are emitted as 3.0 request→reply pairs (a `PACKET_RECORD_PATH`
+  request, a reply whose path tail records the relays back) so app traceroute logs populate. **Node identity**: richer names via the optional
   `[sim]` extra (Faker person names / usernames / callsigns; falls back to built-in pools),
-  `emoji_short_fraction` of nodes with single-emoji short names, and **2.8 signed node data** —
+  `emoji_short_fraction` of nodes with single-emoji short names, and **signed node data** —
   `pki_fraction` advertise a 32-byte `public_key`, a `key_verified_fraction` slice manually
-  verified — so the app shows keys/verification like real 2.8 firmware.
+  verified — so the app shows keys/verification like real firmware.
 - **BBS/bot plane** (`sim_profile={"bots": {"count": N}}`, off by default) — a meshing-around-style
   scene: auto-reply bots (ping→pong pile-ons, `cmd`/`motd`/`wx`/`joke`/games menus) egged on by
   attendees, tapback (emoji-reaction) storms incl. one legendary 100+-reaction broadcast, per-bot

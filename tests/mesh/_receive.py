@@ -45,9 +45,9 @@ def nudge_nodeinfo(iface: Any) -> None:
     Nudging only one side leaves the other with a stale pubkey cache and
     makes the directed send NAK with PKI_UNKNOWN_PUBKEY.
     """
-    from meshtastic.protobuf import mesh_pb2  # type: ignore[import-untyped]
+    from meshtastic.protobuf import api_pb2  # type: ignore[import-untyped]
 
-    tr = mesh_pb2.ToRadio()
+    tr = api_pb2.ToRadio()
     tr.heartbeat.nonce = 1
     iface._sendToRadio(tr)
 

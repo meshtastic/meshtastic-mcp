@@ -36,21 +36,22 @@ from typing import Any
 
 from meshtastic.protobuf import (
     admin_pb2,
-    channel_pb2,
-    config_pb2,
-    mesh_pb2,
+    api_pb2,
+    common_pb2,
+    packet_pb2,
     portnums_pb2,
     telemetry_pb2,
 )
 
 from ..recorder.recorder import _default_dir as _recorder_default_dir
 from ..recorder.rotating import _RotatingJsonl
+from . import build
 from . import mdns as _mdns
 from .capture import Capture, node_to_nodeinfo
 from .fuzz import FuzzConfig, Fuzzer
 
-# Portnum for TRACEROUTE_APP — mirrored from portnums_pb2 for readability.
-_TRACEROUTE_APP = portnums_pb2.PortNum.TRACEROUTE_APP  # 70
+_RECORD_PATH = packet_pb2.MeshPacket.PACKET_RECORD_PATH
+_WANT_RESPONSE = 0x02  # wire_pb2.Data.BITFIELD_WANT_RESPONSE
 
 
 def _replay_log_dir() -> Path:
@@ -75,8 +76,8 @@ NONCE_CONFIG = 69420
 NONCE_DB = 69421
 
 # A radio's want-config carries every channel slot, unused ones DISABLED; strict clients
-# (Apple) refuse a channel set that is missing any slot.
-MAX_CHANNELS = 8
+# (Apple) refuse a channel set that is missing any slot. A 3.0 node holds 16.
+MAX_CHANNELS = 16
 
 # Synthetic observer node the app connects "as" (must not collide with capture).
 # Overridable so multiple replay instances can present distinct radios (node num, device id,
@@ -94,10 +95,9 @@ OWNER_SESSION_PASSKEY = b"replay01"
 # api.meshtastic.org/resource/eventFirmware so a replay of that event drives the app's
 # event-info build comparison exactly as a live event node would; everything else keeps
 # the historical placeholder. Update the event values as the published builds advance.
-DEFAULT_FIRMWARE_VERSION = "2.7.8"
-EVENT_FIRMWARE_VERSIONS = {
-    "DEFCON": "2.8.0.c800fc8",
-}
+DEFAULT_FIRMWARE_VERSION = "3.0.0"
+# No event edition has a published 3.0 build yet.
+EVENT_FIRMWARE_VERSIONS: dict[str, str] = {}
 
 
 def firmware_version_for(edition: str, override: str | None) -> str:
@@ -113,8 +113,8 @@ class PortInUseError(RuntimeError):
 
 # Synthetic "Replay Clock" node that posts progress messages into the mesh.
 ANNOUNCER_NUM = 0x5245504C  # "REPL"
-TEXT_MESSAGE_APP = 1
-TELEMETRY_APP = portnums_pb2.PortNum.TELEMETRY_APP  # 67
+TEXT_MESSAGE_APP = portnums_pb2.PortNum.TEXT_MESSAGE_APP
+TELEMETRY_APP = portnums_pb2.PortNum.TELEMETRY_APP
 
 
 def _format_eta(seconds: float) -> str:
@@ -128,7 +128,7 @@ def _representative_radio_metrics(
     """Median radio load from captured DeviceMetrics, for observer LocalStats."""
     channel_utilization: list[float] = []
     air_util_tx: list[float] = []
-    packet = mesh_pb2.MeshPacket()
+    packet = packet_pb2.MeshPacket()
     telemetry = telemetry_pb2.Telemetry()
     for _rx_time, raw, _channel in packets:
         packet.Clear()
@@ -148,11 +148,11 @@ def _representative_radio_metrics(
             continue
         if telemetry.WhichOneof("variant") != "device_metrics":
             continue
-        metrics = telemetry.device_metrics
+        metrics = telemetry.device_metrics  # utilisation in hundredths of a percent
         if metrics.HasField("channel_utilization"):
-            channel_utilization.append(float(metrics.channel_utilization))
+            channel_utilization.append(metrics.channel_utilization / 100.0)
         if metrics.HasField("air_util_tx"):
-            air_util_tx.append(float(metrics.air_util_tx))
+            air_util_tx.append(metrics.air_util_tx / 100.0)
 
     channel = statistics.median(channel_utilization) if channel_utilization else 0.0
     air = statistics.median(air_util_tx) if air_util_tx else 0.0
@@ -221,7 +221,7 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
     return bytes(buf)
 
 
-def _read_toradio(sock: socket.socket) -> mesh_pb2.ToRadio | None:
+def _read_toradio(sock: socket.socket) -> api_pb2.ToRadio | None:
     """Block until one full ToRadio frame is read; None on EOF."""
     state = 0
     while True:
@@ -242,11 +242,11 @@ def _read_toradio(sock: socket.socket) -> mesh_pb2.ToRadio | None:
     payload = _recv_exact(sock, length) if length else b""
     if payload is None:
         return None
-    tr = mesh_pb2.ToRadio()
+    tr = api_pb2.ToRadio()
     try:
         tr.ParseFromString(payload)
     except Exception:
-        return mesh_pb2.ToRadio()
+        return api_pb2.ToRadio()
     return tr
 
 
@@ -374,14 +374,14 @@ class ReplaySession:
         self._advertiser: _mdns.Advertiser | None = None  # mDNS/Bonjour, if enabled
         self._ch_index = {name: i for i, name in enumerate(capture.channels)}
         # live-injection queue: (MeshPacket, channel_name, fuzz) drained per client
-        self._inject_q: queue.Queue[tuple[mesh_pb2.MeshPacket, str, bool]] = queue.Queue()
+        self._inject_q: queue.Queue[tuple[packet_pb2.MeshPacket, str, bool]] = queue.Queue()
         # live-injection queue for top-level FromRadio messages (FileInfo, MyInfo, Config,
         # ModuleConfig, Channel, ...) -- the handshake-phase counterpart to _inject_q. These
         # oneofs are only ever sent during _send_config_phase/_send_db_phase today, so there was
         # no way to exercise a handler for them (e.g. handleFileInfo) outside the initial
         # handshake window. Most app-side handlers don't gate on handshake state, so injecting
         # one mid-session is a legitimate way to fuzz/exercise that code path on demand.
-        self._inject_fr_q: queue.Queue[mesh_pb2.FromRadio] = queue.Queue()
+        self._inject_fr_q: queue.Queue[api_pb2.FromRadio] = queue.Queue()
         self.fuzzer: Fuzzer | None = (
             Fuzzer(params.fuzz, capture.nodes, self._ch_index) if params.fuzz else None
         )
@@ -537,7 +537,7 @@ class ReplaySession:
         send_lock = threading.Lock()
         streaming = [False]
 
-        def send(fr: mesh_pb2.FromRadio) -> None:
+        def send(fr: api_pb2.FromRadio) -> None:
             data = _frame(fr.SerializeToString())
             if self.fuzzer is not None:
                 data = self.fuzzer.maybe_corrupt_frame(data)
@@ -593,7 +593,7 @@ class ReplaySession:
     # -- handshake phases --
     def _send_config_phase(self, send: Any, nonce: int) -> None:
         n_nodes = len(self.capture.nodes)
-        fr = mesh_pb2.FromRadio()
+        fr = api_pb2.FromRadio()
         mi = fr.my_info
         mi.my_node_num = self.params.observer_num
         mi.reboot_count = 1
@@ -601,71 +601,66 @@ class ReplaySession:
         mi.nodedb_count = n_nodes
         mi.device_id = struct.pack("<I", self.params.observer_num) * 4  # stable 16-byte id
         mi.pio_env = "replay"
+        edition = self.params.firmware_edition.upper()
         with contextlib.suppress(ValueError, KeyError):
-            mi.firmware_edition = mesh_pb2.FirmwareEdition.Value(self.params.firmware_edition)
+            mi.firmware_edition = common_pb2.FirmwareEdition.Value(  # type: ignore[assignment]
+                edition if edition.startswith("EDITION_") else f"EDITION_{edition}"
+            )
         send(fr)
 
-        fr = mesh_pb2.FromRadio()
+        fr = api_pb2.FromRadio()
         md = fr.metadata
         md.firmware_version = firmware_version_for(
             self.params.firmware_edition, self.params.firmware_version
         )
-        md.role = config_pb2.Config.DeviceConfig.Role.CLIENT
-        md.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
+        md.role = common_pb2.Role.CLIENT
+        md.hw_model = build.hw_model_value("HELTEC_V3")
+        caps = common_pb2.DeviceMetadata
+        md.capabilities = caps.CAPABILITY_HAS_PKC | caps.CAPABILITY_HAS_XEDDSA
         send(fr)
 
         send(self._observer_nodeinfo())
 
+        # 3.0 channels carry no role: index 0 is the primary, and a slot without
+        # settings is disabled.
         specs = self.capture.channel_specs
-        for idx, name in enumerate(self.capture.channels):
-            fr = mesh_pb2.FromRadio()
+        for idx, name in enumerate(self.capture.channels[:MAX_CHANNELS]):
+            fr = api_pb2.FromRadio()
             fr.channel.index = idx
             if specs is not None and idx < len(specs):
-                # real keys/roles — lets the app live-decrypt encrypted packets
+                # real keys — lets the app live-decrypt encrypted packets
                 s = specs[idx]
-                fr.channel.role = (
-                    channel_pb2.Channel.Role.PRIMARY
-                    if s.primary
-                    else channel_pb2.Channel.Role.SECONDARY
-                )
                 fr.channel.settings.psk = s.psk
                 fr.channel.settings.name = s.app_name
             elif idx == 0:
-                fr.channel.role = channel_pb2.Channel.Role.PRIMARY
                 fr.channel.settings.psk = bytes([0x01])
                 fr.channel.settings.name = "" if name == "LongFast" else name
             else:
-                fr.channel.role = channel_pb2.Channel.Role.SECONDARY
                 fr.channel.settings.psk = bytes([(0x10 + idx) & 0xFF] * 16)
                 fr.channel.settings.name = name
             send(fr)
         for idx in range(len(self.capture.channels), MAX_CHANNELS):
-            fr = mesh_pb2.FromRadio()
+            fr = api_pb2.FromRadio()
             fr.channel.index = idx
-            fr.channel.role = channel_pb2.Channel.Role.DISABLED
-            fr.channel.settings.SetInParent()
             send(fr)
 
-        fr = mesh_pb2.FromRadio()
-        fr.config.device.role = config_pb2.Config.DeviceConfig.Role.CLIENT
+        fr = api_pb2.FromRadio()
+        fr.config.device.role = common_pb2.Role.CLIENT
         send(fr)
-        fr = mesh_pb2.FromRadio()
-        fr.config.lora.use_preset = True
-        try:
-            fr.config.lora.modem_preset = config_pb2.Config.LoRaConfig.ModemPreset.Value(
-                self.params.modem_preset
-            )
-        except (ValueError, KeyError):
-            fr.config.lora.modem_preset = config_pb2.Config.LoRaConfig.ModemPreset.LONG_FAST
-        fr.config.lora.region = config_pb2.Config.LoRaConfig.RegionCode.US
+        fr = api_pb2.FromRadio()
+        # LORA_USE_PRESET without LORA_TX_ENABLED: a read-only replay
+        fr.config.lora.flags = fr.config.lora.LORA_USE_PRESET
+        fr.config.lora.modem_preset = build.modem_preset(  # type: ignore[assignment]
+            self.params.modem_preset, common_pb2.ModemPreset.MODEM_LONG_FAST
+        )
+        fr.config.lora.region = common_pb2.RegionCode.REGION_US
         fr.config.lora.hop_limit = 3
-        fr.config.lora.tx_enabled = False  # read-only replay
         send(fr)
-        fr = mesh_pb2.FromRadio()
-        fr.moduleConfig.mqtt.enabled = False
+        fr = api_pb2.FromRadio()
+        fr.module_config.mqtt.SetInParent()  # MQTT off: no flags
         send(fr)
 
-        fr = mesh_pb2.FromRadio()
+        fr = api_pb2.FromRadio()
         fr.config_complete_id = nonce
         send(fr)
 
@@ -676,12 +671,12 @@ class ReplaySession:
         if self.params.node_delay > 0:
             time.sleep(self.params.node_delay)
         for n in self.capture.nodes:
-            fr = mesh_pb2.FromRadio()
+            fr = api_pb2.FromRadio()
             fr.node_info.CopyFrom(node_to_nodeinfo(n, last_heard=now))
             send(fr)
             if self.params.node_delay > 0:
                 time.sleep(self.params.node_delay)
-        fr = mesh_pb2.FromRadio()
+        fr = api_pb2.FromRadio()
         fr.config_complete_id = nonce
         send(fr)
 
@@ -703,8 +698,9 @@ class ReplaySession:
             telemetry.time = now
             stats = telemetry.local_stats
             stats.uptime_seconds = max(1, now - int(self.state.started_at))
-            stats.channel_utilization = self._channel_utilization
-            stats.air_util_tx = self._air_util_tx
+            # hundredths of a percent, as the device reports them
+            stats.channel_utilization = round(self._channel_utilization * 100)
+            stats.air_util_tx = round(self._air_util_tx * 100)
             stats.num_packets_tx = next_tx
             stats.num_packets_rx = self.state.packets_sent + self.state.stats_dupes
             stats.num_packets_rx_bad = 0
@@ -717,22 +713,22 @@ class ReplaySession:
             send(self._local_telemetry_fr(telemetry))
             self.state.stats_sent = next_tx
 
-    def _handle_client_packet(self, pkt: mesh_pb2.MeshPacket, send: Any) -> None:
+    def _handle_client_packet(self, pkt: packet_pb2.MeshPacket, send: Any) -> None:
         """Answer admin round-trips and traceroute requests from the connected client.
 
         Real firmware replies to ``get_owner_request`` with the device owner and
         a session passkey; the replay device emulates that round-trip so strict
         clients (e.g. the Kotlin SDK) can reach a ready state.
 
-        ``TRACEROUTE_APP`` requests addressed to any synthetic node are answered
-        with a synthesised ``RouteDiscovery`` response carrying a plausible
-        intermediate relay and realistic SNR values (firmware semantics: hops
-        only, endpoints implied), so apps can exercise the traceroute UI (hop
-        list, SNR colouring, map flyover) without real hardware.
+        3.0 has no traceroute message: a client traces a route by asking a node
+        for a response with ``PACKET_RECORD_PATH`` set, and reads the reply's path
+        tail. Such a request to any synthetic node is answered with a reply that
+        recorded a plausible relay, so apps can exercise the traceroute UI
+        without real hardware.
         """
         portnum = pkt.decoded.portnum
 
-        if portnum == _TRACEROUTE_APP:
+        if pkt.flags & _RECORD_PATH and pkt.decoded.bitfield & _WANT_RESPONSE:
             self._handle_traceroute(pkt, send)
             return
 
@@ -749,14 +745,13 @@ class ReplaySession:
         requester = getattr(pkt, "from", 0) or self.params.observer_num
         resp = admin_pb2.AdminMessage()
         owner = resp.get_owner_response
-        owner.id = f"!{self.params.observer_num:08x}"
         owner.long_name = "Replay Observer"
         owner.short_name = "RPLY"
-        owner.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
-        owner.role = config_pb2.Config.DeviceConfig.Role.CLIENT
+        owner.hw_model = build.hw_model_value("HELTEC_V3")
+        owner.role = common_pb2.Role.CLIENT
         resp.session_passkey = OWNER_SESSION_PASSKEY
 
-        fr = mesh_pb2.FromRadio()
+        fr = api_pb2.FromRadio()
         mp = fr.packet
         # responder identity; client keys the passkey on this
         setattr(mp, "from", self.params.observer_num)
@@ -764,23 +759,21 @@ class ReplaySession:
         mp.id = int(time.time() * 1000) & 0x7FFFFFFF
         mp.rx_time = int(time.time())
         mp.channel = 0
-        mp.decoded.portnum = portnums_pb2.PortNum.ADMIN_APP
+        mp.decoded.portnum = portnums_pb2.PortNum.ADMIN_APP  # type: ignore[assignment]
         if pkt.id:
             mp.decoded.request_id = pkt.id
         mp.decoded.payload = resp.SerializeToString()
         send(fr)
 
-    def _handle_traceroute(self, pkt: mesh_pb2.MeshPacket, send: Any) -> None:
-        """Synthesise a RouteDiscovery response to a client traceroute request.
+    def _handle_traceroute(self, pkt: packet_pb2.MeshPacket, send: Any) -> None:
+        """Answer a path-recording request with a reply that recorded its way back.
 
-        Firmware `RouteDiscovery` semantics: `route`/`route_back` carry the
-        *intermediate* hops only — each relay appends its own num while the
-        request (then response) travels; the requester and destination are
-        implied by the packet's from/to and must NOT appear in the lists (apps
-        add the endpoints when rendering, so including them draws a duplicated
-        "You → You → … → Dest → Dest" hop list). SNR lists carry one entry per
-        *receiving* hop including the endpoint, so len == len(route) + 1, in
-        firmware's SNR×4 int encoding.
+        Firmware semantics (SCHEMA.md §8, The path tail): the reply mirrors
+        ``PACKET_RECORD_PATH``; ``relay_node`` is the last relay and ``path`` the
+        relays before it, one byte per hop, oldest first, with
+        ``hop_start - hop_limit`` hops taken. The endpoints are the packet's from
+        and to, never in the tail. A device-metrics telemetry reply stands in for
+        whatever the request asked.
         """
         dest = pkt.to & 0xFFFFFFFF
         requester = getattr(pkt, "from", 0) or self.params.observer_num
@@ -798,32 +791,20 @@ class ReplaySession:
         ]
         relays = [random.choice(routers)] if routers else []
 
-        rd = mesh_pb2.RouteDiscovery()
-        for nn in relays:
-            rd.route.append(nn & 0xFFFFFFFF)
-        for _ in range(len(relays) + 1):  # one per receiving hop incl. dest
-            rd.snr_towards.append(random.randint(-40, 48))  # -10..+12 dB × 4
-        for nn in reversed(relays):
-            rd.route_back.append(nn & 0xFFFFFFFF)
-        for _ in range(len(relays) + 1):  # one per receiving hop incl. requester
-            rd.snr_back.append(random.randint(-40, 48))
-
-        fr = mesh_pb2.FromRadio()
+        fr = api_pb2.FromRadio()
         mp = fr.packet
-        setattr(mp, "from", dest)
-        mp.to = requester & 0xFFFFFFFF
-        mp.id = int(time.time() * 1000) & 0x7FFFFFFF
-        mp.rx_time = int(time.time())
-        mp.channel = pkt.channel
-        # hop_start must be nonzero: apps gate the "route back" rendering on it
-        # (a 0 hop_start reads as a legacy/hopless packet and drops the return
-        # leg). hop_limit = hop_start - hops actually taken.
-        mp.hop_start = 3
-        mp.hop_limit = 3 - len(relays)
-        mp.decoded.portnum = _TRACEROUTE_APP
-        if pkt.id:
-            mp.decoded.request_id = pkt.id
-        mp.decoded.payload = rd.SerializeToString()
+        mp.CopyFrom(
+            build.packet(
+                TELEMETRY_APP,
+                build.device_metrics_payload(),
+                from_node=dest,
+                to_node=requester,
+                channel_idx=pkt.channel,
+                request_id=pkt.id,
+            )
+        )
+        build.record_path(mp, relays, hop_start=3)
+        mp.rx_snr = random.randint(-20, 24)  # -10..+12 dB, in half-dB steps
         try:
             send(fr)
         except (OSError, ConnectionError):
@@ -850,15 +831,14 @@ class ReplaySession:
             b"replay-observer-pubkey" + self.params.observer_num.to_bytes(4, "little")
         ).digest()
 
-    def _observer_nodeinfo(self) -> mesh_pb2.FromRadio:
-        fr = mesh_pb2.FromRadio()
+    def _observer_nodeinfo(self) -> api_pb2.FromRadio:
+        fr = api_pb2.FromRadio()
         ni = fr.node_info
         ni.num = self.params.observer_num
-        ni.user.id = f"!{self.params.observer_num:08x}"
         ni.user.long_name = "Replay Observer"
         ni.user.short_name = "RPLY"
-        ni.user.hw_model = mesh_pb2.HardwareModel.HELTEC_V3
-        ni.user.role = config_pb2.Config.DeviceConfig.Role.CLIENT
+        ni.user.hw_model = build.hw_model_value("HELTEC_V3")
+        ni.user.role = common_pb2.Role.CLIENT
         # On 2.8+ editions (e.g. DEFCON) the connected node runs PKC firmware, so
         # it advertises its own public key — the app shows the local node signed.
         if self._firmware_is_28plus():
@@ -871,16 +851,15 @@ class ReplaySession:
         else:
             pos = self.capture.center()
         if pos:
-            ni.position.latitude_i, ni.position.longitude_i = pos
+            ni.position.latitude, ni.position.longitude = pos
         ni.last_heard = int(time.time())
         ni.hops_away = 0
         return fr
 
-    def _announcer_nodeinfo(self) -> mesh_pb2.FromRadio:
-        fr = mesh_pb2.FromRadio()
+    def _announcer_nodeinfo(self) -> api_pb2.FromRadio:
+        fr = api_pb2.FromRadio()
         ni = fr.node_info
         ni.num = ANNOUNCER_NUM
-        ni.user.id = f"!{ANNOUNCER_NUM:08x}"
         ni.user.long_name = "Replay Clock"
         ni.user.short_name = "TIME"
         ni.last_heard = int(time.time())
@@ -888,16 +867,16 @@ class ReplaySession:
         return fr
 
     def _announce(self, send: Any, text: str, ch_idx: int) -> None:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         setattr(mp, "from", ANNOUNCER_NUM)
         mp.to = 0xFFFFFFFF
         mp.channel = ch_idx
         mp.id = int(time.time() * 1000) & 0x7FFFFFFF
         mp.rx_time = int(time.time())
         mp.hop_limit = 3
-        mp.decoded.portnum = TEXT_MESSAGE_APP
+        mp.decoded.portnum = TEXT_MESSAGE_APP  # type: ignore[assignment]
         mp.decoded.payload = text.encode("utf-8")
-        fr = mesh_pb2.FromRadio()
+        fr = api_pb2.FromRadio()
         fr.packet.CopyFrom(mp)
         send(fr)
 
@@ -918,7 +897,7 @@ class ReplaySession:
         # clamp; small jitter so it's not a flat line.
         return round(min(65.0, 5.0 + 0.32 * rate) * random.uniform(0.9, 1.1), 2)
 
-    def _local_telemetry_fr(self, tm: telemetry_pb2.Telemetry) -> mesh_pb2.FromRadio:
+    def _local_telemetry_fr(self, tm: telemetry_pb2.Telemetry) -> api_pb2.FromRadio:
         """Wrap a Telemetry message in a FromRadio packet from the observer node.
 
         The app dispatches TELEMETRY_APP by `packet.from`; the connected node's
@@ -926,18 +905,18 @@ class ReplaySession:
         packet id keeps successive observer packets (LOCAL_STATS on its own
         cadence, DEVICE_METRICS on another) distinct so none of them is deduped.
         """
-        fr = mesh_pb2.FromRadio()
+        fr = api_pb2.FromRadio()
         mp = fr.packet
         setattr(mp, "from", OBSERVER_NUM)
         mp.to = OBSERVER_NUM  # a node's own telemetry is addressed to itself
         mp.channel = 0
         mp.id = random.getrandbits(31) or 1
         mp.rx_time = int(time.time())
-        mp.decoded.portnum = TELEMETRY_APP
+        mp.decoded.portnum = TELEMETRY_APP  # type: ignore[assignment]
         mp.decoded.payload = tm.SerializeToString()
         return fr
 
-    def _local_device_metrics(self) -> mesh_pb2.FromRadio:
+    def _local_device_metrics(self) -> api_pb2.FromRadio:
         """DEVICE_METRICS for the observer: battery/voltage/chutil/air-util/uptime.
 
         Uptime climbs with the session; the battery drifts down slowly (~2%/hr)
@@ -951,9 +930,10 @@ class ReplaySession:
         tm.time = now
         d = tm.device_metrics
         d.battery_level = batt
-        d.voltage = round(3.0 + 1.25 * batt / 100.0 + random.uniform(-0.03, 0.03), 3)
-        d.channel_utilization = self._local_chutil()
-        d.air_util_tx = round(random.uniform(0.0, 1.5), 3)
+        # 3.0 scales: millivolts, and utilisation in hundredths of a percent
+        d.voltage = round((3.0 + 1.25 * batt / 100.0 + random.uniform(-0.03, 0.03)) * 1000)
+        d.channel_utilization = round(self._local_chutil() * 100)
+        d.air_util_tx = round(random.uniform(0.0, 1.5) * 100)
         d.uptime_seconds = uptime
         return self._local_telemetry_fr(tm)
 
@@ -993,12 +973,12 @@ class ReplaySession:
                 return
 
     # -- live injection --
-    def inject_fromradio(self, messages: list[mesh_pb2.FromRadio]) -> int:
+    def inject_fromradio(self, messages: list[api_pb2.FromRadio]) -> int:
         """Queue raw top-level FromRadio messages to emit onto the live connection.
 
         Unlike `inject()` (which wraps a MeshPacket for normal mesh traffic), this sends
-        the FromRadio as-is -- for handshake-only oneofs like `fileInfo`, `my_info`,
-        `config`, `moduleConfig`, `channel` that have no MeshPacket envelope. Still goes
+        the FromRadio as-is -- for handshake-only oneofs like `file_info`, `my_info`,
+        `config`, `module_config`, `channel` that have no MeshPacket envelope. Still goes
         through the same `send()` path as everything else, so frame-level fuzz corruption
         (`maybe_corrupt_frame`) still applies if the session has `fuzz` configured.
         """
@@ -1021,7 +1001,7 @@ class ReplaySession:
             self.state.injected += 1
 
     def inject(
-        self, packets: list[mesh_pb2.MeshPacket], *, channel: str = "LongFast", fuzz: bool = False
+        self, packets: list[packet_pb2.MeshPacket], *, channel: str = "LongFast", fuzz: bool = False
     ) -> int:
         """Queue MeshPackets to emit onto the live connection (sent promptly).
 
@@ -1047,7 +1027,7 @@ class ReplaySession:
                 self.fuzzer.on_packet(mp, ch_name) if (fuzz and self.fuzzer is not None) else [mp]
             )
             for out_mp in outs:
-                fr = mesh_pb2.FromRadio()
+                fr = api_pb2.FromRadio()
                 fr.packet.CopyFrom(out_mp)
                 try:
                     send(fr)
@@ -1077,7 +1057,7 @@ class ReplaySession:
         pkts = self.window
         if not pkts:
             return
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         fixed_delay = (1.0 / p.rate) if p.rate else None
         stop = self.state.stop
         total = len(pkts)
@@ -1149,7 +1129,7 @@ class ReplaySession:
                 if self.fuzzer is not None:
                     outs = outs + self.fuzzer.on_tick(time.time())
                 for out_mp in outs:
-                    fr = mesh_pb2.FromRadio()
+                    fr = api_pb2.FromRadio()
                     fr.packet.CopyFrom(out_mp)
                     try:
                         send(fr)
@@ -1223,7 +1203,7 @@ class ReplayManager:
     def inject(
         self,
         sid: str,
-        packets: list[mesh_pb2.MeshPacket],
+        packets: list[packet_pb2.MeshPacket],
         *,
         channel: str = "LongFast",
         fuzz: bool = False,
@@ -1235,7 +1215,7 @@ class ReplayManager:
         n = sess.inject(packets, channel=channel, fuzz=fuzz)
         return {"id": sid, "queued": n, "connected": sess.state.connected}
 
-    def inject_fromradio(self, sid: str, messages: list[mesh_pb2.FromRadio]) -> dict[str, Any]:
+    def inject_fromradio(self, sid: str, messages: list[api_pb2.FromRadio]) -> dict[str, Any]:
         with self._lock:
             sess = self._sessions.get(sid)
         if sess is None:

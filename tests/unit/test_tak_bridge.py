@@ -20,7 +20,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 
 import pytest
-from meshtastic.protobuf import mesh_pb2
+from meshtastic.protobuf import packet_pb2, portnums_pb2
 
 from meshtastic_mcp.replay import metrics, sim, tak
 
@@ -31,7 +31,7 @@ TAK_V2_PORT = 78
 
 def _v2_payloads(cap):
     for _t, raw, _ch in cap.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
         if mp.WhichOneof("payload_variant") == "decoded" and mp.decoded.portnum == TAK_V2_PORT:
             yield mp.decoded.payload
@@ -151,11 +151,11 @@ def test_atak_cot_converts_to_mesh_wire_send_leg():
     assert abs(pkt.latitude_i - 407_900_000) <= 1
     assert abs(pkt.longitude_i - -1_192_100_000) <= 1
     # and it rides ATAK_PLUGIN_V2 (78) on the wire
-    mp = mesh_pb2.MeshPacket()
+    mp = packet_pb2.MeshPacket()
     setattr(mp, "from", 0x1234)
     mp.decoded.portnum = 78
     mp.decoded.payload = wire
-    assert mp.decoded.portnum == 78
+    assert mp.decoded.portnum == portnums_pb2.PortNum.ATAK_PLUGIN
 
 
 @requires_tak

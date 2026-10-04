@@ -435,9 +435,9 @@ class SoakObserver:
             battery = metrics.get("batteryLevel")
             if battery is not None:
                 self.on_telemetry({**base, "kind": "battery", "value": battery})
-            chutil = metrics.get("channelUtilization")
+            chutil = metrics.get("channelUtilization")  # hundredths of a percent
             if chutil is not None:
-                self.on_telemetry({**base, "kind": "channel_utilization", "value": chutil})
+                self.on_telemetry({**base, "kind": "channel_utilization", "value": chutil / 100})
         except Exception:
             log.debug("soak observer telemetry handler failed", exc_info=True)
 

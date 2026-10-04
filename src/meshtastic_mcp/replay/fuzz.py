@@ -34,7 +34,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from meshtastic.protobuf import admin_pb2, mesh_pb2, telemetry_pb2
+from meshtastic.protobuf import admin_pb2, packet_pb2, portnums_pb2, telemetry_pb2, wire_pb2
 
 if TYPE_CHECKING:
     from .capture import NodeRow
@@ -99,8 +99,21 @@ class _Stats:
         self.events.append({"t": round(time.time(), 2), "kind": kind, "detail": detail, "idx": idx})
 
 
+PortNum = portnums_pb2.PortNum
 # Portnums a mismatch can target (real, decodable app ports).
-_PORTNUM_POOL = [1, 3, 4, 5, 6, 8, 34, 65, 67, 70, 71]
+_PORTNUM_POOL = [
+    PortNum.TEXT_MESSAGE_APP,
+    PortNum.POSITION_APP,
+    PortNum.NODEINFO_APP,
+    PortNum.ROUTING_APP,
+    PortNum.ADMIN_APP,
+    PortNum.WAYPOINT_APP,
+    PortNum.PAXCOUNTER_APP,
+    PortNum.STORE_FORWARD_APP,
+    PortNum.TELEMETRY_APP,
+    PortNum.NEIGHBORINFO_APP,
+    PortNum.NODE_DISCOVERY_APP,
+]
 
 
 class Fuzzer:
@@ -125,7 +138,7 @@ class Fuzzer:
         self._gps_num = self.rng.randint(0x10000000, 0xEFFFFFFF)
 
     # ── per-packet hook ──────────────────────────────────────────────────────
-    def on_packet(self, mp: mesh_pb2.MeshPacket, ch_name: str) -> list[mesh_pb2.MeshPacket]:
+    def on_packet(self, mp: packet_pb2.MeshPacket, ch_name: str) -> list[packet_pb2.MeshPacket]:
         """Return the packet(s) to actually send (0 = dropped, >1 = duplicated)."""
         self._idx += 1
         c = self.cfg
@@ -148,11 +161,17 @@ class Fuzzer:
             new = r.choice([p for p in _PORTNUM_POOL if p != pn] or _PORTNUM_POOL)
             mp.decoded.portnum = new
             applied = f"portnum_mismatch:{pn}->{new}"
-        elif c.bad_text and pn == 1 and r.random() < c.bad_text:
+        elif c.bad_text and pn == PortNum.TEXT_MESSAGE_APP and r.random() < c.bad_text:
             applied = self._bad_text(mp)
-        elif c.impossible_telemetry and pn == 67 and r.random() < c.impossible_telemetry:
+        elif (
+            c.impossible_telemetry
+            and pn == PortNum.TELEMETRY_APP
+            and r.random() < c.impossible_telemetry
+        ):
             applied = self._impossible_telemetry(mp)
-        elif c.teleport_position and pn == 3 and r.random() < c.teleport_position:
+        elif (
+            c.teleport_position and pn == PortNum.POSITION_APP and r.random() < c.teleport_position
+        ):
             applied = self._teleport(mp)
         if applied:
             self.stats.log(applied.split(":")[0], applied, idx=self._idx)
@@ -172,15 +191,15 @@ class Fuzzer:
         out = [mp]
         # duplicate / replay
         if c.duplicate and r.random() < c.duplicate:
-            dup = mesh_pb2.MeshPacket()
+            dup = packet_pb2.MeshPacket()
             dup.CopyFrom(mp)
             out.append(dup)
             self.stats.log("duplicate", f"id={mp.id}", self._idx)
         return out
 
     # ── time-based campaigns ─────────────────────────────────────────────────
-    def on_tick(self, now: float) -> list[mesh_pb2.MeshPacket]:
-        out: list[mesh_pb2.MeshPacket] = []
+    def on_tick(self, now: float) -> list[packet_pb2.MeshPacket]:
+        out: list[packet_pb2.MeshPacket] = []
         c = self.cfg
         if c.flooder:
             out.extend(self._flood(now))
@@ -215,7 +234,7 @@ class Fuzzer:
         return data
 
     # ── mutators ─────────────────────────────────────────────────────────────
-    def _corrupt_payload(self, mp: mesh_pb2.MeshPacket) -> str:
+    def _corrupt_payload(self, mp: packet_pb2.MeshPacket) -> str:
         b = bytearray(mp.decoded.payload)
         if not b:
             mp.decoded.payload = bytes(self.rng.randint(0, 255) for _ in range(4))
@@ -231,7 +250,7 @@ class Fuzzer:
         mp.decoded.payload = bytes(b)
         return f"corrupt_payload:{mode}"
 
-    def _bad_text(self, mp: mesh_pb2.MeshPacket) -> str:
+    def _bad_text(self, mp: packet_pb2.MeshPacket) -> str:
         choice = self.rng.choice(["invalid_utf8", "control", "huge", "nullbytes"])
         if choice == "invalid_utf8":
             mp.decoded.payload = b"\xff\xfe\x80\x81 bad utf8 \xc3\x28"
@@ -243,7 +262,7 @@ class Fuzzer:
             mp.decoded.payload = b"null\x00in\x00middle"
         return f"bad_text:{choice}"
 
-    def _impossible_telemetry(self, mp: mesh_pb2.MeshPacket) -> str:
+    def _impossible_telemetry(self, mp: packet_pb2.MeshPacket) -> str:
         tm = telemetry_pb2.Telemetry()
         try:
             tm.ParseFromString(mp.decoded.payload)
@@ -251,28 +270,28 @@ class Fuzzer:
             pass
         d = tm.device_metrics
         d.battery_level = self.rng.choice([200, 250, 4_000_000_000])
-        d.voltage = self.rng.choice([-5.0, 999.0, 1e9])
-        d.channel_utilization = 9999.0
-        d.air_util_tx = -1.0
+        d.voltage = self.rng.choice([0, 999_000, 4_000_000_000])  # millivolts
+        d.channel_utilization = 999_900  # 9999%, in hundredths
+        d.air_util_tx = 4_000_000_000
         mp.decoded.payload = tm.SerializeToString()
         return "impossible_telemetry"
 
-    def _teleport(self, mp: mesh_pb2.MeshPacket) -> str:
-        p = mesh_pb2.Position()
+    def _teleport(self, mp: packet_pb2.MeshPacket) -> str:
+        p = wire_pb2.Position()
         try:
             p.ParseFromString(mp.decoded.payload)
         except Exception:
             pass
         kind = self.rng.choice(["oob", "null_island", "global_jump", "speed"])
         if kind == "oob":
-            p.latitude_i = self.rng.choice([2_000_000_000, -2_000_000_000])
-            p.longitude_i = self.rng.choice([2_000_000_000, -2_000_000_000])
+            p.latitude = self.rng.choice([2_000_000_000, -2_000_000_000])
+            p.longitude = self.rng.choice([2_000_000_000, -2_000_000_000])
         elif kind == "null_island":
-            p.latitude_i = 0
-            p.longitude_i = 0
+            p.latitude = 0
+            p.longitude = 0
         elif kind == "global_jump":
-            p.latitude_i = self.rng.randint(-900_000_000, 900_000_000)
-            p.longitude_i = self.rng.randint(-1_800_000_000, 1_800_000_000)
+            p.latitude = self.rng.randint(-900_000_000, 900_000_000)
+            p.longitude = self.rng.randint(-1_800_000_000, 1_800_000_000)
         else:
             p.ground_speed = self.rng.choice([5000, 4_000_000_000])
         p.altitude = self.rng.choice([-100000, 999999])
@@ -282,8 +301,8 @@ class Fuzzer:
     # ── campaign builders ────────────────────────────────────────────────────
     def _new(
         self, frm: int, to: int, portnum: int, payload: bytes, ch: int = 0, hop_limit: int = 3
-    ) -> mesh_pb2.MeshPacket:
-        mp = mesh_pb2.MeshPacket()
+    ) -> packet_pb2.MeshPacket:
+        mp = packet_pb2.MeshPacket()
         setattr(mp, "from", frm & 0xFFFFFFFF)
         mp.to = to & 0xFFFFFFFF
         mp.id = self.rng.randint(1, 0x7FFFFFFF)
@@ -291,11 +310,11 @@ class Fuzzer:
         mp.hop_limit = hop_limit
         mp.hop_start = hop_limit
         mp.channel = ch
-        mp.decoded.portnum = portnum
+        mp.decoded.portnum = portnum  # type: ignore[assignment]
         mp.decoded.payload = payload
         return mp
 
-    def _flood(self, now: float) -> list[mesh_pb2.MeshPacket]:
+    def _flood(self, now: float) -> list[packet_pb2.MeshPacket]:
         # burst at flooder_rate for a windowed period, then idle, repeat
         if self._flood_started is None:
             self._flood_started = now
@@ -304,7 +323,7 @@ class Fuzzer:
         out = []
         while self._next.get("flood", now) <= now:
             txt = f"FLOOD {self.rng.randint(0, 1 << 30)} ".encode() * self.rng.randint(1, 6)
-            out.append(self._new(self._flooder_num, BROADCAST, 1, txt))
+            out.append(self._new(self._flooder_num, BROADCAST, PortNum.TEXT_MESSAGE_APP, txt))
             self._next["flood"] = self._next.get("flood", now) + period
             if len(out) > 50:  # safety cap per tick
                 break
@@ -312,36 +331,35 @@ class Fuzzer:
             self.stats.log("flooder", f"n={len(out)}")
         return out
 
-    def _gps_spoof(self) -> mesh_pb2.MeshPacket:
-        p = mesh_pb2.Position()
-        p.latitude_i = self.rng.randint(-900_000_000, 900_000_000)
-        p.longitude_i = self.rng.randint(-1_800_000_000, 1_800_000_000)
+    def _gps_spoof(self) -> packet_pb2.MeshPacket:
+        p = wire_pb2.Position()
+        p.latitude = self.rng.randint(-900_000_000, 900_000_000)
+        p.longitude = self.rng.randint(-1_800_000_000, 1_800_000_000)
         p.altitude = self.rng.randint(-500, 30000)
         p.time = int(time.time())
         p.ground_speed = self.rng.randint(0, 6000)
         self.stats.log("gps_spoofer", f"!{self._gps_num:08x}")
-        return self._new(self._gps_num, BROADCAST, 3, p.SerializeToString())
+        return self._new(self._gps_num, BROADCAST, PortNum.POSITION_APP, p.SerializeToString())
 
-    def _evil_twin(self) -> mesh_pb2.MeshPacket:
+    def _evil_twin(self) -> packet_pb2.MeshPacket:
         assert self._twin_target is not None
         t = self._twin_target
-        u = mesh_pb2.User()
-        u.id = t.node_id
+        u = wire_pb2.User()
         u.long_name = (t.long_name or "node") + self.rng.choice([" ", "  ", "!", " \u200b"])
         u.short_name = (t.short_name or "EVIL")[:4]
         u.public_key = bytes(self.rng.randint(0, 255) for _ in range(32))  # different key = MITM
         self.stats.log("evil_twin", f"imp=!{t.num:08x}")
-        return self._new(t.num, BROADCAST, 4, u.SerializeToString())
+        return self._new(t.num, BROADCAST, PortNum.NODEINFO_APP, u.SerializeToString())
 
-    def _forged_ack(self) -> mesh_pb2.MeshPacket:
-        r = mesh_pb2.Routing()
-        r.error_reason = mesh_pb2.Routing.Error.NONE
+    def _forged_ack(self) -> packet_pb2.MeshPacket:
+        r = wire_pb2.Routing()
+        r.error_reason = wire_pb2.Routing.Error.NONE
         frm = self.rng.choice(self._node_nums)
         to = self.rng.choice(self._node_nums)
         self.stats.log("forged_acks", f"!{frm:08x}->!{to:08x}")
-        return self._new(frm, to, 5, r.SerializeToString(), hop_limit=0)
+        return self._new(frm, to, PortNum.ROUTING_APP, r.SerializeToString(), hop_limit=0)
 
-    def _rogue_admin(self) -> mesh_pb2.MeshPacket:
+    def _rogue_admin(self) -> packet_pb2.MeshPacket:
         a = admin_pb2.AdminMessage()
         which = self.rng.choice(["reboot", "factory_reset", "set_owner"])
         if which == "reboot":
@@ -353,28 +371,31 @@ class Fuzzer:
             a.set_owner.short_name = "PWND"
         frm = self.rng.choice(self._node_nums)
         self.stats.log("rogue_admin", f"{which} from !{frm:08x}")
-        return self._new(frm, OBSERVER_NUM, 6, a.SerializeToString())
+        return self._new(frm, OBSERVER_NUM, PortNum.ADMIN_APP, a.SerializeToString())
 
-    def _ninja_flood(self) -> list[mesh_pb2.MeshPacket]:
+    def _ninja_flood(self) -> list[packet_pb2.MeshPacket]:
         """Replayed NodeInfo that overwrites real nodes' display names (the DC33
         🥷 attack). Uses each victim's *real* node num and omits public_key, so
         (unlike evil_twin's key swap) the mobile client's key-change warning is
         NOT triggered — the spoof silently corrupts everyone's node DB."""
         batch = min(self.cfg.ninja_flood_batch, len(self.nodes))
-        out: list[mesh_pb2.MeshPacket] = []
+        out: list[packet_pb2.MeshPacket] = []
         for victim in self.rng.sample(self.nodes, batch):
-            u = mesh_pb2.User()
-            u.id = victim.node_id
+            u = wire_pb2.User()
             base = victim.long_name or "node"
             u.long_name = self.rng.choice([f"{base} 🥷", f"🥷 {base}", "🥷🥷🥷"])
             u.short_name = self.rng.choice(["🥷", (victim.short_name or "ninj")[:4]])
             # deliberately NO public_key -> presents as "same key", no warning
-            out.append(self._new(victim.num, BROADCAST, 4, u.SerializeToString(), hop_limit=3))
+            out.append(
+                self._new(
+                    victim.num, BROADCAST, PortNum.NODEINFO_APP, u.SerializeToString(), hop_limit=3
+                )
+            )
         self.stats.log("ninja_flood", f"n={batch}")
         return out
 
-    def _waypoint_spam(self) -> mesh_pb2.MeshPacket:
-        w = mesh_pb2.Waypoint()
+    def _waypoint_spam(self) -> packet_pb2.MeshPacket:
+        w = wire_pb2.Waypoint()
         w.id = self.rng.randint(1, 0x7FFFFFFF)
         w.latitude_i = self.rng.randint(-900_000_000, 900_000_000)
         w.longitude_i = self.rng.randint(-1_800_000_000, 1_800_000_000)
@@ -390,7 +411,7 @@ class Fuzzer:
         w.icon = self.rng.randint(0, 0x10FFFF)
         frm = self.rng.choice(self._node_nums)
         self.stats.log("waypoint_spam", f"!{frm:08x}")
-        return self._new(frm, BROADCAST, 8, w.SerializeToString(), hop_limit=4)
+        return self._new(frm, BROADCAST, PortNum.WAYPOINT_APP, w.SerializeToString(), hop_limit=4)
 
     # ── helpers ──────────────────────────────────────────────────────────────
     def _due(self, key: str, now: float, interval: float) -> bool:

@@ -6,7 +6,7 @@
 A Meshtastic app (≥2.8) bridges mesh TAK traffic to a connected TAK client by
 running an in-app TAK server that streams Cursor-on-Target (CoT) XML. This
 module stands up that *same CoT stream* directly from a synthetic capture's TAK
-squad — decompressing each TAKPacketV2 (portnum 78) and rebuilding its CoT via
+squad — decompressing each SDK-compressed TAKPacket (ATAK_PLUGIN) and rebuilding its CoT via
 the SDK — so a TAK client can connect straight to the simulator and render the
 squad on its map, with no Meshtastic app or radio in the loop. It's the
 app-plane counterpart to :mod:`~meshtastic_mcp.replay.engine` (which serves the
@@ -29,12 +29,12 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from meshtastic.protobuf import mesh_pb2
+from meshtastic.protobuf import packet_pb2, portnums_pb2
 
 from . import tak
 from .capture import Capture
 
-TAK_V2_PORT = 78
+TAK_V2_PORT = portnums_pb2.PortNum.ATAK_PLUGIN  # 3.0: one TAK port; apps compress
 _XML_DECL_RE = re.compile(rb"^\s*<\?xml[^>]*\?>\s*", re.IGNORECASE)
 
 
@@ -47,8 +47,9 @@ def capture_to_cot_events(cap: Capture) -> list[tuple[int, bytes]]:
     """``(rx_time, cot_xml_bytes)`` for every TAKPacketV2 in the capture.
 
     Reproduces the app TAK server's receive path (wire → TAKPacketV2 → CoT XML)
-    for each portnum-78 packet, in time order. Legacy v1 (portnum 72) is skipped
-    — generate the squad with ``profile={"tak": {"wire": "v2", ...}}``.
+    for each SDK-compressed ATAK_PLUGIN packet, in time order. An uncompressed
+    TAKPacket ("v1" wire) is skipped — generate the squad with
+    ``profile={"tak": {"wire": "v2", ...}}``.
     """
     tak._require()
     from meshtastic_tak import CotXmlBuilder, TakCompressor
@@ -56,7 +57,7 @@ def capture_to_cot_events(cap: Capture) -> list[tuple[int, bytes]]:
     comp = TakCompressor()
     builder = CotXmlBuilder()
     out: list[tuple[int, bytes]] = []
-    mp = mesh_pb2.MeshPacket()
+    mp = packet_pb2.MeshPacket()
     for rxt, raw, _ch in cap.packets:
         mp.Clear()
         try:

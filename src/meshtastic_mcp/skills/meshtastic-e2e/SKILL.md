@@ -224,7 +224,7 @@ connected ATAK/iTAK client via an **in-app local TAK server** that emits CoT
 
 - **Bridge-semantics (no emulator, in CI):** the sim emits a TAKPacketV2 squad
   (`replay_start(source=..., sim_profile={"tak": {"team_nodes": N, "wire": "v2"}})`
-  — v2 rides portnum 78 `ATAK_PLUGIN_V2`; v1 rides 72). `replay/tak_server.py`
+  — both ride `ATAK_PLUGIN`, v2 compressed by the SDK, v1 plain). `replay/tak_server.py`
   `capture_to_cot_events()` reproduces the bridge's wire→TAKPacketV2→CoT path;
   `tests/unit/test_tak_bridge.py` asserts the CoT is well-formed, typed
   (`a-f-G-U-C` PLI), and carries the right callsign/position/GeoChat. Needs the

@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from meshtastic.node import channel_role
+from meshtastic.util import hw_model_name
+
 from .connection import connect
 
 
@@ -20,33 +23,34 @@ def primary_channel_name(iface) -> str | None:
     except AttributeError:
         return None
     for ch in channels:
-        role = getattr(ch, "role", None)
-        # Role enum: 0 DISABLED, 1 PRIMARY, 2 SECONDARY
-        if role == 1:
+        if channel_role(ch) == "PRIMARY":  # 3.0: index 0, no role field
             name = getattr(getattr(ch, "settings", None), "name", None)
             return name or "(default)"
     return None
 
 
 def region_name(iface) -> str | None:
-    """LoRa region enum name from an already-connected interface."""
+    """LoRa region name (e.g. "US", without the 3.0 ``REGION_`` prefix) from an
+    already-connected interface."""
     try:
         local = getattr(iface, "localNode", None)
         if local is None or getattr(local, "localConfig", None) is None:
             return None
         lora = local.localConfig.lora
         # region is an enum; get its string name
-        return lora.DESCRIPTOR.fields_by_name["region"].enum_type.values_by_number[lora.region].name
+        name = lora.DESCRIPTOR.fields_by_name["region"].enum_type.values_by_number[lora.region].name
+        return name.removeprefix("REGION_")
     except Exception:
         return None
 
 
 def modem_preset_name(iface) -> str | None:
-    """LoRa modem-preset enum name (e.g. "LONG_FAST") from an already-connected interface."""
+    """LoRa modem-preset name (e.g. "LONG_FAST", without the 3.0 ``MODEM_`` prefix) from an
+    already-connected interface."""
     try:
         lora = iface.localNode.localConfig.lora
         fields = lora.DESCRIPTOR.fields_by_name["modem_preset"]
-        return fields.enum_type.values_by_number[lora.modem_preset].name
+        return fields.enum_type.values_by_number[lora.modem_preset].name.removeprefix("MODEM_")
     except Exception:
         return None
 
@@ -74,7 +78,7 @@ def device_info(port: str | None = None, timeout_s: float = 8.0) -> dict[str, An
             user = local_rec.get("user") or {}
             long_name = user.get("longName")
             short_name = user.get("shortName")
-            hw_model = user.get("hwModel")
+            hw_model = hw_model_name(user.get("hwModel", 0))
 
         region = region_name(iface)
 
@@ -102,7 +106,7 @@ def _node_record(node_dict: dict[str, Any]) -> dict[str, Any]:
         "user": {
             "long_name": user.get("longName"),
             "short_name": user.get("shortName"),
-            "hw_model": user.get("hwModel"),
+            "hw_model": hw_model_name(user.get("hwModel", 0)),
             "role": user.get("role"),
         },
         "position": (
@@ -115,7 +119,7 @@ def _node_record(node_dict: dict[str, Any]) -> dict[str, Any]:
             if position
             else None
         ),
-        "snr": node_dict.get("snr"),
+        "snr": node_dict["snr"] / 2 if node_dict.get("snr") is not None else None,  # half-dB
         "rssi": node_dict.get("rssi"),
         "last_heard": node_dict.get("lastHeard"),
         "battery_level": device_metrics.get("batteryLevel"),

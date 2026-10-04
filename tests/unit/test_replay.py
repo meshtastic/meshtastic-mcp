@@ -20,19 +20,50 @@ import time
 from collections import Counter
 
 import pytest
-from meshtastic.protobuf import channel_pb2, mesh_pb2, portnums_pb2, telemetry_pb2
+from meshtastic.protobuf import (
+    api_pb2,
+    common_pb2,
+    packet_pb2,
+    portnums_pb2,
+    telemetry_pb2,
+    wire_pb2,
+)
 
 from meshtastic_mcp.replay import Capture, ReplayParams, ReplaySession, capture, fuzz, sim
 from meshtastic_mcp.replay import engine as replay_engine
 from meshtastic_mcp.replay.engine import OBSERVER_NUM, _representative_radio_metrics
 
-ALL_PORTNUMS = {1, 3, 4, 5, 6, 8, 34, 37, 65, 66, 67, 70, 71}
+PN = portnums_pb2.PortNum
+ALL_PORTNUMS = {
+    PN.TEXT_MESSAGE_APP,
+    PN.POSITION_APP,
+    PN.NODEINFO_APP,
+    PN.ROUTING_APP,
+    PN.ADMIN_APP,
+    PN.WAYPOINT_APP,
+    PN.PAXCOUNTER_APP,
+    PN.MESH_BEACON_APP,
+    PN.STORE_FORWARD_APP,
+    PN.TELEMETRY_APP,
+    PN.NEIGHBORINFO_APP,
+}
+
+
+def _record_path_count(cap) -> int:
+    """Packets that ask for, or carry, a recorded path: the 3.0 traceroute traffic."""
+    mp = packet_pb2.MeshPacket()
+    n = 0
+    for _ts, raw, _ch in cap.packets:
+        mp.Clear()
+        mp.ParseFromString(raw)
+        n += bool(mp.flags & packet_pb2.MeshPacket.PACKET_RECORD_PATH)
+    return n
 
 
 def _portnum_counts(cap) -> Counter:
     counts: Counter = Counter()
     for _ts, raw, _ch in cap.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
         counts[mp.decoded.portnum] += 1
     return counts
@@ -40,14 +71,14 @@ def _portnum_counts(cap) -> Counter:
 
 def test_representative_radio_metrics_ignore_malformed_protobufs():
     """Malformed capture rows must not hide later valid radio metrics."""
-    malformed_telemetry = mesh_pb2.MeshPacket()
+    malformed_telemetry = packet_pb2.MeshPacket()
     malformed_telemetry.decoded.portnum = portnums_pb2.PortNum.TELEMETRY_APP
     malformed_telemetry.decoded.payload = b"\x80"
 
     telemetry = telemetry_pb2.Telemetry()
-    telemetry.device_metrics.channel_utilization = 42.0
-    telemetry.device_metrics.air_util_tx = 7.0
-    valid_telemetry = mesh_pb2.MeshPacket()
+    telemetry.device_metrics.channel_utilization = 4200  # hundredths of a percent
+    telemetry.device_metrics.air_util_tx = 700
+    valid_telemetry = packet_pb2.MeshPacket()
     valid_telemetry.decoded.portnum = portnums_pb2.PortNum.TELEMETRY_APP
     valid_telemetry.decoded.payload = telemetry.SerializeToString()
 
@@ -72,7 +103,6 @@ def test_sim_is_seeded_and_has_full_portnum_breadth():
     # packets are time-ordered
     ts = [p[0] for p in cap_a.packets]
     assert ts == sorted(ts)
-    assert 66 in counts  # RANGE_TEST present (DEF-CON-informed)
     # channels include the themed lineup
     assert cap_a.channels[0] == "LongFast"
     assert "MeshCon" in cap_a.channels
@@ -83,15 +113,13 @@ def test_traceroute_pairs_per_hour_zero_silences_traceroutes():
     quiet = sim.generate(
         nodes=30, days=1, seed=7, start=1_700_000_000, profile={"traceroute_pairs_per_hour": 0}
     )
-    assert 70 not in _portnum_counts(quiet), (
-        "TRACEROUTE_APP packets emitted despite the knob being 0"
-    )
+    assert _record_path_count(quiet) == 0, "traceroute pairs emitted despite the knob being 0"
 
     default = sim.generate(nodes=30, days=1, seed=7, start=1_700_000_000)
-    assert 70 in _portnum_counts(default), "default profile should still emit traceroute pairs"
+    assert _record_path_count(default) > 0, "default profile should still emit traceroute pairs"
 
 
-def _read_frame(sock: socket.socket) -> mesh_pb2.FromRadio:
+def _read_frame(sock: socket.socket) -> api_pb2.FromRadio:
     state = 0
     while True:
         x = sock.recv(1)[0]
@@ -102,7 +130,7 @@ def _read_frame(sock: socket.socket) -> mesh_pb2.FromRadio:
         else:
             state = 1 if x == 0x94 else 0
     (length,) = struct.unpack(">H", _exact(sock, 2))
-    fr = mesh_pb2.FromRadio()
+    fr = api_pb2.FromRadio()
     fr.ParseFromString(_exact(sock, length))
     return fr
 
@@ -115,7 +143,7 @@ def _exact(sock: socket.socket, n: int) -> bytes:
 
 
 def _send_toradio(sock: socket.socket, **kw) -> None:
-    payload = mesh_pb2.ToRadio(**kw).SerializeToString()
+    payload = api_pb2.ToRadio(**kw).SerializeToString()
     sock.sendall(bytes([0x94, 0xC3]) + struct.pack(">H", len(payload)) + payload)
 
 
@@ -174,20 +202,18 @@ def test_session_handshake_and_stream():
 
 
 def test_config_phase_sends_every_channel_slot():
-    """Unused slots arrive as DISABLED, so a strict client gets the full 0-7 set."""
+    """Unused slots arrive disabled (no settings), so a strict client gets the full set."""
     cap = sim.generate(nodes=5, days=1, seed=11, start=1_700_000_000)
     assert len(cap.channels) < replay_engine.MAX_CHANNELS
     sess = ReplaySession("slots", cap, ReplayParams(host="127.0.0.1", port=0, node_delay=0))
-    frames: list[mesh_pb2.FromRadio] = []
+    frames: list[api_pb2.FromRadio] = []
     sess._send_config_phase(frames.append, 1)
 
     channels = [f.channel for f in frames if f.HasField("channel")]
     assert [c.index for c in channels] == list(range(replay_engine.MAX_CHANNELS))
-    disabled = channel_pb2.Channel.Role.DISABLED
     used = len(cap.channels)
-    assert all(c.role != disabled for c in channels[:used])
-    assert all(c.role == disabled for c in channels[used:])
-    assert all(c.HasField("settings") for c in channels)
+    assert all(c.HasField("settings") for c in channels[:used])
+    assert not any(c.HasField("settings") for c in channels[used:])
 
 
 def test_observer_local_stats_precede_bulk_database():
@@ -244,7 +270,7 @@ def test_observer_local_stats_precede_bulk_database():
                 if getattr(packet, "from") != my_node:
                     streamed_packet_ids[(getattr(packet, "from"), packet.id)] += 1
                     continue
-                if packet.decoded.portnum != 67:
+                if packet.decoded.portnum != portnums_pb2.PortNum.TELEMETRY_APP:
                     continue
                 telemetry = telemetry_pb2.Telemetry()
                 telemetry.ParseFromString(packet.decoded.payload)
@@ -303,7 +329,7 @@ def test_observer_stats_send_failure_severs_client(
     monkeypatch.setenv("MESHTASTIC_MCP_DATA_DIR", str(tmp_path))
     packets = []
     for packet_id in range(packet_count):
-        packet = mesh_pb2.MeshPacket()
+        packet = packet_pb2.MeshPacket()
         setattr(packet, "from", packet_id + 1)
         packet.id = packet_id + 1
         packet.decoded.portnum = portnums_pb2.PortNum.TEXT_MESSAGE_APP
@@ -352,7 +378,11 @@ def test_get_owner_request_is_answered_for_strict_clients():
     on this admin round-trip; the replay device must emulate the firmware reply
     so they can reach a ready state.
     """
-    from meshtastic.protobuf import admin_pb2, portnums_pb2
+    from meshtastic.protobuf import (
+        admin_pb2,
+        packet_pb2,
+        portnums_pb2,
+    )
 
     from meshtastic_mcp.replay.engine import OBSERVER_NUM
 
@@ -379,7 +409,7 @@ def test_get_owner_request_is_answered_for_strict_clients():
 
         # Send the admin get_owner_request the SDK issues to seed the passkey.
         req = admin_pb2.AdminMessage(get_owner_request=True)
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.to = OBSERVER_NUM
         mp.id = 0xABCDEF
         mp.decoded.portnum = portnums_pb2.PortNum.ADMIN_APP
@@ -405,7 +435,7 @@ def test_get_owner_request_is_answered_for_strict_clients():
         pkt, am = owner_resp
         assert getattr(pkt, "from") == OBSERVER_NUM  # client keys the passkey on this
         assert len(am.session_passkey) > 0
-        assert am.get_owner_response.id == f"!{OBSERVER_NUM:08x}"
+        assert am.get_owner_response.long_name == "Replay Observer"
         assert pkt.decoded.request_id == 0xABCDEF  # echoes the request id
     finally:
         sess.stop()
@@ -462,7 +492,7 @@ def _write_sqlite(path, cap) -> None:
             ),
         )
     for pid, (ts, raw, ch) in enumerate(cap.packets, start=1):
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
         conn.execute(
             "INSERT INTO packet VALUES (?,?,?,?,?,?,?)",
@@ -504,7 +534,7 @@ def test_all_sim_data_is_synthetic(monkeypatch):
     pool = {t for msgs in _sim._CHATTER.values() for t in msgs}
     templates = [p.split("{h}")[0] for p in pool]
     for _ts, raw, _ch in cap.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
         if mp.decoded.portnum == 1:
             txt = mp.decoded.payload.decode("utf-8", "replace")
@@ -538,8 +568,9 @@ def test_sim_emoji_shortnames_and_pki_keys():
     # the key + manual-verification flag reach the app via the node-DB NodeInfo
     ni = capture.node_to_nodeinfo(keyed[0], last_heard=1)
     assert len(ni.user.public_key) == 32
-    assert capture.node_to_nodeinfo(verified[0], last_heard=1).is_key_manually_verified is True
-    # a keyless (pre-2.8) node advertises no key and is unverified
+    verified_flags = capture.node_to_nodeinfo(verified[0], last_heard=1).flags
+    assert verified_flags & common_pb2.NODE_FLAG_IS_KEY_MANUALLY_VERIFIED
+    # a keyless node advertises no key and is unverified
     keyless = next(n for n in cap.nodes if not n.public_key)
     assert not capture.node_to_nodeinfo(keyless, last_heard=1).user.public_key
 
@@ -558,20 +589,15 @@ def test_infra_nodes_get_pun_emoji_shortnames():
 
 
 def test_observer_is_signed_on_28_editions():
-    """The connected/observer node advertises its own PKC public key on a 2.8+
-    edition (e.g. DEFCON), so the app shows the local node signed — and not on a
-    pre-2.8 edition.
+    """The connected/observer node advertises its own PKC public key: every 3.0
+    edition signs, so the app shows the local node signed whatever the edition.
     """
     cap = sim.generate(nodes=5, days=1, seed=1, start=1_700_000_000)
-    signed = ReplaySession(
-        "d", cap, ReplayParams(host="127.0.0.1", port=0, firmware_edition="DEFCON")
-    )
-    ni = signed._observer_nodeinfo().node_info
-    assert len(ni.user.public_key) == 32  # DEFCON => 2.8 => signed
-    unsigned = ReplaySession(
-        "v", cap, ReplayParams(host="127.0.0.1", port=0, firmware_edition="VANILLA")
-    )
-    assert not unsigned._observer_nodeinfo().node_info.user.public_key  # 2.7.x => not signed
+    for edition in ("DEFCON", "VANILLA"):
+        sess = ReplaySession(
+            "d", cap, ReplayParams(host="127.0.0.1", port=0, firmware_edition=edition)
+        )
+        assert len(sess._observer_nodeinfo().node_info.user.public_key) == 32
 
 
 def test_pki_and_emoji_fractions_are_tunable():
@@ -643,7 +669,7 @@ def test_fuzz_on_packet_mutates_and_stays_serializable():
     fz = fuzz.Fuzzer(fuzz.preset("chaos", seed=4), cap.nodes, chi)
     produced = 0
     for _ts, raw, ch in cap.packets[:2000]:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
         for out in fz.on_packet(mp, ch):
             out.SerializeToString()  # every emitted packet stays a valid MeshPacket
@@ -667,9 +693,16 @@ def test_fuzz_campaigns_inject_expected_portnums():
         for mp in fz.on_tick(now):
             mp.SerializeToString()
             seen_portnums.add(mp.decoded.portnum)
-    # flooder->TEXT(1), gps->POSITION(3), evil_twin->NODEINFO(4),
-    # forged_ack->ROUTING(5), rogue_admin->ADMIN(6), waypoint_spam->WAYPOINT(8)
-    assert {1, 3, 4, 5, 6, 8}.issubset(seen_portnums)
+    # flooder->TEXT, gps->POSITION, evil_twin->NODEINFO, forged_ack->ROUTING,
+    # rogue_admin->ADMIN, waypoint_spam->WAYPOINT
+    assert {
+        PN.TEXT_MESSAGE_APP,
+        PN.POSITION_APP,
+        PN.NODEINFO_APP,
+        PN.ROUTING_APP,
+        PN.ADMIN_APP,
+        PN.WAYPOINT_APP,
+    }.issubset(seen_portnums)
     for kind in (
         "flooder",
         "gps_spoofer",
@@ -688,9 +721,9 @@ def test_fuzz_drop_and_duplicate_change_stream_volume():
     dup = fuzz.Fuzzer(fuzz.FuzzConfig(seed=1, duplicate=1.0), cap.nodes, chi)
     n_drop = n_dup = 0
     for _ts, raw, ch in cap.packets[:300]:
-        a = mesh_pb2.MeshPacket()
+        a = packet_pb2.MeshPacket()
         a.ParseFromString(raw)
-        b = mesh_pb2.MeshPacket()
+        b = packet_pb2.MeshPacket()
         b.ParseFromString(raw)
         n_drop += len(drop.on_packet(a, ch))
         n_dup += len(dup.on_packet(b, ch))
@@ -721,9 +754,9 @@ def test_from_sqlite_routes_by_ota_hash_with_caller_specs(tmp_path):
     chosen = [8, secret_hash, 4242]  # 4242 matches nothing -> catch-all
     rows = []
     for i, (ts, raw, _ch) in enumerate(cap.packets[:30]):
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
-        mp.channel = chosen[i % len(chosen)]
+        mp.channel_hash = chosen[i % len(chosen)]
         rows.append((ts, mp.SerializeToString(), "x"))
     cap.packets = rows
     db = tmp_path / "c.db"
@@ -755,7 +788,7 @@ def test_fit_profile_derives_mixes_and_intervals():
     assert prof["text_base_msgs_per_hour"] >= 0
     assert prof["telemetry_interval"] > 0
     assert set(prof["pos_interval"]) == {"mobile", "router", "default"}
-    assert 1 in prof["portnum_mix"] or 67 in prof["portnum_mix"]
+    assert PN.TEXT_MESSAGE_APP in prof["portnum_mix"] or PN.TELEMETRY_APP in prof["portnum_mix"]
     # a profile fitted from a capture round-trips back through generate
     tuned = sim.generate(nodes=50, days=1, seed=2, profile=prof, channels=prof["channels"])
     assert tuned.channels == cap.channels
@@ -827,8 +860,8 @@ def test_replay_clock_and_observer_position_and_preset():
             if v == "node_info":
                 if fr.node_info.num == 0x42524331:
                     observer_pos = (
-                        fr.node_info.position.latitude_i,
-                        fr.node_info.position.longitude_i,
+                        fr.node_info.position.latitude,
+                        fr.node_info.position.longitude,
                     )
                 if fr.node_info.num == 0x5245504C:
                     clock_seen = True
@@ -839,9 +872,9 @@ def test_replay_clock_and_observer_position_and_preset():
         client.close()
         assert observer_pos == cap.center()  # "you are here" = capture center
         assert clock_seen  # Replay Clock node introduced
-        assert preset == 8  # SHORT_TURBO
+        assert preset == common_pb2.ModemPreset.MODEM_SHORT_TURBO
         assert announces >= 1  # kickoff + progress posted
-        assert edition == mesh_pb2.FirmwareEdition.DEFCON  # event banner
+        assert edition == common_pb2.FirmwareEdition.EDITION_DEFCON  # event banner
         assert pio_env == "replay"
         assert device_id_len == 16
     finally:
@@ -941,7 +974,7 @@ def test_client_disconnect_mid_stream_survives_with_loop():
             if getattr(packet, "from") != OBSERVER_NUM:
                 streamed_packet_seen = True
                 continue
-            if packet.decoded.portnum != 67:
+            if packet.decoded.portnum != portnums_pb2.PortNum.TELEMETRY_APP:
                 continue
             telemetry = telemetry_pb2.Telemetry()
             telemetry.ParseFromString(packet.decoded.payload)
@@ -1059,13 +1092,12 @@ def test_build_waypoint_encodes_geofence_fields():
         notify_on_enter=True,
         notify_on_exit=True,
     )
-    # base fields parse with the (older) bundled proto; geofence fields appended raw
-    w = mesh_pb2.Waypoint()
+    w = wire_pb2.Waypoint()
     w.ParseFromString(pl)
     assert w.name == "GF" and w.latitude_i == 370000000
-    assert build._tag(9, 0) + build._varint(500) in pl  # geofence_radius
-    assert build._tag(11, 0) + b"\x01" in pl  # notify_on_enter
-    assert build._tag(10, 2) in pl  # bounding_box (length-delimited sub-message)
+    assert w.geofence_radius == 500
+    assert w.notify_flags == wire_pb2.Waypoint.NOTIFY_ON_ENTER | wire_pb2.Waypoint.NOTIFY_ON_EXIT
+    assert w.bounding_box.latitude_north_i == 371000000
 
 
 def test_from_kind_builds_each_packet_type():
@@ -1078,7 +1110,13 @@ def test_from_kind_builds_each_packet_type():
         "nodeinfo": {"id": "!00000001", "long_name": "N"},
         "raw": {"portnum": 70, "payload_hex": "deadbeef"},
     }
-    want = {"waypoint": 8, "position": 3, "text": 1, "nodeinfo": 4, "raw": 70}
+    want = {
+        "waypoint": PN.WAYPOINT_APP,
+        "position": PN.POSITION_APP,
+        "text": PN.TEXT_MESSAGE_APP,
+        "nodeinfo": PN.NODEINFO_APP,
+        "raw": 70,
+    }
     for kind, args in cases.items():
         mp = build.from_kind(kind, args, from_node=0xABCD)
         assert mp.decoded.portnum == want[kind]
@@ -1091,13 +1129,13 @@ def test_fromradio_from_kind_builds_fileinfo():
     from meshtastic_mcp.replay import build
 
     fr = build.fromradio_from_kind("fileinfo", {"file_name": "log.bin", "size_bytes": 4096})
-    assert fr.WhichOneof("payload_variant") == "fileInfo"
-    assert fr.fileInfo.file_name == "log.bin"
-    assert fr.fileInfo.size_bytes == 4096
+    assert fr.WhichOneof("payload_variant") == "file_info"
+    assert fr.file_info.file_name == "log.bin"
+    assert fr.file_info.size_bytes == 4096
     # Adversarial negative size_bytes must still encode (masked into uint32) rather
     # than raising -- replay_inject_fileinfo advertises negative values as a fuzz case.
     neg = build.fromradio_from_kind("fileinfo", {"file_name": "x", "size_bytes": -1})
-    assert neg.fileInfo.size_bytes == 0xFFFFFFFF
+    assert neg.file_info.size_bytes == 0xFFFFFFFF
     with pytest.raises(ValueError):
         build.fromradio_from_kind("bogus", {})
 
@@ -1111,15 +1149,15 @@ def test_fromradio_from_kind_builds_client_notifications():
 
     # low-entropy (the pre-2.8 weak-key alert) — variant set + default firmware text
     fr = build.fromradio_from_kind("client_notification", {"variant": "low_entropy_key"})
-    cn = mesh_pb2.FromRadio.FromString(fr.SerializeToString()).clientNotification
+    cn = api_pb2.FromRadio.FromString(fr.SerializeToString()).client_notification
     assert cn.WhichOneof("payload_variant") == "low_entropy_key"
     assert "regenerated" in cn.message
-    assert cn.level == mesh_pb2.LogRecord.Level.WARNING
+    assert cn.level == api_pb2.LogRecord.Level.WARNING
 
     assert (
         build.fromradio_from_kind(
             "client_notification", {"variant": "duplicated_public_key"}
-        ).clientNotification.WhichOneof("payload_variant")
+        ).client_notification.WhichOneof("payload_variant")
         == "duplicated_public_key"
     )
 
@@ -1128,9 +1166,9 @@ def test_fromradio_from_kind_builds_client_notifications():
         "client_notification",
         {"variant": "key_verification_number_request", "nonce": 11, "remote_longname": "Alice"},
     )
-    kv = mesh_pb2.FromRadio.FromString(
+    kv = api_pb2.FromRadio.FromString(
         fr.SerializeToString()
-    ).clientNotification.key_verification_number_request
+    ).client_notification.key_verification_number_request
     assert kv.nonce == 11 and kv.remote_longname == "Alice"
 
     fr = build.fromradio_from_kind(
@@ -1142,7 +1180,7 @@ def test_fromradio_from_kind_builds_client_notifications():
             "security_number": 4242,
         },
     )
-    cn = mesh_pb2.FromRadio.FromString(fr.SerializeToString()).clientNotification
+    cn = api_pb2.FromRadio.FromString(fr.SerializeToString()).client_notification
     assert cn.WhichOneof("payload_variant") == "key_verification_number_inform"
     kv = cn.key_verification_number_inform
     assert kv.nonce == 22 and kv.remote_longname == "Alice" and kv.security_number == 4242
@@ -1159,18 +1197,18 @@ def test_fromradio_from_kind_builds_client_notifications():
             "level": "INFO",
         },
     )
-    cn = mesh_pb2.FromRadio.FromString(fr.SerializeToString()).clientNotification
+    cn = api_pb2.FromRadio.FromString(fr.SerializeToString()).client_notification
     assert cn.WhichOneof("payload_variant") == "key_verification_final"
     kv = cn.key_verification_final
     assert kv.nonce == 777 and kv.remote_longname == "Bob"
     assert kv.isSender is True and kv.verification_characters == "AB12CD"
-    assert cn.level == mesh_pb2.LogRecord.Level.INFO
+    assert cn.level == api_pb2.LogRecord.Level.INFO
 
     # plain text — no variant, just message
     fr = build.fromradio_from_kind(
         "client_notification", {"variant": "text", "message": "heads up"}
     )
-    cn = fr.clientNotification
+    cn = fr.client_notification
     assert cn.WhichOneof("payload_variant") is None and cn.message == "heads up"
 
     with pytest.raises(ValueError):
@@ -1231,8 +1269,11 @@ def test_live_inject_reaches_client():
         t0 = time.time()
         while time.time() - t0 < 3 and not found:
             fr = _read_frame(client)
-            if fr.WhichOneof("payload_variant") == "packet" and fr.packet.decoded.portnum == 8:
-                w = mesh_pb2.Waypoint()
+            if (
+                fr.WhichOneof("payload_variant") == "packet"
+                and fr.packet.decoded.portnum == portnums_pb2.PortNum.WAYPOINT_APP
+            ):
+                w = wire_pb2.Waypoint()
                 w.ParseFromString(fr.packet.decoded.payload)
                 if w.name == "INJ":
                     found = True
@@ -1284,8 +1325,8 @@ def test_live_inject_fromradio_reaches_client():
         while time.time() - t0 < 3 and not found:
             fr = _read_frame(client)
             if (
-                fr.WhichOneof("payload_variant") == "fileInfo"
-                and fr.fileInfo.file_name == "evil.bin"
+                fr.WhichOneof("payload_variant") == "file_info"
+                and fr.file_info.file_name == "evil.bin"
             ):
                 found = True
         client.close()
@@ -1330,8 +1371,8 @@ def test_live_inject_client_notification_reaches_client():
         t0 = time.time()
         while time.time() - t0 < 3 and found is None:
             fr = _read_frame(client)
-            if fr.WhichOneof("payload_variant") == "clientNotification":
-                found = fr.clientNotification
+            if fr.WhichOneof("payload_variant") == "client_notification":
+                found = fr.client_notification
         client.close()
         assert found is not None, "ClientNotification did not reach the client"
         assert found.WhichOneof("payload_variant") == "low_entropy_key"
@@ -1530,39 +1571,31 @@ def test_from_kind_builds_beacon():
         {"message": "test beacon", "offer_region": "US", "offer_preset": "LONG_FAST"},
         from_node=0xBEAC,
     )
-    assert mp.decoded.portnum == build.MESH_BEACON_APP  # 37
+    assert mp.decoded.portnum == build.MESH_BEACON_APP
     assert b"test beacon" in mp.decoded.payload
     assert getattr(mp, "from") == 0xBEAC
 
 
 def test_sim_emits_beacon_packets():
-    """sim.generate must include MESH_BEACON_APP (portnum 37) with routers."""
+    """sim.generate must include MESH_BEACON_APP with routers."""
     cap = sim.generate(nodes=60, days=2, seed=7, start=1_700_000_000)
     counts = _portnum_counts(cap)
-    assert 37 in counts, "MESH_BEACON_APP (portnum 37) missing from synthetic capture"
-    assert counts[37] >= 1
+    assert PN.MESH_BEACON_APP in counts, "MESH_BEACON_APP missing from synthetic capture"
+    assert counts[PN.MESH_BEACON_APP] >= 1
 
 
 def test_sim_waypoints_include_geofenced_variants():
     """sim.generate must include at least some waypoints with geofence fields."""
-    from meshtastic_mcp.replay import build
-
     cap = sim.generate(nodes=60, days=3, seed=42, start=1_700_000_000)
     geofenced = 0
     for _ts, raw, _ch in cap.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
-        if mp.decoded.portnum != 8:
+        if mp.decoded.portnum != portnums_pb2.PortNum.WAYPOINT_APP:
             continue
-        payload = mp.decoded.payload
-        # The sim appends geofence fields 9/11/12 (geofence_radius,
-        # notify_on_enter, notify_on_exit) as raw wire bytes. A bare tag-9
-        # byte (0x48) can occur incidentally inside lat/lon varints, so require
-        # both the geofence_radius tag *and* the notify enter/exit tag pair
-        # (0x58 0x01 0x60 0x01) — an appended suffix that is highly unlikely to
-        # collide with the standard Waypoint encoding.
-        notify_pair = build._tag(11, 0) + build._varint(1) + build._tag(12, 0) + build._varint(1)
-        if build._tag(9, 0) in payload and notify_pair in payload:
+        w = wire_pb2.Waypoint()
+        w.ParseFromString(mp.decoded.payload)
+        if w.geofence_radius and w.notify_flags & wire_pb2.Waypoint.NOTIFY_ON_ENTER:
             geofenced += 1
     assert geofenced >= 1, "no geofenced waypoints found in synthetic capture"
 
@@ -1578,55 +1611,44 @@ def test_from_kind_waypoint_wires_description():
         {"lat": 37.7, "lon": -122.4, "name": "Perimeter", "description": "geofenced POI"},
         from_node=0xBEEF,
     )
-    assert mp.decoded.portnum == 8
-    w = mesh_pb2.Waypoint()
+    assert mp.decoded.portnum == portnums_pb2.PortNum.WAYPOINT_APP
+    w = wire_pb2.Waypoint()
     w.ParseFromString(mp.decoded.payload)
     assert w.name == "Perimeter"
     assert w.description == "geofenced POI"
 
 
-def test_sim_traceroutes_are_request_response_pairs():
-    """The sim must emit traceroute *responses*, not just in-flight requests.
-
-    Apps only surface traceroute responses — their logs gate on a nonzero
-    `decoded.request_id` (a zero id is an in-flight request they ignore). A
-    capture of request-style-only traceroutes therefore renders an empty
-    traceroute log (found live streaming to the Apple app). Responses must
-    reference a real request id and follow firmware RouteDiscovery semantics:
-    intermediate relays only in route (endpoints implied by from/to), SNR lists
-    one-per-receiving-hop (len == len(route) + 1), mirrored route_back.
-    """
+def test_sim_traceroutes_are_path_recording_pairs():
+    """Traceroutes are 3.0 path-recording pairs: a want_response request with
+    PACKET_RECORD_PATH, and a reply that references it by request_id, flows back
+    to the requester, and records the relays it took (relay_node is the last,
+    the path tail the ones before it, with hop_start - hop_limit hops taken)."""
     cap = sim.generate(nodes=60, days=2, seed=7, start=1_700_000_000)
-    requests: dict[int, mesh_pb2.MeshPacket] = {}
+    record = packet_pb2.MeshPacket.PACKET_RECORD_PATH
+    requests: dict[int, packet_pb2.MeshPacket] = {}
     responses = []
     for _ts, raw, _ch in cap.packets:
-        mp = mesh_pb2.MeshPacket()
+        mp = packet_pb2.MeshPacket()
         mp.ParseFromString(raw)
-        if mp.decoded.portnum != 70:
+        if not mp.flags & record:
             continue
         if mp.decoded.request_id:
             responses.append(mp)
         else:
             requests[mp.id] = mp
     assert requests, "no traceroute requests in the sim"
-    assert responses, "no traceroute responses in the sim (apps would log nothing)"
+    assert responses, "no traceroute replies in the sim (apps would log nothing)"
     for resp in responses:
         req = requests.get(resp.decoded.request_id)
-        assert req is not None, "response references a request id that was never emitted"
-        # response flows dest -> requester
+        assert req is not None, "reply references a request id that was never emitted"
         assert getattr(resp, "from") == req.to
         assert resp.to == getattr(req, "from")
-        assert resp.hop_start > 0  # apps gate route-back rendering on this
-        rd = mesh_pb2.RouteDiscovery()
-        rd.ParseFromString(resp.decoded.payload)
-        assert getattr(req, "from") not in rd.route  # endpoints implied, not listed
-        assert req.to not in rd.route
-        assert len(rd.snr_towards) == len(rd.route) + 1
-        assert len(rd.snr_back) == len(rd.route_back) + 1
-        assert list(rd.route_back) == list(reversed(rd.route))
-    # requests are want_response probes with an empty RouteDiscovery
+        hops = resp.hop_start - resp.hop_limit
+        assert hops >= 0
+        assert len(resp.path) == max(0, hops - 1)
+        assert resp.relay_node
     for req in requests.values():
-        assert req.decoded.want_response is True
+        assert req.decoded.bitfield & wire_pb2.Data.BITFIELD_WANT_RESPONSE
 
 
 # ── BBS/bot plane (PROFILE["bots"], opt-in) ─────────────────────────────────
@@ -1635,7 +1657,7 @@ def test_sim_bots_off_by_default():
     cap = sim.generate(nodes=40, days=1, seed=9, start=1_700_000_000)
     bot_names = {ln for ln, _sn, _hw in sim._BOT_IDENTITIES}
     assert not any(n.long_name in bot_names for n in cap.nodes)
-    mp = mesh_pb2.MeshPacket()
+    mp = packet_pb2.MeshPacket()
     for _ts, raw, _ch in cap.packets:
         mp.Clear()
         mp.ParseFromString(raw)
@@ -1673,7 +1695,7 @@ def test_sim_bots_scene():
     }
     assert len(bot_nums) == 5
 
-    mp = mesh_pb2.MeshPacket()
+    mp = packet_pb2.MeshPacket()
     all_ids: set[int] = set()
     reactions: Counter = Counter()
     legendary_id = None
@@ -1692,9 +1714,13 @@ def test_sim_bots_scene():
                     legendary_id = mp.id
                 if frm in bot_nums:
                     bot_texts += 1
-        elif mp.decoded.portnum == 37 and frm in bot_nums:
+        elif mp.decoded.portnum == portnums_pb2.PortNum.MESH_BEACON_APP and frm in bot_nums:
             bot_beacons += 1
-        elif mp.decoded.portnum == 70 and mp.decoded.request_id and frm in bot_nums:
+        elif (
+            mp.flags & packet_pb2.MeshPacket.PACKET_RECORD_PATH
+            and mp.decoded.request_id
+            and frm in bot_nums
+        ):
             bot_tr_responses += 1
 
     assert bot_texts > 0  # bots piled on triggers
@@ -1749,7 +1775,7 @@ def test_conference_stress_preset_bundles_the_scene():
     assert prof["bots"]["count"] == 17
     assert prof["telemetry_interval"] > PROFILE_DEFAULT_TELEMETRY  # throttled cadences
     cap = sim.generate(nodes=50, days=1, seed=3, start=1_700_000_000, profile=prof)
-    mp = mesh_pb2.MeshPacket()
+    mp = packet_pb2.MeshPacket()
     tapbacks = 0
     for _ts, raw, _ch in cap.packets:
         mp.Clear()
@@ -1882,7 +1908,10 @@ def test_local_metrics_emit_both_device_metrics_and_local_stats():
             if fr.WhichOneof("payload_variant") != "packet":
                 continue
             pkt = fr.packet
-            if pkt.decoded.portnum != 67 or getattr(pkt, "from") != OBSERVER_NUM:
+            if (
+                pkt.decoded.portnum != portnums_pb2.PortNum.TELEMETRY_APP
+                or getattr(pkt, "from") != OBSERVER_NUM
+            ):
                 continue
             assert pkt.to == OBSERVER_NUM  # local status, self-addressed — not mesh traffic
             tm = telemetry_pb2.Telemetry()
@@ -2008,42 +2037,47 @@ def test_session_mdns_gating_and_lifecycle(monkeypatch):
 # ── Traceroute responder ──────────────────────────────────────────────────────
 
 
-def test_build_traceroute_payload_encodes_route_and_snr():
+def test_record_path_writes_the_tail():
+    """record_path names relays by suffix: the last is relay_node, the rest the tail,
+    oldest first, with hop_limit = hop_start - hops taken; a 0x00 byte reads 0x01."""
     from meshtastic_mcp.replay import build
 
-    route = [0xAAAA, 0xBBBB, 0xCCCC]
-    snr_t = [40, -80, 10]
-    snr_b = [30, -90, 5]
-    pl = build.traceroute_payload(route, snr_towards=snr_t, snr_back=snr_b)
-    rd = mesh_pb2.RouteDiscovery()
-    rd.ParseFromString(pl)
-    assert list(rd.route) == route
-    assert list(rd.snr_towards) == snr_t
-    assert list(rd.snr_back) == snr_b
+    mp = packet_pb2.MeshPacket()
+    setattr(mp, "from", 0xAAAA0001)
+    build.record_path(mp, [0x11111122, 0x33333300, 0x55555566], hop_start=7)
+    assert mp.flags & packet_pb2.MeshPacket.PACKET_RECORD_PATH
+    assert mp.path == bytes([0x22, 0x01])
+    assert mp.relay_node == 0x66
+    assert (mp.hop_start, mp.hop_limit) == (7, 4)
+
+    direct = packet_pb2.MeshPacket()
+    setattr(direct, "from", 0xAAAA0042)
+    build.record_path(direct, [], hop_start=3)
+    assert direct.path == b"" and direct.relay_node == 0x42 and direct.hop_limit == 3
 
 
 def test_from_kind_builds_traceroute():
+    """A traceroute inject is a device-metrics reply that recorded its path."""
     from meshtastic_mcp.replay import build
 
     mp = build.from_kind(
         "traceroute",
-        {"route": [0x1111, 0x2222], "snr_towards": [20, -40]},
-        from_node=0x1111,
-        to_node=0x2222,
+        {"route": [0x1111, 0x2222], "request_id": 7},
+        from_node=0x3333,
+        to_node=0x4444,
     )
-    assert mp.decoded.portnum == 70
-    rd = mesh_pb2.RouteDiscovery()
-    rd.ParseFromString(mp.decoded.payload)
-    assert list(rd.route) == [0x1111, 0x2222]
-    assert list(rd.snr_towards) == [20, -40]
+    assert mp.decoded.portnum == portnums_pb2.PortNum.TELEMETRY_APP
+    assert mp.decoded.request_id == 7
+    assert mp.path == bytes([0x11]) and mp.relay_node == 0x22
+    assert mp.hop_start - mp.hop_limit == 2
 
 
 def test_traceroute_responder_replies_to_client_request():
-    """When the connected client sends a TRACEROUTE_APP request, the replay
-    engine must synthesise a RouteDiscovery response addressed back to the
-    requester.
+    """When the connected client sends a path-recording request (3.0 traceroute),
+    the replay engine must answer with a reply addressed back to the requester
+    that recorded its path.
     """
-    from meshtastic.protobuf import portnums_pb2
+    from meshtastic.protobuf import packet_pb2, portnums_pb2, wire_pb2
 
     cap = sim.generate(nodes=20, days=1, seed=3, start=1_700_000_000)
     dest_num = cap.nodes[0].num
@@ -2080,45 +2114,38 @@ def test_traceroute_responder_replies_to_client_request():
         while time.time() - t0 < 3 and not sess.state.connected:
             _read_frame(client)
 
-        # send a TRACEROUTE_APP request from the observer to dest_num
-        req_mp = mesh_pb2.MeshPacket()
+        # send a path-recording device-metrics request from the observer to dest_num,
+        # as the Python CLI's --traceroute does
+        req_mp = packet_pb2.MeshPacket()
         req_mp.to = dest_num & 0xFFFFFFFF
         setattr(req_mp, "from", 0x42524331)  # OBSERVER_NUM
         req_mp.id = 0x1234ABCD
-        req_mp.want_ack = True
-        req_mp.decoded.portnum = portnums_pb2.PortNum.TRACEROUTE_APP
-        rd_req = mesh_pb2.RouteDiscovery()
-        req_mp.decoded.payload = rd_req.SerializeToString()
+        req_mp.flags = packet_pb2.MeshPacket.PACKET_RECORD_PATH
+        req_mp.decoded.portnum = portnums_pb2.PortNum.TELEMETRY_APP
+        req_mp.decoded.bitfield = wire_pb2.Data.BITFIELD_WANT_RESPONSE
+        tm = telemetry_pb2.Telemetry()
+        tm.device_metrics.SetInParent()
+        req_mp.decoded.payload = tm.SerializeToString()
         _send_toradio(client, packet=req_mp)
 
-        # look for the RouteDiscovery response within 3 seconds
+        # look for the reply within 3 seconds
         response = None
         t0 = time.time()
         while time.time() - t0 < 3 and response is None:
             fr = _read_frame(client)
             if fr.WhichOneof("payload_variant") != "packet":
                 continue
-            if fr.packet.decoded.portnum != portnums_pb2.PortNum.TRACEROUTE_APP:
+            if fr.packet.decoded.request_id != 0x1234ABCD:
                 continue
             response = fr.packet
         client.close()
 
-        assert response is not None, (
-            "no RouteDiscovery response from the replay traceroute responder"
-        )
-        assert response.decoded.request_id == 0x1234ABCD
+        assert response is not None, "no reply from the replay traceroute responder"
         assert getattr(response, "from") == dest_num & 0xFFFFFFFF  # responder = traced node
-        rd_resp = mesh_pb2.RouteDiscovery()
-        rd_resp.ParseFromString(response.decoded.payload)
-        # Firmware RouteDiscovery semantics: route lists *intermediate* hops only
-        # — the requester and destination are implied by the packet from/to and
-        # must not appear (apps add the endpoints when rendering). SNR lists have
-        # one entry per receiving hop including the endpoint: len(route) + 1.
-        assert 0x42524331 not in rd_resp.route  # OBSERVER_NUM (requester)
-        assert dest_num & 0xFFFFFFFF not in rd_resp.route
-        assert len(rd_resp.snr_towards) == len(rd_resp.route) + 1
-        assert len(rd_resp.snr_back) == len(rd_resp.route_back) + 1
-        assert list(rd_resp.route_back) == list(reversed(rd_resp.route))
+        assert response.flags & packet_pb2.MeshPacket.PACKET_RECORD_PATH
+        hops = response.hop_start - response.hop_limit
+        assert len(response.path) == max(0, hops - 1)  # tail: the relays before relay_node
+        assert response.relay_node
         # apps gate the "route back" rendering on a nonzero hop_start
         assert response.hop_start > 0
     finally:
@@ -2130,17 +2157,19 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 def test_firmware_version_defaults_per_edition():
-    """Event editions report their real build; others keep the placeholder; override wins."""
+    """Event editions report their real build; others the default; override wins."""
     from meshtastic_mcp.replay.engine import (
         DEFAULT_FIRMWARE_VERSION,
         EVENT_FIRMWARE_VERSIONS,
         firmware_version_for,
     )
 
-    # DEFCON replay reports the real event build, so the app's event-info build
-    # comparison behaves like a live event node instead of a placeholder.
-    assert firmware_version_for("DEFCON", None) == EVENT_FIRMWARE_VERSIONS["DEFCON"]
-    # Non-event editions keep the historical default.
+    # An event edition with a published build reports it; without one, the default.
+    for edition, build_version in EVENT_FIRMWARE_VERSIONS.items():
+        assert firmware_version_for(edition, None) == build_version
+    assert firmware_version_for("DEFCON", None) == EVENT_FIRMWARE_VERSIONS.get(
+        "DEFCON", DEFAULT_FIRMWARE_VERSION
+    )
     assert firmware_version_for("VANILLA", None) == DEFAULT_FIRMWARE_VERSION
     # An explicit override always wins, for any edition.
     assert firmware_version_for("DEFCON", "2.7.0.deadbee") == "2.7.0.deadbee"

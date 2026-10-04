@@ -8,8 +8,7 @@ from __future__ import annotations
 import math
 from collections import Counter
 
-import pytest
-from meshtastic.protobuf import mesh_pb2
+from meshtastic.protobuf import packet_pb2
 
 from meshtastic_mcp.replay.observer import (
     ObserverParams,
@@ -29,7 +28,7 @@ def _mk_packet(
     payload: bytes = b"hello",
     hop_limit: int = 3,
 ) -> tuple[int, bytes, str]:
-    mp = mesh_pb2.MeshPacket()
+    mp = packet_pb2.MeshPacket()
     setattr(mp, "from", sender)
     mp.to = BROADCAST
     mp.id = pkt_id
@@ -62,8 +61,8 @@ def _fleet(
     return packets, positions
 
 
-def _parse(blob: bytes) -> mesh_pb2.MeshPacket:
-    mp = mesh_pb2.MeshPacket()
+def _parse(blob: bytes) -> packet_pb2.MeshPacket:
+    mp = packet_pb2.MeshPacket()
     mp.ParseFromString(blob)
     return mp
 
@@ -129,8 +128,7 @@ def test_rx_metadata() -> None:
     for rx_t, blob, _ in out:
         mp = _parse(blob)
         assert -128 <= mp.rx_rssi <= -12
-        assert -20.75 <= mp.rx_snr <= 15.25
-        assert (mp.rx_snr * 4) % 1 == pytest.approx(0.0, abs=1e-6)  # quarter-dB steps
+        assert -20.75 <= mp.rx_snr / 2 <= 15.25  # half-dB steps
         assert mp.rx_time >= t_by_id[mp.id]
         assert rx_t == mp.rx_time
         assert 0 <= mp.hop_limit <= 3
@@ -166,9 +164,9 @@ def test_mqtt_mode() -> None:
     mqtt_ids = set()
     for _, blob, _ in out:
         mp = _parse(blob)
-        if mp.via_mqtt:
+        if mp.flags & packet_pb2.MeshPacket.PACKET_VIA_MQTT:
             assert mp.rx_rssi == 0
-            assert mp.rx_snr == 0.0
+            assert mp.rx_snr == 0
             assert mp.hop_limit == 3  # hop fields untouched on the bridged copy
             mqtt_ids.add(mp.id)
     input_ids = {_parse(blob).id for _, blob, _ in packets}
@@ -216,7 +214,7 @@ def test_sim_observer_integration() -> None:
     for _, blob, _ in obs_a.packets:
         mp = _parse(blob)
         ids[mp.id] += 1
-        if mp.via_mqtt:
+        if mp.flags & packet_pb2.MeshPacket.PACKET_VIA_MQTT:
             mqtt += 1
         elif mp.rx_rssi:
             assert -128 <= mp.rx_rssi <= -12
