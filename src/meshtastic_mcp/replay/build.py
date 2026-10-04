@@ -250,7 +250,7 @@ def device_metrics_payload(
     tm = telemetry_pb2.Telemetry()
     tm.time = when or int(time.time())
     tm.device_metrics.battery_level = battery_level
-    tm.device_metrics.uptime_seconds = uptime_s
+    tm.device_metrics.uptime_minutes = uptime_s // 60  # 3.0 sends uptime in minutes
     return tm.SerializeToString()
 
 

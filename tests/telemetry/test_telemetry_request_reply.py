@@ -19,9 +19,9 @@ Validates:
     ``allocReply`` — which is only invoked by the framework when
     ``want_response`` is set on the incoming packet
   * The reply carries a ``DeviceMetrics`` sub-message with at least one
-    non-zero field (uptime_seconds is guaranteed non-zero a few seconds
-    after boot, so it reliably survives protobuf's default-value
-    serialization stripping)
+    non-zero field (voltage or uptime_minutes, which reliably survive
+    protobuf's default-value serialization stripping once the node has
+    been up a minute)
   * The reply routes back to TX and gets matched against the original
     request via ``request_id`` — using the library's ``onResponse``
     callback mechanism, which stores the handler at
@@ -54,7 +54,7 @@ _DEVICE_METRICS_FIELDS = (
     "voltage",
     "channelUtilization",
     "airUtilTx",
-    "uptimeSeconds",
+    "uptimeMinutes",
 )
 
 

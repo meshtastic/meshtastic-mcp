@@ -1922,7 +1922,7 @@ def test_local_metrics_emit_both_device_metrics_and_local_stats():
         assert "device_metrics" in seen, "no DEVICE_METRICS from the observer"
         assert "local_stats" in seen, "no LOCAL_STATS from the observer"
         dm = seen["device_metrics"].device_metrics
-        assert dm.uptime_seconds > 0 and dm.channel_utilization > 0
+        assert dm.HasField("uptime_minutes") and dm.channel_utilization > 0
         ls = seen["local_stats"].local_stats
         assert ls.uptime_seconds > 0
         assert ls.num_online_nodes == len(cap.nodes) + 1  # mesh size + the observer itself

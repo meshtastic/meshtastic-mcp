@@ -2022,7 +2022,7 @@ def _pl_tel_device(rng, m, t, load):
     d.air_util_tx = round(
         (rng.uniform(0.0, 0.2) if rng.random() < 0.85 else rng.uniform(0.2, 6.0)) * 100
     )
-    d.uptime_seconds = max(60, t - m["join_t"] + rng.randint(0, 900))
+    d.uptime_minutes = max(60, t - m["join_t"] + rng.randint(0, 900)) // 60
     return tm.SerializeToString()
 
 

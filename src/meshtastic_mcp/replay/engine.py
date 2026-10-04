@@ -934,7 +934,7 @@ class ReplaySession:
         d.voltage = round((3.0 + 1.25 * batt / 100.0 + random.uniform(-0.03, 0.03)) * 1000)
         d.channel_utilization = round(self._local_chutil() * 100)
         d.air_util_tx = round(random.uniform(0.0, 1.5) * 100)
-        d.uptime_seconds = uptime
+        d.uptime_minutes = uptime // 60  # 3.0 sends uptime in minutes
         return self._local_telemetry_fr(tm)
 
     def _local_metrics_loop(self, send: Any, client: socket.socket) -> None:
