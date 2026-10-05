@@ -328,16 +328,17 @@ def test_env_telemetry_personas_and_nan():
     n_hum = sum(q.AIR_HUMIDITY_PCT_CENTI in _quantities(t) for t in envs)
     assert 0 < n_lux < len(envs)
     assert 0 < n_hum < len(envs)
-    # a reading a sensor fails to produce (NaN on the sensor) is left out of the batch
-    prof = {"climate": {"t_mean": 22.0, "t_amp": 9.0, "pressure_hpa": 780.0, "nan_fraction": 0.5}}
+    # a reading a sensor fails to produce (NaN on the sensor) is left out of the batch. Compared at the
+    # extreme: persona assignment shares the random stream, so partial rates swing with any change to it
+    prof = {"climate": {"t_mean": 22.0, "t_amp": 9.0, "pressure_hpa": 780.0, "nan_fraction": 1.0}}
     cap2 = sim.generate(nodes=400, days=2, seed=3, start=1_700_000_000, profile=prof)
     envs2 = [
         t
         for t in _telemetry(cap2, "sensor_readings")
         if q.AIR_TEMPERATURE_C_CENTI in _quantities(t)
     ]
-    n_hum2 = sum(q.AIR_HUMIDITY_PCT_CENTI in _quantities(t) for t in envs2)
-    assert n_hum2 / len(envs2) < n_hum / len(envs)
+    assert envs2, "temperature still reports"
+    assert not any(q.AIR_HUMIDITY_PCT_CENTI in _quantities(t) for t in envs2)
 
 
 def test_text_spike_multiplies_hourly_budget():

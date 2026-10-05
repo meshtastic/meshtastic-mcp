@@ -289,7 +289,7 @@ def predict_lora_params(
         )
 
     duty_cycle_pct = r.duty_cycle_pct
-    if region in _EU_DATA_NETWORK_REGIONS and device_role in ("ROUTER", "ROUTER_LATE"):
+    if region in _EU_DATA_NETWORK_REGIONS and device_role == "ROUTER":
         duty_cycle_pct = 10.0
 
     # override_frequency wins outright — channel_num is meaningless in that mode.

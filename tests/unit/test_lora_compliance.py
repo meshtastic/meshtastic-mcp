@@ -49,7 +49,7 @@ def test_eu_868_narrow_band_and_duty_cycle() -> None:
 @pytest.mark.parametrize("region", ["EU_866", "EU_874", "EU_917"])
 def test_eu_data_network_duty_cycle_is_role_dependent(region: str) -> None:
     mobile = lc.predict_lora_params(region, "LITE_FAST", device_role="CLIENT")
-    router = lc.predict_lora_params(region, "LITE_FAST", device_role="ROUTER_LATE")
+    router = lc.predict_lora_params(region, "LITE_FAST", device_role="ROUTER")
     assert mobile.duty_cycle_pct == 2.5
     assert router.duty_cycle_pct == 10.0
 

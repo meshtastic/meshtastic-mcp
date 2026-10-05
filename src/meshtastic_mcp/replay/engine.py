@@ -787,7 +787,7 @@ class ReplaySession:
             n.num
             for n in self.capture.nodes
             if n.num not in (dest, requester, self.params.observer_num)
-            and (getattr(n, "role", None) or "") in ("ROUTER", "ROUTER_LATE", "")
+            and (getattr(n, "role", None) or "") in ("ROUTER", "")
         ]
         relays = [random.choice(routers)] if routers else []
 

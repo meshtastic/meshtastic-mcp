@@ -76,7 +76,7 @@ an implicit ACK → `err=5` MAX_RETRANSMIT → NAK → the app paints the bubble
 ```
 **Adding more nodes does NOT fix this** — verified live 2026-06-24: a 3-node broadcast errored
 identically (more nodes in the *same* multicast domain are still all 1 hop away, so rebroadcast
-stays suppressed). `CLIENT_MUTE` nodes never rebroadcast at all, compounding it.
+stays suppressed). Nodes with rebroadcast mode `NONE` never rebroadcast at all, compounding it.
 
 ### Correct handling
 - **Assert the outbound loop on wire truth, not the UI checkmark.** The receiving node *does*

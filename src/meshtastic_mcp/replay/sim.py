@@ -98,14 +98,10 @@ PROFILE: dict = {
     # Role mix from the real node DBs: events run ~6-13 routers per 1600 nodes,
     # not dozens — the first 8 sim nodes are always infra, extras stay rare.
     "role_weights": [
-        ("CLIENT", 880),
-        ("CLIENT_MUTE", 40),
+        ("CLIENT", 928),
         ("TRACKER", 15),
         ("SENSOR", 10),
-        ("CLIENT_BASE", 4),
-        ("CLIENT_HIDDEN", 4),
-        ("ROUTER", 3),
-        ("ROUTER_LATE", 3),
+        ("ROUTER", 6),
     ],
     "channels": ["LongFast", "MeshCon", "Talks", "Swap", "Hax", "Staff"],
     # Where text lands, by channel (name, weight). Names absent from the active
@@ -1153,7 +1149,7 @@ def _build_nodes(
 ) -> tuple[list[NodeRow], list[dict]]:
     """Construct the node DB: ``(node_rows, meta)``.
 
-    The first 8 nodes are always infrastructure (4 ROUTER + 4 ROUTER_LATE) named
+    The first 8 nodes are always infrastructure (ROUTER) named
     from :data:`_ROUTER_NAMES`; the rest draw role/cluster/hardware from the
     profile weights. ``meta`` carries the per-node simulation state the emitters
     need (position, talkativeness, hop_start, battery persona, chutil gain, and
@@ -1181,12 +1177,12 @@ def _build_nodes(
                 used.add(num)
                 break
         if i < 8:
-            role = "ROUTER" if i < 4 else "ROUTER_LATE"
+            role = "ROUTER"
             cl = P["clusters"][i % 7]
         else:
             role = _weighted(rng, P["role_weights"])
             cl = _weighted_cluster(rng, cl_w)
-        if role in ("ROUTER", "ROUTER_LATE") and ridx < len(_ROUTER_NAMES):
+        if role == "ROUTER" and ridx < len(_ROUTER_NAMES):
             long = _ROUTER_NAMES[ridx]
             # infra nodes get a role-pun emoji short (cycled so the backbone
             # shows distinct icons), not a terse abbreviation.
