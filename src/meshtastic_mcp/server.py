@@ -1654,6 +1654,50 @@ def set_owner(
 
 
 @app.tool()
+def list_groups(port: str | None = None) -> dict[str, Any]:
+    """List the anycast groups the node knows.
+
+    Returns:
+        {groups: [{name, id: "!xxxxxxxx", member: bool, uplink: bool}]}
+    """
+    return admin.list_groups(port=port)
+
+
+@app.tool()
+def set_group(
+    name: str,
+    public_key: str | None = None,
+    private_key: str | None = None,
+    uplink: bool = False,
+    port: str | None = None,
+) -> dict[str, Any]:
+    """Add or replace an anycast group on the node.
+
+    Without `public_key` a fresh key pair is generated and the node becomes a
+    member; the result returns both keys (base64) for configuring senders and
+    other members. With `public_key` (base64) the node can send to the group;
+    `private_key` (base64) also makes it a member. `uplink` lets a member hand
+    what it delivers to MQTT.
+
+    Returns:
+        {ok, name, id: "!xxxxxxxx", member, public_key, private_key?}
+    """
+    return admin.set_group(
+        name=name, public_key=public_key, private_key=private_key, uplink=uplink, port=port
+    )
+
+
+@app.tool()
+def remove_group(name: str, port: str | None = None) -> dict[str, Any]:
+    """Remove an anycast group from the node; a member drops its private key with it.
+
+    Returns:
+        {ok: true, name: str}
+    """
+    return admin.remove_group(name=name, port=port)
+
+
+@app.tool()
 def get_config(section: str | None = None, port: str | None = None) -> dict[str, Any]:
     """Read one or all config sections.
 
@@ -1871,12 +1915,18 @@ def send_text(
     wait_for_tx: bool = False,
     tx_timeout_s: float = 30.0,
     tx_linger_s: float = 8.0,
+    to_group: str | None = None,
 ) -> dict[str, Any]:
     """Send a text message over the mesh.
 
     `to` defaults to broadcast ("^all"). Pass a node ID (hex string like
     "!abcdef01") or node number (int) to direct-message a specific node.
     channel_index picks which configured channel to send on.
+
+    `to_group` names an anycast group the node knows (see `list_groups`): the
+    nearest member delivers it. With `want_ack` the result adds `answered_by`
+    (the member's node ID, or null after 60 s), `error_reason` and
+    `ack_proof_status`.
 
     `tx_linger_s` delays the connection close after sendText() returns, allowing
     the firmware's channel-politeness TX delay (~4s) and RF airtime to complete
@@ -1908,6 +1958,7 @@ def send_text(
         want_ack=want_ack,
         port=port,
         tx_linger_s=tx_linger_s,
+        to_group=to_group,
     )
     if not wait_for_tx:
         return result
@@ -3837,6 +3888,7 @@ _READ_ONLY = {
     "pa_meter_status",  # reads the power meter (version/stored freq/live dBm); no state change
     "ble_sniff_status",  # enumerates USB + resolves a binary; no capture, no state change
     "ble_sniff_poll",  # reads capture-job state + parses the pcap on disk
+    "list_groups",  # reads the node's anycast groups; public data only
     "sdk_status",  # reports SDK-CLI bridge availability; no mutation
     "sdk_device_info",  # reads device snapshot via the Kotlin SDK CLI; no mutation
     "sdk_list_nodes",  # reads the device node DB via the Kotlin SDK CLI; no mutation
@@ -3868,6 +3920,8 @@ _DESTRUCTIVE = {
     "touch_1200bps",
     "set_owner",
     "set_config",
+    "set_group",  # writes group config and, for a member, a private key
+    "remove_group",
     "set_channel_url",
     "set_debug_log_api",
     "send_text",  # injects a mesh packet; cannot be recalled

@@ -18,12 +18,15 @@ bits by name.
 
 from __future__ import annotations
 
+import base64
+import time
 from typing import Any
 
 from google.protobuf import descriptor as pb_descriptor
 from google.protobuf import json_format
+from meshtastic import anycast
 from meshtastic.node import channel_role
-from meshtastic.protobuf import localonly_pb2
+from meshtastic.protobuf import localonly_pb2, portnums_pb2
 from meshtastic.util import find_bit, message_to_dict
 
 from .connection import connect
@@ -341,6 +344,8 @@ def send_text(
     want_ack: bool = False,
     port: str | None = None,
     tx_linger_s: float = 8.0,
+    to_group: str | None = None,
+    ack_timeout_s: float = 60.0,
 ) -> dict[str, Any]:
     """Send a text message over the mesh.
 
@@ -348,7 +353,14 @@ def send_text(
     channel-politeness TX delay (~4s for broadcasts) and RF airtime to complete
     before the connection closes and triggers a DTR reset. Without this, queued
     broadcasts are lost (verified: 3/3 silent losses with immediate close).
+
+    `to_group` sends to an anycast group the node knows instead of `to`; with
+    `want_ack` the call waits up to `ack_timeout_s` for the member that answers.
     """
+    if to_group is not None:
+        return _send_text_to_group(
+            text, to_group, channel_index, want_ack, port, tx_linger_s, ack_timeout_s
+        )
     destination = to if to is not None else "^all"
     with connect(port=port, linger_s=tx_linger_s) as iface:
         packet = iface.sendText(
@@ -359,6 +371,101 @@ def send_text(
         )
         packet_id = getattr(packet, "id", None)
     return {"ok": True, "packet_id": packet_id, "destination": destination}
+
+
+def _send_text_to_group(
+    text: str,
+    group: str,
+    channel_index: int,
+    want_ack: bool,
+    port: str | None,
+    tx_linger_s: float,
+    ack_timeout_s: float,
+) -> dict[str, Any]:
+    """Send to an anycast group; with want_ack, report which member answered."""
+    answers: list[dict[str, Any]] = []
+    with connect(port=port, linger_s=tx_linger_s) as iface:
+        group_num = iface.localNode.groupId(group)
+        if group_num is None:
+            raise AdminError(f"The node knows no group named {group!r}; see list_groups")
+        packet = iface.sendData(
+            text.encode("utf-8"),
+            group_num,
+            portNum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+            wantAck=want_ack,
+            onResponse=answers.append if want_ack else None,
+            onResponseAckPermitted=True,
+            channelIndex=channel_index,
+            anycast=True,
+        )
+        deadline = time.monotonic() + ack_timeout_s
+        while want_ack and not answers and time.monotonic() < deadline:
+            time.sleep(0.2)
+    result: dict[str, Any] = {
+        "ok": True,
+        "packet_id": getattr(packet, "id", None),
+        "destination": f"!{group_num:08x}",
+        "group": group,
+    }
+    if want_ack:
+        if answers:
+            routing = answers[0].get("decoded", {}).get("routing", {})
+            result["answered_by"] = f"!{int(answers[0]['from']):08x}"
+            result["error_reason"] = routing.get("errorReason", "NONE")
+            result["ack_proof_status"] = answers[0].get("ackProofStatus", "ACK_PROOF_ABSENT")
+        else:
+            result["answered_by"] = None
+    return result
+
+
+# ---------- anycast groups -------------------------------------------------
+
+
+def list_groups(port: str | None = None) -> dict[str, Any]:
+    """The anycast groups the node knows, with the ones it is a member of. Public data only."""
+    with connect(port=port) as iface:
+        groups = iface.localNode.listGroups()
+    return {"groups": [{**g, "id": f"!{g['id']:08x}"} for g in groups]}
+
+
+def set_group(
+    name: str,
+    public_key: str | None = None,
+    private_key: str | None = None,
+    uplink: bool = False,
+    port: str | None = None,
+) -> dict[str, Any]:
+    """Add or replace an anycast group on the node.
+
+    Without `public_key` a fresh key pair is generated and the node becomes a member; the
+    result carries both keys (base64) to configure senders and other members. With
+    `public_key` only, the node can send to the group; adding `private_key` makes it a member.
+    """
+    generated = public_key is None
+    if generated:
+        priv, pub = anycast.generate_keypair()
+    else:
+        pub = base64.b64decode(public_key)
+        priv = base64.b64decode(private_key) if private_key else None
+    with connect(port=port, linger_s=2.5) as iface:
+        iface.localNode.setGroup(name, pub, priv, uplink=uplink)
+    result: dict[str, Any] = {
+        "ok": True,
+        "name": name,
+        "id": f"!{anycast.group_id(pub):08x}",
+        "member": priv is not None,
+        "public_key": base64.b64encode(pub).decode(),
+    }
+    if generated:
+        result["private_key"] = base64.b64encode(priv).decode()
+    return result
+
+
+def remove_group(name: str, port: str | None = None) -> dict[str, Any]:
+    """Remove an anycast group; a member drops its private key with it."""
+    with connect(port=port, linger_s=2.5) as iface:
+        iface.localNode.deleteGroup(name)
+    return {"ok": True, "name": name}
 
 
 # ---------- diagnostics ----------------------------------------------------
