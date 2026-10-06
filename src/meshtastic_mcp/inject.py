@@ -159,6 +159,7 @@ def _header(
     public_key: bytes = b"",
     want_ack: bool = False,
     hop_limit: int = 3,
+    header_options: bytes = b"",
 ) -> Any:
     """The injected MeshPacket's header fields; the frame itself goes in by `_send`."""
     mp = packet_pb2.MeshPacket()
@@ -172,6 +173,7 @@ def _header(
         mp.flags |= packet_pb2.MeshPacket.PACKET_WANT_ACK
     mp.hop_limit = hop_limit
     mp.hop_start = hop_limit
+    mp.header_options = header_options  # in the AAD, so set before any encryption
     if pki_encrypted:
         mp.flags |= packet_pb2.MeshPacket.PACKET_PKI_ENCRYPTED
         if public_key:
@@ -230,9 +232,11 @@ def inject_frame(
     fuzz_seed: int = 1,
     confirm: bool = False,
     port: str | None = None,
+    header_options_hex: str = "",
 ) -> dict[str, Any]:
     """Craft frame(s) and inject via SIMULATOR_APP. See module docstring for the wire format."""
     _require_confirm(confirm)
+    options = bytes.fromhex(header_options_hex)
     frm = int(from_node, 0) if isinstance(from_node, str) else int(from_node)
     pubkey = None
     if public_key_b64:
@@ -268,6 +272,7 @@ def inject_frame(
                 pki_encrypted=pki,
                 public_key=pubkey or b"",
                 want_ack=want_response,
+                header_options=options,
             )
             if encrypt:
                 if not key:
@@ -307,6 +312,7 @@ def inject_frame(
                 ch_hash=chash,
                 pki_encrypted=pki,
                 public_key=pubkey or b"",
+                header_options=options,
             )
             sent = [
                 _send(

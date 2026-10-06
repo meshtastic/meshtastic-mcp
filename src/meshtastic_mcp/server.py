@@ -1993,6 +1993,7 @@ def inject_frame(
     fuzz_seed: int = 1,
     confirm: bool = False,
     port: str | None = None,
+    header_options_hex: str = "",
 ) -> dict[str, Any]:
     """Inject a packet into a connected board AS IF it arrived off the LoRa radio.
 
@@ -2015,6 +2016,8 @@ def inject_frame(
     target's own num. `encrypt` (default true) channel-AES-CTR-encrypts the payload so the firmware
     decrypts it as if received; set false to inject already-decoded (needed with `pki`).
     `channel_index` selects which configured channel's key/hash to use.
+    `header_options_hex` is the frame's encoded `HeaderOptions` (hex), carried in the AAD; use it
+    to inject fragments (`fragment = msg_id << 6 | index << 3 | total`) or unknown option tags.
 
     Returns: {ok, target, channel, channel_hash, injected, frames:[{from,to,id,portnum,bytes,...}]}
     """
@@ -2039,6 +2042,7 @@ def inject_frame(
         fuzz_seed=fuzz_seed,
         confirm=confirm,
         port=port,
+        header_options_hex=header_options_hex,
     )
 
 
