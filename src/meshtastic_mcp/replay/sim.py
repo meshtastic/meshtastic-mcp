@@ -12,7 +12,8 @@ lineup, conference length, and a diurnal activity envelope (quiet overnight →
 morning arrival ramp → daytime sessions → evening-social text spike). Every
 Meshtastic portnum/flavor is represented (NodeInfo, Position, Telemetry
 device+sensor readings, Text, Routing ACKs, path-recording request/reply pairs
-(the 3.0 traceroute), NeighborInfo, Waypoint, PaxCounter, StoreForward, Admin).
+(the 3.0 traceroute), Waypoint, PaxCounter, StoreForward, Admin). NeighborInfo
+is left out: a 3.0 node reports it to its own client only, never over the mesh.
 Packets follow the 3.0 schema, in the form a node hands its client.
 
 The ``PROFILE`` dict holds the tunable parameters. When real captures (e.g. the
@@ -61,7 +62,6 @@ WAYPOINT = PortNum.WAYPOINT_APP
 PAXCOUNTER = PortNum.PAXCOUNTER_APP
 STORE_FORWARD = PortNum.STORE_FORWARD_APP
 TELEMETRY = PortNum.TELEMETRY_APP
-NEIGHBORINFO = PortNum.NEIGHBORINFO_APP
 ATAK = PortNum.ATAK_PLUGIN
 
 # ── Tunable profile (fit to real captures as they become available) ──────────
@@ -131,10 +131,6 @@ PROFILE: dict = {
     # Traceroute (path-recording request -> reply) pairs per hour. The app pops a
     # modal for each reply addressed to the observer, so UI-driving sessions set this to 0.
     "traceroute_pairs_per_hour": 12,
-    # NeighborInfo is off by default in real firmware — only infra + a sliver
-    # of enthusiasts emit it (BM: 0.04% of traffic).
-    "neighborinfo_interval": 21600,
-    "neighborinfo_fraction": 0.005,
     # ~3.5% of real nodes carry environment sensors (they are mostly CLIENTs
     # with a BME/lux board attached, not SENSOR-role nodes).
     "env_sensor_fraction": 0.035,
@@ -1453,23 +1449,6 @@ def generate(
                 add(t + 5, m["num"], BROADCAST, TELEMETRY, _pl_tel_power(rng, t))
             t += int(P["env_interval"] * rng.uniform(0.8, 1.2))
 
-    # -- neighborinfo (off by default in real firmware: infra + a sliver) --
-    nbr = routers + [m for m in meta if rng.random() < P["neighborinfo_fraction"]]
-    for m in nbr:
-        t = start_epoch + rng.randint(0, 7200)
-        while t < end_epoch:
-            others = [x for x in meta if x["num"] != m["num"]]
-            k = min(len(others), rng.randint(2, 6))
-            add(
-                t,
-                m["num"],
-                BROADCAST,
-                NEIGHBORINFO,
-                _pl_neighborinfo(rng, m["num"], rng.sample(others, k)),
-                hop=4,
-            )
-            t += int(P["neighborinfo_interval"] * rng.uniform(0.85, 1.15))
-
     # -- traceroutes (path-recording request -> reply pairs) + routing ACKs --
     # 3.0 has no traceroute message: a request asks the destination for a
     # response with PACKET_RECORD_PATH set (here a device-metrics request, as the
@@ -2086,17 +2065,6 @@ def _pl_routing_ack():
     r = wire_pb2.Routing()
     r.error_reason = wire_pb2.Routing.Error.NONE
     return r.SerializeToString()
-
-
-def _pl_neighborinfo(rng, num, neighbors):
-    ni = wire_pb2.NeighborInfo()
-    ni.node_id = num
-    ni.last_sent_by_id = num
-    ni.node_broadcast_interval_secs = 14400
-    for nb in neighbors:  # parallel columns; SNR in half-dB steps
-        ni.neighbor_ids.append(nb["num"])
-        ni.neighbor_snr.append(round(rng.uniform(-18, 12) * 2))
-    return ni.SerializeToString()
 
 
 def _pl_waypoint(rng, m, t, name, desc, icon, *, geofenced: bool = False):
