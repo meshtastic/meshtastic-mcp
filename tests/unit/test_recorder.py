@@ -275,6 +275,16 @@ class TestSummarizePacket:
         out = summarize_packet({"fromId": "!abc"})
         assert out["from_node"] == "!abc"
         assert out["portnum"] is None
+        assert out["scope_code"] is None
+
+    def test_options_block_fields(self) -> None:
+        out = summarize_packet(
+            {"hopStart": 3, "channelHash": 90, "headerOptions": {"hopFlags": 2, "scopeCode": 60310}}
+        )
+        assert out["hop_start"] == 3
+        assert out["channel_hash"] == 90
+        assert out["hop_flags"] == 2
+        assert out["scope_code"] == "0xeb96"
 
 
 class TestInterfaceLabel:

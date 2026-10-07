@@ -267,6 +267,8 @@ def summarize_packet(packet: dict[str, Any], *, payload_hex_len: int = 64) -> di
     if not isinstance(packet, dict):
         return {"raw_type": type(packet).__name__}
     decoded = packet.get("decoded") if isinstance(packet.get("decoded"), dict) else {}
+    opts = packet.get("headerOptions") if isinstance(packet.get("headerOptions"), dict) else {}
+    scope_code = opts.get("scopeCode")
     portnum = decoded.get("portnum") if isinstance(decoded, dict) else None
     payload = decoded.get("payload") if isinstance(decoded, dict) else None
     payload_hex = None
@@ -284,6 +286,10 @@ def summarize_packet(packet: dict[str, Any], *, payload_hex_len: int = 64) -> di
         "to_node": packet.get("toId") or packet.get("to"),
         "portnum": portnum,
         "hop_limit": packet.get("hopLimit"),
+        "hop_start": packet.get("hopStart"),
+        "channel_hash": packet.get("channelHash"),
+        "hop_flags": opts.get("hopFlags"),
+        "scope_code": f"0x{scope_code:04x}" if isinstance(scope_code, int) else None,
         "want_ack": packet.get("wantAck"),
         "rx_rssi": packet.get("rxRssi"),
         "rx_snr": _half_db(packet.get("rxSnr")),

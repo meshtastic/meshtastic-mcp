@@ -1994,6 +1994,7 @@ def inject_frame(
     confirm: bool = False,
     port: str | None = None,
     header_options_hex: str = "",
+    scope_region: str | None = None,
 ) -> dict[str, Any]:
     """Inject a packet into a connected board AS IF it arrived off the LoRa radio.
 
@@ -2018,6 +2019,8 @@ def inject_frame(
     `channel_index` selects which configured channel's key/hash to use.
     `header_options_hex` is the frame's encoded `HeaderOptions` (hex), carried in the AAD; use it
     to inject fragments (`fragment = msg_id << 6 | index << 3 | total`) or unknown option tags.
+    `scope_region` appends the scope code a node with that home region would put on a channel
+    broadcast (text, raw and admin modes), for testing a router's region filter.
 
     Returns: {ok, target, channel, channel_hash, injected, frames:[{from,to,id,portnum,bytes,...}]}
     """
@@ -2043,6 +2046,7 @@ def inject_frame(
         confirm=confirm,
         port=port,
         header_options_hex=header_options_hex,
+        scope_region=scope_region,
     )
 
 

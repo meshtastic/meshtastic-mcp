@@ -25,7 +25,7 @@ import random
 import struct
 from typing import Any
 
-from meshtastic import admin_pb2, api_pb2, packet_pb2, portnums_pb2, wire_pb2
+from meshtastic import admin_pb2, api_pb2, packet_pb2, portnums_pb2, util, wire_pb2
 
 from .connection import connect
 
@@ -233,6 +233,7 @@ def inject_frame(
     confirm: bool = False,
     port: str | None = None,
     header_options_hex: str = "",
+    scope_region: str | None = None,
 ) -> dict[str, Any]:
     """Craft frame(s) and inject via SIMULATOR_APP. See module docstring for the wire format."""
     _require_confirm(confirm)
@@ -263,16 +264,27 @@ def inject_frame(
                 return _rand_id()
             return int(packet_id, 0) if isinstance(packet_id, str) else int(packet_id)
 
+        def _options(pid: int) -> bytes:
+            # The code a node with this home region appends to its broadcast (SCHEMA.md section 8)
+            if not scope_region:
+                return options
+            if not channel_frame:
+                raise ValueError("a scope code belongs on a channel broadcast")
+            region = util.canonical_region_name(scope_region)
+            code = util.scope_code(region, chash, frm, pid)
+            return options + wire_pb2.HeaderOptions(scope_code=code).SerializeToString()
+
         def _inject_payload(pn: int, payload: bytes) -> dict[str, Any]:
+            pid = _pid()
             mp = _header(
                 from_node=frm,
                 to_node=to_node,
-                packet_id=_pid(),
+                packet_id=pid,
                 ch_hash=chash,
                 pki_encrypted=pki,
                 public_key=pubkey or b"",
                 want_ack=want_response,
-                header_options=options,
+                header_options=_options(pid),
             )
             if encrypt:
                 if not key:
