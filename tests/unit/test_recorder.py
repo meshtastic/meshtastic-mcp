@@ -286,6 +286,11 @@ class TestSummarizePacket:
         assert out["hop_flags"] == 2
         assert out["scope_code"] == "0xeb96"
 
+    def test_ratchet_flag(self) -> None:
+        out = summarize_packet({"pkiEncrypted": True, "ratchetEncrypted": True})
+        assert out["pki_encrypted"] and out["ratchet_encrypted"]
+        assert not summarize_packet({"pkiEncrypted": True})["ratchet_encrypted"]
+
 
 class TestInterfaceLabel:
     def test_serial(self) -> None:

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 from meshtastic.node import channel_role
@@ -73,12 +74,16 @@ def device_info(port: str | None = None, timeout_s: float = 8.0) -> dict[str, An
         long_name: str | None = None
         short_name: str | None = None
         hw_model: str | int | None = None
+        ratchet_key: str | None = None
         if iface.nodesByNum and my is not None:
             local_rec = iface.nodesByNum.get(my.my_node_num, {})
             user = local_rec.get("user") or {}
             long_name = user.get("longName")
             short_name = user.get("shortName")
             hw_model = hw_model_name(user.get("hwModel", 0))
+            if user.get("ratchetKey"):
+                # The first bytes are enough to see the key rotate
+                ratchet_key = base64.b64decode(user["ratchetKey"])[:4].hex()
 
         region = region_name(iface)
 
@@ -94,6 +99,7 @@ def device_info(port: str | None = None, timeout_s: float = 8.0) -> dict[str, An
             "primary_channel": primary_channel_name(iface),
             "modem_preset": modem_preset_name(iface),
             "channel_num": channel_num(iface),
+            "ratchet_key_prefix": ratchet_key,
         }
 
 
@@ -124,6 +130,7 @@ def _node_record(node_dict: dict[str, Any]) -> dict[str, Any]:
         "last_heard": node_dict.get("lastHeard"),
         "battery_level": device_metrics.get("batteryLevel"),
         "is_favorite": bool(node_dict.get("isFavorite", False)),
+        "has_ratchet": bool(node_dict.get("hasRatchet", False)),
     }
 
 

@@ -291,6 +291,8 @@ def summarize_packet(packet: dict[str, Any], *, payload_hex_len: int = 64) -> di
         "hop_flags": opts.get("hopFlags"),
         "scope_code": f"0x{scope_code:04x}" if isinstance(scope_code, int) else None,
         "want_ack": packet.get("wantAck"),
+        "pki_encrypted": bool(packet.get("pkiEncrypted")),
+        "ratchet_encrypted": bool(packet.get("ratchetEncrypted")),
         "rx_rssi": packet.get("rxRssi"),
         "rx_snr": _half_db(packet.get("rxSnr")),
         "channel": packet.get("channel"),

@@ -616,7 +616,9 @@ class ReplaySession:
         md.role = common_pb2.Role.CLIENT
         md.hw_model = build.hw_model_value("HELTEC_V3")
         caps = common_pb2.DeviceMetadata
-        md.capabilities = caps.CAPABILITY_HAS_PKC | caps.CAPABILITY_HAS_XEDDSA
+        md.capabilities = (
+            caps.CAPABILITY_HAS_PKC | caps.CAPABILITY_HAS_XEDDSA | caps.CAPABILITY_HAS_RATCHET
+        )
         send(fr)
 
         send(self._observer_nodeinfo())
