@@ -64,3 +64,20 @@ def test_not_found_raises(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "empty_home"))
     with pytest.raises(cfg.ConfigError, match="esptool"):
         cfg.esptool_bin()
+
+
+def test_platformio_penv_entry_point(monkeypatch, tmp_path):
+    """`uv pip install --python <penv>/bin/python adafruit-nrfutil` leaves a plain
+    entry point beside the penv python; its module is `nordicsemi`, so the
+    `python -m` probe cannot find it and the executable must win first."""
+    monkeypatch.delenv("MESHTASTIC_NRFUTIL_BIN", raising=False)
+    monkeypatch.setattr(cfg, "firmware_root", lambda: tmp_path / "no_repo")
+    monkeypatch.setattr(cfg.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(cfg.sys, "executable", str(tmp_path / "empty" / "python"))
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    penv_bin = home / ".platformio" / "penv" / "bin"
+    penv_bin.mkdir(parents=True)
+    _exe(penv_bin / "python")
+    tool = _exe(penv_bin / "adafruit-nrfutil")
+    assert cfg.nrfutil_bin() == tool

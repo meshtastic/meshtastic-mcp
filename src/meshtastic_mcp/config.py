@@ -168,6 +168,13 @@ def _hw_tool(
     # materialise a thin wrapper so callers get a plain executable path.
     pio_py = _pio_penv_python()
     if pio_py is not None:
+        # An entry point installed into the penv (`uv pip install --python
+        # <penv>/bin/python adafruit-nrfutil`) is a plain executable; the
+        # `-m` probe below cannot find it, since its module is `nordicsemi`.
+        for name in names:
+            p = pio_py.parent / name
+            if p.is_file() and os.access(p, os.X_OK):
+                return p
         for name in names:
             module = name.replace(".py", "").replace("-", "_")
             try:
