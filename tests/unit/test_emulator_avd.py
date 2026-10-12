@@ -435,3 +435,20 @@ def test_resolve_label_emulator_shells_out_to_android_resolve(monkeypatch) -> No
         "--string",
         "#5",
     )
+
+
+def test_read_logcat_grep_is_a_case_insensitive_regex(monkeypatch) -> None:
+    out = "D/MNGATT  ( 1): sent 9 chunk(s)\nI/Other   ( 1): noise\nW/Router  ( 1): ack for 0x6e05ec6f\n"
+    monkeypatch.setattr(avd, "adb", lambda *a, **k: _cp(out))
+    assert avd.read_logcat(grep="mngatt|6e05ec6f").splitlines() == [
+        "D/MNGATT  ( 1): sent 9 chunk(s)",
+        "W/Router  ( 1): ack for 0x6e05ec6f",
+    ]
+    assert avd.read_logcat(grep=r"chunk\(s\)$") == "D/MNGATT  ( 1): sent 9 chunk(s)"
+    assert avd.read_logcat() == out
+
+
+def test_read_logcat_rejects_an_invalid_regex(monkeypatch) -> None:
+    monkeypatch.setattr(avd, "adb", lambda *a, **k: _cp("I/x ( 1): y\n"))
+    with pytest.raises(ValueError, match="invalid grep regex"):
+        avd.read_logcat(grep="(")

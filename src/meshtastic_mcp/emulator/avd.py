@@ -900,15 +900,28 @@ def read_logcat(
 
     A lightweight app-event oracle for things that surface in logs but not the
     a11y tree (notifications, background workers, lifecycle). Pair with
-    `clear_logcat()` before the stimulus to scope what you read.
+    `clear_logcat()` before the stimulus to scope what you read. `grep` is a
+    case-insensitive regex (Python `re`) over each line, the same contract as
+    `logs_window`; an invalid pattern raises `ValueError` rather than matching
+    nothing.
     """
+    grep_re = _compile_grep(grep)
     args = ["logcat", "-d", "-v", "brief"]
     if tags:
         args += [*[f"{t}:V" for t in tags], "*:S"]
     out = adb(*args, serial=serial, check=False, timeout=20).stdout or ""
-    if grep:
-        out = "\n".join(ln for ln in out.splitlines() if grep.lower() in ln.lower())
+    if grep_re:
+        out = "\n".join(ln for ln in out.splitlines() if grep_re.search(ln))
     return out
+
+
+def _compile_grep(grep: str | None) -> re.Pattern[str] | None:
+    if not grep:
+        return None
+    try:
+        return re.compile(grep, re.IGNORECASE)
+    except re.error as exc:
+        raise ValueError(f"invalid grep regex {grep!r}: {exc}") from exc
 
 
 def poll_logcat(
