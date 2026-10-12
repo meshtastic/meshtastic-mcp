@@ -5,6 +5,11 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+- **Native meshtasticd build needs jsoncpp** - firmware `develop` (#10152) reads
+  `<json/json.h>` from the system jsoncpp, so the CI native build installs `libjsoncpp-dev`
+  and `doctor` lists it (`jsoncpp` on Homebrew).
+
 ## [0.2.0] - 2026-09-29
 
 ### Added
