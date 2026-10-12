@@ -399,6 +399,7 @@ def _discord_check() -> Check:
 _MESHTASTICD_DEPS_MAC: tuple[tuple[str, str], ...] = (
     ("argp-standalone", "opt/argp-standalone/include/argp.h"),
     ("yaml-cpp", "opt/yaml-cpp/include/yaml-cpp/yaml.h"),
+    ("jsoncpp", "opt/jsoncpp/include/json/json.h"),
     ("libuv", "include/uv.h"),
     ("openssl@3", "opt/openssl@3/include/openssl/ssl.h"),
 )
@@ -415,6 +416,7 @@ _MESHTASTICD_DEPS_MAC: tuple[tuple[str, str], ...] = (
 _MESHTASTICD_DEPS_DEBIAN: tuple[tuple[str, str], ...] = (
     ("libc6-dev", "argp.h"),
     ("libyaml-cpp-dev", "yaml-cpp/yaml.h"),
+    ("libjsoncpp-dev", "jsoncpp/json/json.h"),
     ("libuv1-dev", "uv.h"),
     ("libssl-dev", "openssl/ssl.h"),
 )
