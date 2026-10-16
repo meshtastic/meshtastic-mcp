@@ -508,3 +508,34 @@ def test_upscale_keeps_edges_hard() -> None:
     out, _, _ = dm.upscale(b"\x00\x00\x00" + b"\xff\xff\xff", 2, 1, 4)
     colours = {out[i : i + 3] for i in range(0, len(out), 3)}
     assert colours == {b"\x00\x00\x00", b"\xff\xff\xff"}
+
+
+def test_truncated_fixed_width_field_is_rejected() -> None:
+    # Field 1, wire type 5 (fixed32), but only two of its four bytes.
+    with pytest.raises(ValueError, match="truncated fixed-width"):
+        dm.parse_fields(b"\x0d\x01\x02")
+
+
+def test_an_undecodable_region_drops_the_whole_table() -> None:
+    palette = dm._Palette()
+    good = _region(0, 0, 4, 8, RED, GREEN)
+    bad = _bytes_field(dm._P_REGIONS, b"\x0d\x01")  # a truncated region
+    palette.handle(_palette(total=2, regions=good + bad))
+
+    assert palette.regions == []
+    # The table restarts cleanly at offset 0 rather than accepting a chunk at the stale count.
+    palette.handle(_palette(offset=1, total=2, regions=good))
+    assert palette.regions == []
+
+
+def test_capture_paths_stay_inside_the_capture_base(tmp_path, monkeypatch) -> None:
+    from meshtastic_mcp import server
+
+    monkeypatch.setenv("MESHTASTIC_MCP_CAPTURE_DIR", str(tmp_path))
+    assert server._capture_target("docs/01-home.png") == tmp_path / "docs" / "01-home.png"
+    with pytest.raises(ValueError, match="inside"):
+        server._capture_target("../escape.png")
+    with pytest.raises(ValueError, match="inside"):
+        server._capture_target("/etc/passwd.png")
+    with pytest.raises(ValueError, match=r"\.png"):
+        server._capture_target("notes.txt")

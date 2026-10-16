@@ -138,10 +138,11 @@ def parse_fields(buf: bytes) -> dict[int, list[Any]]:
             if i + length > len(buf):
                 raise ValueError("truncated length-delimited field")
             value, i = buf[i : i + length], i + length
-        elif wire == 5:
-            value, i = buf[i : i + 4], i + 4
-        elif wire == 1:
-            value, i = buf[i : i + 8], i + 8
+        elif wire in (5, 1):
+            width = 4 if wire == 5 else 8
+            if i + width > len(buf):
+                raise ValueError("truncated fixed-width field")
+            value, i = buf[i : i + width], i + width
         else:
             raise ValueError(f"unsupported wire type {wire}")
         out.setdefault(number, []).append(value)
@@ -307,6 +308,9 @@ class _Palette:
                 self.regions.append(_Region(parse_fields(chunk)))
             except ValueError as exc:
                 log.debug("display_palette: undecodable region (%s)", exc)
+                self.regions = []
+                self._received = 0
+                self._total = 0
                 return
         self._received += len(chunks)
 

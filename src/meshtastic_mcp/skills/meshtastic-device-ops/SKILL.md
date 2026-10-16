@@ -237,7 +237,9 @@ and capture again.
 arguments exist for this case:
 
 - **`out_path`** names the file (parents are created). Without it every call overwrites one
-  scratch path, so a ten-screen walkthrough ends up as a single image.
+  scratch path, so a ten-screen walkthrough ends up as a single image. It must be a `.png`
+  inside `MESHTASTIC_MCP_CAPTURE_DIR` (default: the server's working directory), and
+  relative paths resolve there; point the variable at the docs checkout for a docs run.
 - **`scale`** enlarges by an integer factor, nearest-neighbour, max 8. A 128x64 OLED is
   unreadable at native size on a page; 2x-4x is usually right. The pixel grid stays hard on
   purpose — a smoothed device UI reads as a blurry photo of a screen. `width`/`height` in the

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import tempfile
 import threading
 import time
@@ -2289,6 +2290,24 @@ def send_input_event(
     )
 
 
+def _capture_target(out_path: str) -> Path:
+    """Resolve a caller-named capture path inside the capture base, or raise.
+
+    Device screens carry mesh-sourced text, so the caller may be steered by it; the base
+    (`MESHTASTIC_MCP_CAPTURE_DIR`, else the server's working directory) and the `.png`
+    suffix keep a capture from landing on any other file the user can write.
+    """
+    base = Path(os.environ.get("MESHTASTIC_MCP_CAPTURE_DIR") or Path.cwd()).expanduser().resolve()
+    target = (base / Path(out_path).expanduser()).resolve()
+    if not target.is_relative_to(base):
+        raise ValueError(
+            f"out_path must be inside {base} (set MESHTASTIC_MCP_CAPTURE_DIR to change it)"
+        )
+    if target.suffix.lower() != ".png":
+        raise ValueError("out_path must name a .png file")
+    return target
+
+
 @app.tool()
 def capture_display(
     port: str | None = None,
@@ -2318,10 +2337,11 @@ def capture_display(
 
     For documentation shots, pass `out_path` to name the file — without it
     every capture overwrites one scratch path, so a walkthrough ends up as a
-    single image. `scale` enlarges by an integer factor (nearest-neighbour,
-    max 8), which a 128x64 OLED needs to be legible on a page; `width` and
-    `height` describe the written image, `panel_width`/`panel_height` the
-    device.
+    single image. It must be a `.png` inside `MESHTASTIC_MCP_CAPTURE_DIR`
+    (default: the server's working directory); relative paths resolve there.
+    `scale` enlarges by an integer factor (nearest-neighbour, max 8), which a
+    128x64 OLED needs to be legible on a page; `width` and `height` describe
+    the written image, `panel_width`/`panel_height` the device.
 
     Returns:
         {path, bytes, width, height, panel_width, panel_height, scale,
@@ -2332,7 +2352,7 @@ def capture_display(
     result = display_mirror.capture(port=port, timeout_s=timeout_s, scale=scale)
     png = result.pop("png")
     if out_path:
-        target = Path(out_path).expanduser()
+        target = _capture_target(out_path)
         target.parent.mkdir(parents=True, exist_ok=True)
     else:
         target = _DISPLAY_CAPTURE_DIR / f"display-{Path(port).name if port else 'default'}.png"
