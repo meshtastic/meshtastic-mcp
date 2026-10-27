@@ -123,7 +123,7 @@ the hub port with `uhubctl_list` / `uhubctl_power` / `uhubctl_cycle`.
 
 Every `flash`/`pio_flash`/`nrfutil_dfu` path above is USB (serial or UF2). There is
 no MCP tool for the *wireless* leg — the Nordic legacy BLE DFU that the Meshtastic
-Android app uses for its in-app bootloader/firmware upgrade, and that an
+Android app uses for its in-app bootloader/firmware upgrade, and that the
 Meshtastic nRF52 Bootloader (`meshtastic/nRF52_Bootloader`)
 speaks natively. To validate that path from a dev machine instead of a phone:
 
