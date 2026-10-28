@@ -123,8 +123,8 @@ the hub port with `uhubctl_list` / `uhubctl_power` / `uhubctl_cycle`.
 
 Every `flash`/`pio_flash`/`nrfutil_dfu` path above is USB (serial or UF2). There is
 no MCP tool for the *wireless* leg — the Nordic legacy BLE DFU that the Meshtastic
-Android app uses for its in-app bootloader/firmware upgrade, and that an
-Adafruit/OTAFIX-family nRF52 bootloader (e.g. `meshtastic/Adafruit_nRF52_Bootloader_OTAFIX`)
+Android app uses for its in-app bootloader/firmware upgrade, and that the
+Meshtastic nRF52 Bootloader (`meshtastic/nRF52_Bootloader`)
 speaks natively. To validate that path from a dev machine instead of a phone:
 
 1. **Buttonless jump from app mode is one of two GATT services, chosen at compile
@@ -136,8 +136,8 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    (Adafruit's Bluefruit library): legacy service `00001530-...`, control
    characteristic `00001531-...`. Either way: enable notifications/indications
    on the control characteristic, write `0x01` to it, and the node disconnects
-   and reboots into the bootloader, advertising under a new BLE name (OTAFIX
-   boards use `<BOARD>_DFU`, e.g. `4631_DFU` for RAK4631 — see that repo's
+   and reboots into the bootloader, advertising under a new BLE name (Meshtastic
+   nRF52 Bootloader boards use `<BOARD>_DFU`, e.g. `4631_DFU` for RAK4631 — see that repo's
    README "BLE advertising names" table).
 2. **Legacy DFU transfer in bootloader mode.** The bootloader's own GATT
    service is always the older Nordic Legacy DFU (`00001530-...`, control
