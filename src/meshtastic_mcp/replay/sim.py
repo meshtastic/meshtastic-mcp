@@ -181,6 +181,8 @@ PROFILE: dict = {
     # MESH_BEACON_APP packets, and the broadcast interval in seconds.
     "beacon_fraction": 0.4,
     "beacon_interval": 1800,
+    # ModemPreset names a beacon may offer (Config.LoRaConfig.ModemPreset).
+    "beacon_presets": ["LONG_FAST"],
     # Node identity flavor: fraction of (non-router) nodes whose short name is a
     # single emoji (hugely common on real meshes); fraction of nodes running
     # 2.8+ firmware that advertise a PKC public key (signed node data); and of
@@ -1410,13 +1412,13 @@ def generate(
         if tr_rng.random() > _activity(hod(t)):
             continue
         na, nb = tr_rng.sample(meta, 2)
-        # intermediate relays only — never the endpoints themselves
-        relay_pool = [r for r in routers if r["num"] not in (na["num"], nb["num"])]
-        relays = (
-            tr_rng.sample(relay_pool, min(len(relay_pool), tr_rng.randint(0, 3)))
-            if relay_pool
-            else []
-        )
+        # Relays along the na->nb line, evenly spaced and ordered by progress, so
+        # the route traces a believable geographic path on the map instead of
+        # zig-zagging through random nodes. `traceroute_hops` (min, max) caps the
+        # relay count; sparse corridors naturally yield shorter routes.
+        hop_min, hop_max = P.get("traceroute_hops", (0, 3))
+        want = tr_rng.randint(int(hop_min), int(hop_max))
+        relays = _path_relays(tr_rng, na, nb, meta, want, routers)
         relay_nums = [r["num"] for r in relays]
         req_id = add(t, na["num"], nb["num"], 70, b"", hop=len(relay_nums) + 1, want_response=True)
         if tr_rng.random() < 0.75:  # most requests draw a response off-air
@@ -1538,7 +1540,7 @@ def generate(
                 m["num"],
                 BROADCAST,
                 MESH_BEACON_APP,
-                _pl_beacon(rng, chans),
+                _pl_beacon(rng, chans, P.get("beacon_presets") or ["LONG_FAST"]),
                 ch="LongFast",
                 hop=3,
             )
@@ -1981,6 +1983,75 @@ def _pl_routing_ack():
     return r.SerializeToString()
 
 
+def _path_relays(rng, na, nb, meta, want, routers):
+    """Relays along the na->nb line, evenly spaced and ordered by progress.
+
+    Bins the source->destination segment into `want` slices and takes the best
+    (nearest the line, routers preferred) node in each, so a traceroute advances
+    geographically from source to destination instead of zig-zagging through
+    random nodes. Sparse corridors naturally yield fewer relays — a realistically
+    shorter route. Positions come from each node's lat_i/lon_i; longitude is
+    scaled by cos(lat) for a local planar approximation.
+    """
+    if want <= 0:
+        return []
+    endpoints = (na["num"], nb["num"])
+    clat = math.cos(math.radians((na["lat_i"] + nb["lat_i"]) / 2e7)) or 1e-6
+    ax, ay = na["lon_i"] / 1e7 * clat, na["lat_i"] / 1e7
+    bx, by = nb["lon_i"] / 1e7 * clat, nb["lat_i"] / 1e7
+    dx, dy = bx - ax, by - ay
+    seg2 = dx * dx + dy * dy
+    if seg2 <= 0:  # endpoints coincide — fall back to random non-endpoints
+        pool = [m for m in meta if m["num"] not in endpoints]
+        rng.shuffle(pool)
+        return pool[:want]
+    router_nums = {r["num"] for r in routers}
+    best: dict[int, tuple[float, float, dict]] = {}
+    for m in meta:
+        if m["num"] in endpoints:
+            continue
+        mx, my = m["lon_i"] / 1e7 * clat, m["lat_i"] / 1e7
+        t = ((mx - ax) * dx + (my - ay) * dy) / seg2
+        if t <= 0.0 or t >= 1.0:  # only nodes that fall between the endpoints
+            continue
+        px, py = ax + t * dx, ay + t * dy
+        d = math.hypot(mx - px, my - py)  # perpendicular distance from the line
+        b = min(want - 1, int(t * want))  # which slice of the path this node sits in
+        score = d - (0.02 if m["num"] in router_nums else 0.0)  # prefer routers near the line
+        if b not in best or score < best[b][0]:
+            best[b] = (score, t, m)
+    return [c[2] for c in sorted(best.values(), key=lambda c: c[1])]
+
+
+# Signal-quality model, deliberately skewed toward low-quality (orange→red)
+# links so the map shows mostly marginal signal with a strong minority for
+# contrast. (lo, hi) dB tier bands + draw weights: excellent, good, weak, poor.
+_SNR_TIERS = ((5.0, 11.0), (-2.0, 5.0), (-10.0, -2.0), (-20.0, -10.0))
+_SNR_WEIGHTS = (1, 2, 3, 8)  # ~7% excellent, 14% good, 21% weak, 57% poor (<-10 dB)
+
+
+def _weak_snr(rng):
+    """One SNR value (dB) from the low-skewed tier model — mostly weak/poor."""
+    lo, hi = rng.choices(_SNR_TIERS, weights=_SNR_WEIGHTS)[0]
+    return rng.uniform(lo, hi)
+
+
+def _traceroute_snrs(rng, n):
+    """`n` per-hop SNR values (dB×4 ints) for one RouteDiscovery direction.
+
+    A believable per-link profile for the traceroute map, skewed toward
+    low-quality links (most hops weak/poor, a minority strong for contrast) and
+    trending weaker with distance. Spans +11 dB down to −20 dB. Called once per
+    direction, so `towards`/`back` differ (asymmetric links).
+    """
+    snrs = []
+    for i in range(n):
+        db = _weak_snr(rng) - i * 0.8  # mild distance penalty: later hops weaker
+        db = max(-20.0, min(11.0, db))
+        snrs.append(round(db * 4.0))
+    return snrs
+
+
 def _pl_traceroute(rng, relays):
     """A RouteDiscovery *response* payload, firmware semantics.
 
@@ -1993,12 +2064,12 @@ def _pl_traceroute(rng, relays):
     rd = mesh_pb2.RouteDiscovery()
     for nn in relays:
         rd.route.append(nn & 0xFFFFFFFF)
-    for _ in range(len(relays) + 1):
-        rd.snr_towards.append(rng.randint(-80, 48))
+    for v in _traceroute_snrs(rng, len(relays) + 1):
+        rd.snr_towards.append(v)
     for nn in reversed(relays):
         rd.route_back.append(nn & 0xFFFFFFFF)
-    for _ in range(len(relays) + 1):
-        rd.snr_back.append(rng.randint(-80, 48))
+    for v in _traceroute_snrs(rng, len(relays) + 1):
+        rd.snr_back.append(v)
     return rd.SerializeToString()
 
 
@@ -2010,7 +2081,7 @@ def _pl_neighborinfo(rng, num, neighbors):
     for nb in neighbors:
         e = ni.neighbors.add()
         e.node_id = nb["num"]
-        e.snr = round(rng.uniform(-18, 12), 1)
+        e.snr = round(_weak_snr(rng), 1)  # low-skewed: most neighbor links are weak/poor
     return ni.SerializeToString()
 
 
@@ -2051,7 +2122,7 @@ _BEACON_MESSAGES = [
 ]
 
 
-def _pl_beacon(rng: random.Random, chans: list[str]) -> bytes:
+def _pl_beacon(rng: random.Random, chans: list[str], presets: list[str]) -> bytes:
     """A synthetic MeshBeacon payload (MESH_BEACON_APP = 37)."""
     msg = rng.choice(_BEACON_MESSAGES)
     # Optionally advertise one of the conference channels
@@ -2062,7 +2133,7 @@ def _pl_beacon(rng: random.Random, chans: list[str]) -> bytes:
         offer_channel_name=offer_name,
         offer_channel_psk=offer_psk,
         offer_region="US",
-        offer_preset="LONG_FAST" if rng.random() < 0.7 else "",
+        offer_preset=rng.choice(presets),
     )
 
 
