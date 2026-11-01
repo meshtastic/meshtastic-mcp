@@ -64,6 +64,8 @@ class NodeRow:
     # connected device has manually verified it. None => a pre-2.8 / keyless node.
     public_key: bytes | None = None
     key_verified: bool = False
+    # Pinned on the connected device (NodeInfo.is_favorite).
+    is_favorite: bool = False
 
 
 @dataclass
@@ -444,7 +446,31 @@ def node_to_nodeinfo(n: NodeRow, *, last_heard: int) -> mesh_pb2.NodeInfo:
     if n.lat_i and n.lon_i:
         ni.position.latitude_i = n.lat_i
         ni.position.longitude_i = n.lon_i
+    ni.is_favorite = n.is_favorite
     ni.last_heard = last_heard
     ni.hops_away = 1
-    ni.snr = 6.0
+    ni.snr = _node_snr(ni.num)
     return ni
+
+
+def _node_snr(num: int) -> float:
+    """A per-node SNR (dB), stable per node and skewed toward weak links.
+
+    Derived deterministically from the node number (no RNG, so it never perturbs
+    the simulation stream), mapped through the same low-skewed tier weights the
+    sim uses elsewhere: most nodes read as marginal signal, a minority strong.
+    Replaces a flat 6.0 that painted every node green on the map.
+    """
+    h = (num * 2654435761) & 0xFFFFFFFF  # Knuth multiplicative hash
+    tier_sel = (h & 0xFFFF) / 0xFFFF  # 0..1 picks the quality tier
+    within = ((h >> 16) & 0xFFFF) / 0xFFFF  # 0..1 position within the tier
+    # Cumulative weights 1,2,3,8 (=14): excellent, good, weak, poor — matches sim.
+    if tier_sel < 1 / 14:
+        lo, hi = 5.0, 11.0
+    elif tier_sel < 3 / 14:
+        lo, hi = -2.0, 5.0
+    elif tier_sel < 6 / 14:
+        lo, hi = -10.0, -2.0
+    else:
+        lo, hi = -20.0, -10.0
+    return round(lo + within * (hi - lo), 2)

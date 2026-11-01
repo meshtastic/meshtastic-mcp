@@ -226,6 +226,24 @@ def beacon_payload(
     return out
 
 
+MESH_BEACON_FLAG_LISTEN = 1
+MESH_BEACON_FLAG_BROADCAST = 2
+
+
+def mesh_beacon_module_config(*, listen: bool = True, broadcast: bool = False) -> bytes:
+    """A ``ModuleConfig`` carrying ``mesh_beacon`` (field 17) as raw wire bytes.
+
+    ``MeshBeaconConfig`` is newer than meshtastic-python 2.7.x; only its
+    ``flags`` bitfield (field 1) is set. Parse the result into a
+    ``ModuleConfig`` — the field survives as an unknown field on re-serialize.
+    """
+    flags = (MESH_BEACON_FLAG_LISTEN if listen else 0) | (
+        MESH_BEACON_FLAG_BROADCAST if broadcast else 0
+    )
+    inner = _tag(1, 0) + _varint(flags)
+    return _tag(17, 2) + _varint(len(inner)) + inner
+
+
 def traceroute_payload(
     route: list[int],
     *,

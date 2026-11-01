@@ -24,7 +24,11 @@ from meshtastic.protobuf import channel_pb2, mesh_pb2, portnums_pb2, telemetry_p
 
 from meshtastic_mcp.replay import Capture, ReplayParams, ReplaySession, capture, fuzz, sim
 from meshtastic_mcp.replay import engine as replay_engine
-from meshtastic_mcp.replay.engine import OBSERVER_NUM, _representative_radio_metrics
+from meshtastic_mcp.replay.engine import (
+    MAX_CHANNELS,
+    OBSERVER_NUM,
+    _representative_radio_metrics,
+)
 
 ALL_PORTNUMS = {1, 3, 4, 5, 6, 8, 34, 37, 65, 66, 67, 70, 71}
 
@@ -179,7 +183,7 @@ def test_config_phase_sends_every_channel_slot():
     assert len(cap.channels) < replay_engine.MAX_CHANNELS
     sess = ReplaySession("slots", cap, ReplayParams(host="127.0.0.1", port=0, node_delay=0))
     frames: list[mesh_pb2.FromRadio] = []
-    sess._send_config_phase(frames.append, 1)
+    sess._send_config_phase(frames.append)
 
     channels = [f.channel for f in frames if f.HasField("channel")]
     assert [c.index for c in channels] == list(range(replay_engine.MAX_CHANNELS))
@@ -188,6 +192,101 @@ def test_config_phase_sends_every_channel_slot():
     assert all(c.role != disabled for c in channels[:used])
     assert all(c.role == disabled for c in channels[used:])
     assert all(c.HasField("settings") for c in channels)
+
+
+def test_single_want_config_delivers_channels_nodes_and_stream():
+    """A real client (phone app, `meshtastic` CLI/python lib) sends ONE
+    want_config_id with a random nonce and expects the firmware to answer with
+    the whole config in one stream: my_info, every channel, the full node DB,
+    then config_complete, then packets. The earlier two-phase split gated
+    channels (config phase) and the node DB + stream (a made-up 69421 nonce) on
+    *different* requests, so a single-request client got one or the other but
+    never both — channels with no stream, or a stream with no channels. Guard
+    against that regression: one random want_config must yield all three.
+    """
+    cap = sim.generate(nodes=30, days=1, seed=7, start=1_700_000_000)
+    params = ReplayParams(host="127.0.0.1", port=0, rate=500, node_delay=0)
+    sess = ReplaySession("single-wc", cap, params)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess.params.port = port
+    sess.start()
+    try:
+        client = socket.create_connection(("127.0.0.1", port), timeout=2)
+        # a random nonce, exactly as MeshInterface._startConfig generates — and
+        # deliberately neither 69420 (nodeless) nor the old 69421 DB sentinel.
+        _send_toradio(client, want_config_id=1234567)
+
+        variants: Counter = Counter()
+        my_node = None
+        node_infos = 0
+        packets = 0
+        saw_complete = False
+        t0 = time.time()
+        while time.time() - t0 < 3 and packets < 5:
+            fr = _read_frame(client)
+            v = fr.WhichOneof("payload_variant")
+            variants[v] += 1
+            if v == "my_info":
+                my_node = fr.my_info.my_node_num
+            elif v == "node_info":
+                node_infos += 1
+            elif v == "config_complete_id":
+                saw_complete = fr.config_complete_id == 1234567
+            elif v == "packet" and (my_node is None or getattr(fr.packet, "from") != my_node):
+                packets += 1
+        client.close()
+
+        assert variants["my_info"] == 1, "single want_config must send my_info"
+        assert variants["channel"] == MAX_CHANNELS, "must send every channel slot"
+        assert node_infos >= len(cap.nodes), "must send the full node DB"
+        assert saw_complete, "must close with config_complete_id echoing the nonce"
+        assert packets >= 1, "must start the packet stream"
+    finally:
+        sess.stop()
+
+
+def test_config_phase_beacon_listen_module_config():
+    """beacon_listen adds a ModuleConfig.mesh_beacon (field 17) with FLAG_LISTEN_ENABLED."""
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+
+    def module_configs(beacon_listen: bool) -> list[bytes]:
+        params = ReplayParams(host="127.0.0.1", port=0, beacon_listen=beacon_listen)
+        sent: list[mesh_pb2.FromRadio] = []
+        ReplaySession("beacon", cap, params)._send_config_phase(sent.append)
+        # re-parse off the wire: the unknown field must survive serialization
+        frames = [mesh_pb2.FromRadio.FromString(fr.SerializeToString()) for fr in sent]
+        return [f.moduleConfig.SerializeToString() for f in frames if f.HasField("moduleConfig")]
+
+    assert b"\x8a\x01\x02\x08\x01" in module_configs(True)  # field 17 { flags: 1 }
+    assert all(b"\x8a\x01" not in mc for mc in module_configs(False))
+
+
+def test_remove_by_nodenum_keeps_node_out_of_node_db():
+    """A client delete (AdminMessage.remove_by_nodenum) sticks for the session."""
+    from meshtastic.protobuf import admin_pb2, portnums_pb2
+
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    params = ReplayParams(host="127.0.0.1", port=0, node_delay=0)
+    sess = ReplaySession("remove", cap, params)
+    victim = cap.nodes[0].num & 0xFFFFFFFF
+
+    def node_db() -> set[int]:
+        sent: list[mesh_pb2.FromRadio] = []
+        sess._send_node_db(sent.append)
+        return {fr.node_info.num for fr in sent if fr.HasField("node_info")}
+
+    assert victim in node_db()
+    req = mesh_pb2.MeshPacket()
+    req.decoded.portnum = portnums_pb2.PortNum.ADMIN_APP
+    req.decoded.payload = admin_pb2.AdminMessage(remove_by_nodenum=victim).SerializeToString()
+    sess._handle_client_packet(req, lambda fr: None)
+
+    remaining = node_db()
+    assert victim not in remaining
+    assert remaining  # only the deleted node is dropped
 
 
 def test_observer_local_stats_precede_bulk_database():
@@ -542,6 +641,15 @@ def test_sim_emoji_shortnames_and_pki_keys():
     # a keyless (pre-2.8) node advertises no key and is unverified
     keyless = next(n for n in cap.nodes if not n.public_key)
     assert not capture.node_to_nodeinfo(keyless, last_heard=1).user.public_key
+
+
+def test_node_favorite_reaches_nodeinfo():
+    from meshtastic_mcp.replay import capture
+
+    row = capture.NodeRow(0x1234, "!00001234")
+    assert capture.node_to_nodeinfo(row, last_heard=1).is_favorite is False
+    row.is_favorite = True
+    assert capture.node_to_nodeinfo(row, last_heard=1).is_favorite is True
 
 
 def test_infra_nodes_get_pun_emoji_shortnames():
