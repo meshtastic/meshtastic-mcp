@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import tempfile
 import threading
 import time
@@ -427,6 +428,7 @@ def android_render_compose_preview(file: str, preview: str | None = None) -> str
 # meshtastic-mcp server processes never share a screenshot path for the same
 # serial and stomp on each other's files/cache state.
 _ANDROID_SCREENSHOT_DIR = Path(tempfile.mkdtemp(prefix="meshtastic-mcp-android-"))
+_DISPLAY_CAPTURE_DIR = Path(tempfile.mkdtemp(prefix="meshtastic-mcp-display-"))
 
 
 @android_tool()
@@ -2288,6 +2290,76 @@ def send_input_event(
     )
 
 
+def _capture_target(out_path: str) -> Path:
+    """Resolve a caller-named capture path inside the capture base, or raise.
+
+    Device screens carry mesh-sourced text, so the caller may be steered by it; the base
+    (`MESHTASTIC_MCP_CAPTURE_DIR`, else the server's working directory) and the `.png`
+    suffix keep a capture from landing on any other file the user can write.
+    """
+    base = Path(os.environ.get("MESHTASTIC_MCP_CAPTURE_DIR") or Path.cwd()).expanduser().resolve()
+    target = (base / Path(out_path).expanduser()).resolve()
+    if not target.is_relative_to(base):
+        raise ValueError(
+            f"out_path must be inside {base} (set MESHTASTIC_MCP_CAPTURE_DIR to change it)"
+        )
+    if target.suffix.lower() != ".png":
+        raise ValueError("out_path must name a .png file")
+    return target
+
+
+@app.tool()
+def capture_display(
+    port: str | None = None,
+    out_path: str | None = None,
+    scale: int = 1,
+    timeout_s: float = 20.0,
+) -> dict[str, Any]:
+    """Capture the device's own screen from its framebuffer and write a PNG.
+
+    The on-device counterpart to `capture_screen`: instead of photographing
+    the panel with a webcam, this reads the framebuffer the firmware is
+    rendering, so the pixels are exact. Handles both BaseUI (1bpp MONO_VLSB)
+    and MUI/device-ui (RGB565 dirty rects), and needs firmware built with
+    screen-mirror support (meshtastic/firmware#11681) — older firmware
+    ignores the admin verb silently and this times out.
+
+    A `blank: true` result almost always means the panel had already timed
+    out (`display.screen_on_secs`, reported alongside it) rather than a
+    mirroring failure — inject any `send_input_event` to wake it, then
+    capture again.
+
+    Colour is handled for both UIs: MUI streams RGB565 directly, and a
+    colour BaseUI device streams its 1bpp frame plus the region palette its
+    panel paints with, which is applied here. `colorized` reports whether a
+    palette was actually matched and applied; a monochrome panel has none and
+    renders black-and-white.
+
+    For documentation shots, pass `out_path` to name the file — without it
+    every capture overwrites one scratch path, so a walkthrough ends up as a
+    single image. It must be a `.png` inside `MESHTASTIC_MCP_CAPTURE_DIR`
+    (default: the server's working directory); relative paths resolve there.
+    `scale` enlarges by an integer factor (nearest-neighbour, max 8), which a
+    128x64 OLED needs to be legible on a page; `width` and `height` describe
+    the written image, `panel_width`/`panel_height` the device.
+
+    Returns:
+        {path, bytes, width, height, panel_width, panel_height, scale,
+         format, blank, colorized, screen_on_secs, frames, rects}
+    """
+    from . import display_mirror
+
+    result = display_mirror.capture(port=port, timeout_s=timeout_s, scale=scale)
+    png = result.pop("png")
+    if out_path:
+        target = _capture_target(out_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        target = _DISPLAY_CAPTURE_DIR / f"display-{Path(port).name if port else 'default'}.png"
+    target.write_bytes(png)
+    return {"path": str(target), "bytes": len(png), **result}
+
+
 @app.tool()
 def capture_screen(role: str | None = None, ocr: bool = True) -> dict[str, Any]:
     """Grab a frame from the USB webcam pointed at the device screen.
@@ -3900,6 +3972,9 @@ _DESTRUCTIVE = {
     # band -> same curve) and harmless to any DUT; the set_config-style pattern.
     "pa_measure",
     "pa_sweep",  # writes lora.tx_power, keys TX, may reboot the node
+    # Drives the device (one-shot mirror verb) and overwrites the PNG at its
+    # fixed path — the same shape as android_screenshot below.
+    "capture_display",
     "send_input_event",  # drives device button/GPIO; side-effect on hardware
     "android_screenshot",  # writes a PNG to the host filesystem
     "android_tap",  # drives device input; side-effect on the running app
@@ -4000,6 +4075,11 @@ _OPEN_WORLD = {
     "factory_reset",
     "send_input_event",
     "capture_screen",
+    # The device's own screen renders mesh-sourced text — a remote node's
+    # long_name, a received message — so a capture can carry an injection
+    # payload exactly like android_screenshot. Untrusted content, one hop
+    # closer to the source.
+    "capture_display",
     "touch_1200bps",
     "pio_flash",
     "flash_start",
