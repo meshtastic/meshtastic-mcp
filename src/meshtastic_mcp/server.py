@@ -4219,10 +4219,10 @@ def _apply_tool_annotations() -> None:
         title = _TITLE_OVERRIDES.get(name) or name.replace("_", " ").title()
         tool.annotations = ToolAnnotations(
             title=title,
-            readOnlyHint=read_only,
-            destructiveHint=name in _DESTRUCTIVE,
-            idempotentHint=read_only or name in _IDEMPOTENT_WRITES,
-            openWorldHint=name in _OPEN_WORLD,
+            read_only_hint=read_only,
+            destructive_hint=name in _DESTRUCTIVE,
+            idempotent_hint=read_only or name in _IDEMPOTENT_WRITES,
+            open_world_hint=name in _OPEN_WORLD,
         )
         annotated += 1
 
