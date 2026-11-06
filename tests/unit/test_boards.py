@@ -35,7 +35,8 @@ def test_tbeam_is_canonical_esp32() -> None:
 def test_filter_by_architecture() -> None:
     esp32s3 = boards.list_boards(architecture="esp32s3")
     assert len(esp32s3) >= 1
-    assert all(b["architecture"] == "esp32s3" for b in esp32s3)
+    assert all(b["architecture"] == "esp32-s3" for b in esp32s3)
+    assert boards.list_boards(architecture="esp32-s3") == esp32s3
 
 
 def test_filter_by_actively_supported() -> None:
