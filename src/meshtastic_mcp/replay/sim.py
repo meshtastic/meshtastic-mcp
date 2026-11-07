@@ -1418,7 +1418,7 @@ def generate(
         # relay count; sparse corridors naturally yield shorter routes.
         hop_min, hop_max = P.get("traceroute_hops", (0, 3))
         want = tr_rng.randint(int(hop_min), int(hop_max))
-        relays = _path_relays(tr_rng, na, nb, meta, want, routers)
+        relays = _path_relays(tr_rng, na, nb, meta, want, routers, t)
         relay_nums = [r["num"] for r in relays]
         req_id = add(t, na["num"], nb["num"], 70, b"", hop=len(relay_nums) + 1, want_response=True)
         if tr_rng.random() < 0.75:  # most requests draw a response off-air
@@ -1983,19 +1983,27 @@ def _pl_routing_ack():
     return r.SerializeToString()
 
 
-def _path_relays(rng, na, nb, meta, want, routers):
+# Relay corridor half-width: a fraction of the endpoint distance, floored (degrees,
+# ~2 km) so short hops across a dense cluster still find relays.
+_RELAY_CORRIDOR_FRAC = 0.3
+_RELAY_CORRIDOR_MIN_DEG = 0.02
+
+
+def _path_relays(rng, na, nb, meta, want, routers, t):
     """Relays along the na->nb line, evenly spaced and ordered by progress.
 
     Bins the source->destination segment into `want` slices and takes the best
     (nearest the line, routers preferred) node in each, so a traceroute advances
     geographically from source to destination instead of zig-zagging through
-    random nodes. Sparse corridors naturally yield fewer relays — a realistically
-    shorter route. Positions come from each node's lat_i/lon_i; longitude is
-    scaled by cos(lat) for a local planar approximation.
+    random nodes. Only nodes on the mesh at time `t` and inside a corridor around
+    the line qualify, so sparse corridors naturally yield fewer relays — a
+    realistically shorter route. Positions come from each node's lat_i/lon_i;
+    longitude is scaled by cos(lat) for a local planar approximation.
     """
     if want <= 0:
         return []
     endpoints = (na["num"], nb["num"])
+    meta = [m for m in meta if m["join_t"] <= t < m["leave_t"]]  # online at t
     clat = math.cos(math.radians((na["lat_i"] + nb["lat_i"]) / 2e7)) or 1e-6
     ax, ay = na["lon_i"] / 1e7 * clat, na["lat_i"] / 1e7
     bx, by = nb["lon_i"] / 1e7 * clat, nb["lat_i"] / 1e7
@@ -2005,21 +2013,24 @@ def _path_relays(rng, na, nb, meta, want, routers):
         pool = [m for m in meta if m["num"] not in endpoints]
         rng.shuffle(pool)
         return pool[:want]
+    corridor = max(_RELAY_CORRIDOR_FRAC * math.sqrt(seg2), _RELAY_CORRIDOR_MIN_DEG)
     router_nums = {r["num"] for r in routers}
     best: dict[int, tuple[float, float, dict]] = {}
     for m in meta:
         if m["num"] in endpoints:
             continue
         mx, my = m["lon_i"] / 1e7 * clat, m["lat_i"] / 1e7
-        t = ((mx - ax) * dx + (my - ay) * dy) / seg2
-        if t <= 0.0 or t >= 1.0:  # only nodes that fall between the endpoints
+        u = ((mx - ax) * dx + (my - ay) * dy) / seg2
+        if u <= 0.0 or u >= 1.0:  # only nodes that fall between the endpoints
             continue
-        px, py = ax + t * dx, ay + t * dy
+        px, py = ax + u * dx, ay + u * dy
         d = math.hypot(mx - px, my - py)  # perpendicular distance from the line
-        b = min(want - 1, int(t * want))  # which slice of the path this node sits in
+        if d > corridor:  # a distant node would be the detour this avoids
+            continue
+        b = min(want - 1, int(u * want))  # which slice of the path this node sits in
         score = d - (0.02 if m["num"] in router_nums else 0.0)  # prefer routers near the line
         if b not in best or score < best[b][0]:
-            best[b] = (score, t, m)
+            best[b] = (score, u, m)
     return [c[2] for c in sorted(best.values(), key=lambda c: c[1])]
 
 

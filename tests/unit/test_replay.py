@@ -2492,3 +2492,27 @@ def test_hold_serves_a_client_that_reconnects_after_hanging_up():
         assert sess.state.packets_sent >= 2 * sess.state.packets_total
     finally:
         sess.stop()
+
+
+def test_path_relays_skip_offline_and_off_corridor_nodes():
+    """Traceroute relays must be on the mesh at `t` and near the endpoint line."""
+    import random
+
+    def node(num, lat, lon, join=0, leave=10_000):
+        return {
+            "num": num,
+            "lat_i": int(lat * 1e7),
+            "lon_i": int(lon * 1e7),
+            "join_t": join,
+            "leave_t": leave,
+        }
+
+    na, nb = node(1, 47.0, -122.0), node(2, 47.0, -121.0)
+    on_line = node(3, 47.0, -121.5)
+    offline = node(4, 47.0, -121.25, join=6_000)  # joins after the traceroute
+    far = node(5, 48.0, -121.75)  # between the endpoints, but ~110 km off the line
+    meta = [na, nb, on_line, offline, far]
+
+    relays = sim._path_relays(random.Random(1), na, nb, meta, 4, [], 5_000)
+    assert [r["num"] for r in relays] == [3]
+    assert 4 in [r["num"] for r in sim._path_relays(random.Random(1), na, nb, meta, 4, [], 7_000)]
