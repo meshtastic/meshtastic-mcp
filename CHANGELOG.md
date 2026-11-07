@@ -5,7 +5,39 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **Replay demo fidelity knobs** — `NodeRow.is_favorite` reaches `NodeInfo.is_favorite`, so a
+  capture can pin nodes in the app. `ReplayParams.beacon_listen` sends
+  `ModuleConfig.mesh_beacon` with `FLAG_LISTEN_ENABLED` in the config phase (raw field 17 via
+  `build.mesh_beacon_module_config`; meshtastic-python predates it), so the app stores the
+  passive MESH_BEACON_APP packets it receives. The sim profile's `beacon_presets` sets the
+  ModemPresets a router beacon offers (default `["LONG_FAST"]`); every sim beacon now names one.
+- **Replay honours client node deletes** — an `AdminMessage.remove_by_nodenum` from the app
+  drops that node for the rest of the session: it is left out of the node DB on reconnect and
+  its streamed/injected packets are dropped. (Firmware re-adds a node the next time it is heard;
+  on a replay that brought deleted demo nodes straight back.)
+- **Sim traceroutes follow the map** — relays are picked along the source→destination line,
+  ordered by progress and preferring routers, capped by `traceroute_hops`, instead of a random
+  sample. Per-hop, neighbor and node-DB SNR now come from a weak-skewed tier model (mostly
+  marginal links, a strong minority, `towards`/`back` asymmetric) instead of a flat 6 dB / uniform
+  draw that painted every link the same colour.
+
 ### Fixed
+- **Replay handshake now answers a single `want_config_id` with the full config, so real
+  clients get their channels** — the engine split the want-config response into two
+  mutually-exclusive phases: channels + `my_info` + config were sent only for a "config" nonce,
+  while the node DB + packet stream were sent only for an invented `69421` "DB" nonce. But real
+  clients (phone apps, the `meshtastic` CLI/python lib) send exactly **one** `want_config_id`
+  with a random nonce and expect everything back in one stream (firmware behaviour). So a real
+  client got one half or the other — most visibly, the iOS app streamed thousands of messages
+  but showed an **empty Channels list**; a python-lib client got channels but only the observer
+  node and no packet stream. The two-phase split only ever worked for the test harness, which
+  explicitly sent both nonces. The handshake now sends config content (`my_info`, channels,
+  config sections) on the first want-config of a connection regardless of nonce, and the node
+  DB + stream whenever the nonce isn't the reserved `NODELESS` value (`69420`), then closes with
+  `config_complete_id`. The older two-request pattern (`69420` then `69421`) still maps cleanly
+  onto this. Regression test:
+  `test_single_want_config_delivers_channels_nodes_and_stream`.
 - **Native meshtasticd build needs jsoncpp** - firmware `develop` (#10152) reads
   `<json/json.h>` from the system jsoncpp, so the CI native build installs `libjsoncpp-dev`
   and `doctor` lists it (`jsoncpp` on Homebrew).
