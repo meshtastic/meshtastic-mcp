@@ -1553,7 +1553,7 @@ wheels = [
 [[package]]
 name = "meshtastic"
 version = "2.7.11"
-source = { git = "https://github.com/meshtastic/python.git?rev=0a1835760c2437314a2d3544bbdd8b6fead559bc#0a1835760c2437314a2d3544bbdd8b6fead559bc" }
+source = { git = "https://github.com/meshtastic/python.git?rev=2fb0f4eff734e2a0179507ef8719ca4fa048eb5f#2fb0f4eff734e2a0179507ef8719ca4fa048eb5f" }
 dependencies = [
     { name = "bleak" },
     { name = "packaging" },
@@ -1645,7 +1645,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.110" },
     { name = "fastmcp", specifier = ">=3.4.5,<4" },
     { name = "mcp", specifier = ">=1.2" },
-    { name = "meshtastic", git = "https://github.com/meshtastic/python.git?rev=0a1835760c2437314a2d3544bbdd8b6fead559bc" },
+    { name = "meshtastic", git = "https://github.com/meshtastic/python.git?rev=2fb0f4eff734e2a0179507ef8719ca4fa048eb5f" },
     { name = "meshtastic-tak", marker = "extra == 'tak'", git = "https://github.com/meshtastic/TAKPacket-SDK.git?subdirectory=python" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "numpy", marker = "extra == 'sdr'", specifier = ">=1.26" },
