@@ -151,6 +151,7 @@ markers = [
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+extend-exclude = ["src/meshtastic_mcp/protos/generated"]  # protoc output, scripts/regen_protos.sh
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
@@ -176,4 +177,5 @@ check_untyped_defs = false
 warn_unused_ignores = false
 exclude = [
   "_version.py",
+  "protos/generated/",
 ]
