@@ -119,11 +119,10 @@ build-backend = "hatchling.build"
 [tool.hatch.metadata]
 allow-direct-references = true
 
-# Dev and lock only, never published metadata: no meshtastic release carries current protos
-# (xeddsa_signed, mesh_beacon, ClientNotification.type). python#1005 is protobufs master
-# 4c80682; drop this for a PyPI floor once a release carries them.
+# Dev and lock only, never published metadata: no meshtastic release carries the 2.8 protos
+# (xeddsa_signed, packet_signature_policy, mesh_beacon). Drop for a PyPI floor once one does.
 [tool.uv.sources]
-meshtastic = { git = "https://github.com/meshtastic/python.git", rev = "2fb0f4eff734e2a0179507ef8719ca4fa048eb5f" }
+meshtastic = { git = "https://github.com/meshtastic/python.git", rev = "0a1835760c2437314a2d3544bbdd8b6fead559bc" }
 
 [tool.hatch.version]
 source = "vcs"
