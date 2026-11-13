@@ -10,7 +10,9 @@ each one must be rejected before anything is allocated.
 
 from __future__ import annotations
 
+import contextlib
 import struct
+import types
 import zlib
 
 import pytest
@@ -556,3 +558,75 @@ def test_capture_paths_stay_inside_the_capture_base(tmp_path, monkeypatch) -> No
         server._capture_target("/etc/passwd.png")
     with pytest.raises(ValueError, match=r"\.png"):
         server._capture_target("notes.txt")
+
+
+# ── wake ───────────────────────────────────────────────────────────────────
+
+
+def test_admin_input_event_matches_the_generated_encoding() -> None:
+    from meshtastic.protobuf import admin_pb2  # type: ignore[import-untyped]
+
+    expected = admin_pb2.AdminMessage()
+    expected.send_input_event.event_code = 27
+    assert dm.admin_input_event(27) == expected.SerializeToString()
+
+
+class _FakeIface:
+    """Answers a frame request with one 8x8 mono frame and records every admin payload."""
+
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+        self.myInfo = types.SimpleNamespace(my_node_num=1)
+        display = types.SimpleNamespace(screen_on_secs=30)
+        self.localNode = types.SimpleNamespace(localConfig=types.SimpleNamespace(display=display))
+
+    def _handleFromRadio(self, payload: bytes, **kwargs) -> None:
+        return None
+
+    def sendData(self, payload: bytes, **kwargs) -> None:
+        self.sent.append(payload)
+        if payload == dm.admin_request_frame():
+            frame = _frame(width=8, height=8, fmt=dm.FORMAT_MONO_VLSB, total=8, data=b"\x01" * 8)
+            self._handleFromRadio(_bytes_field(dm.FROM_RADIO_DISPLAY_FRAME, frame))
+
+
+@pytest.fixture
+def fake_iface(monkeypatch) -> _FakeIface:
+    from meshtastic_mcp import connection
+
+    iface = _FakeIface()
+
+    @contextlib.contextmanager
+    def fake_connect(port=None, **kwargs):
+        yield iface
+
+    monkeypatch.setattr(connection, "connect", fake_connect)
+    monkeypatch.setattr(dm, "_SETTLE_S", 0.0)
+    monkeypatch.setattr(dm, "_WAKE_S", 0.0)
+    monkeypatch.setattr(dm, "_QUIET_S", 0.01)
+    return iface
+
+
+def test_capture_presses_wake_once_on_its_own_connection_before_arming(fake_iface) -> None:
+    result = dm.capture(port="fake", timeout_s=2, wake="BACK")
+
+    assert result["frames"] == 1
+    assert fake_iface.sent[:3] == [
+        dm.admin_input_event(27),
+        dm.admin_set_mirror(True),
+        dm.admin_request_frame(),
+    ]
+    assert fake_iface.sent.count(dm.admin_input_event(27)) == 1
+    assert fake_iface.sent[-1] == dm.admin_set_mirror(False)
+
+
+def test_capture_without_wake_sends_no_input_event(fake_iface) -> None:
+    dm.capture(port="fake", timeout_s=2)
+    assert fake_iface.sent[:2] == [dm.admin_set_mirror(True), dm.admin_request_frame()]
+    assert dm.admin_input_event(27) not in fake_iface.sent
+
+
+def test_capture_rejects_an_unknown_wake_name_before_opening_the_port(fake_iface) -> None:
+    with pytest.raises(ValueError, match="unknown event code"):
+        dm.capture(port="fake", wake="NOT_A_KEY")
+    assert fake_iface.sent == []

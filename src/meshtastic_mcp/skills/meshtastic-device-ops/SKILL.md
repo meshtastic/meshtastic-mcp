@@ -219,19 +219,21 @@ speaks natively. To validate that path from a dev machine instead of a phone:
   if a device that was just flashed or reset seems to vanish from USB entirely,
   check for that popup before assuming a bad flash.
 
-## Hardware UI (OLED) checks
+## Hardware UI checks
 
-`send_input_event` drives the device's buttons; `capture_screen` grabs the OLED (camera/OCR
+`send_input_event` drives the device's buttons; `capture_screen` photographs the panel (camera/OCR
 optional — see `doctor` for the `[ui]` extra). This is device-only; for app UI use `meshtastic-e2e`.
 
 **Prefer `capture_display` when the firmware supports it.** It reads the framebuffer over the
 phone API instead of photographing the panel, so it needs no camera and the pixels are exact
-(and OCR is far more reliable). It times out on firmware without screen-mirror support — fall
+(and OCR is far more reliable). It covers mono OLEDs, color TFTs and MUI (LVGL) panels. It times out on firmware without screen-mirror support — fall
 back to `capture_screen` then. On an MUI (color LVGL) device it also times out while another
 client, such as the Android app, is mirroring: the firmware serves MUI rects to one connection
 at a time. A `blank: true` result means the panel had hit
-`display.screen_on_secs`, not that the capture failed: send any `send_input_event` to wake it
-and capture again.
+`display.screen_on_secs`, not that the capture failed: capture again with `wake="BACK"` (or any
+event harmless on that screen), which presses it on the capture's own connection just before
+arming. A separate `send_input_event` first does not help on a device whose handshake outlasts
+its screen timeout, and a slept MUI panel captures as solid black.
 
 ### Screenshots for documentation
 
@@ -247,15 +249,15 @@ arguments exist for this case:
   purpose — a smoothed device UI reads as a blurry photo of a screen. `width`/`height` in the
   result describe the written image, `panel_width`/`panel_height` the device.
 
-Walking a menu is a loop of wake, capture, advance:
+Walking a menu is a loop of capture and advance, waking on the first shot:
 
 ```
-send_input_event(port=P, event_code="SELECT")          # wake; the panel sleeps after
-                                                       # display.screen_on_secs
-capture_display(port=P, out_path="docs/img/01-home.png", scale=2)
+capture_display(port=P, out_path="docs/img/01-home.png", scale=2, wake="BACK")
 send_input_event(port=P, event_code="DOWN")
 capture_display(port=P, out_path="docs/img/02-nodes.png", scale=2)
 ```
+
+If a later shot comes back blank, retake it with a `wake` event that is a no-op on that screen.
 
 Each call opens and closes the port (settle + handshake + a quiet period before the frame is
 considered whole), so budget roughly 6-10s per capture and do not interleave other port work.

@@ -42,8 +42,12 @@ FROM_RADIO_DISPLAY_FRAME = 21
 FROM_RADIO_DISPLAY_PALETTE = 22
 
 # AdminMessage payload_variant field numbers (meshtastic/admin.proto).
+ADMIN_SEND_INPUT_EVENT = 27
 ADMIN_GET_DISPLAY_FRAME_REQUEST = 50
 ADMIN_SET_DISPLAY_MIRROR = 51
+
+# AdminMessage.InputEvent.event_code
+_I_EVENT_CODE = 1
 
 # DisplayFrame.Format
 FORMAT_MONO_VLSB = 1
@@ -178,6 +182,12 @@ def admin_request_frame() -> bytes:
 def admin_set_mirror(enabled: bool) -> bytes:
     """An `AdminMessage` carrying only `set_display_mirror`."""
     return encode_varint_field(ADMIN_SET_DISPLAY_MIRROR, 1 if enabled else 0)
+
+
+def admin_input_event(event_code: int) -> bytes:
+    """An `AdminMessage` carrying only `send_input_event` with this event code."""
+    event = encode_varint_field(_I_EVENT_CODE, event_code)
+    return _encode_varint((ADMIN_SEND_INPUT_EVENT << 3) | 2) + _encode_varint(len(event)) + event
 
 
 # ── PNG output ─────────────────────────────────────────────────────────────
@@ -589,6 +599,9 @@ _RETRY_S = 4.0
 # Let the config handshake finish before speaking.
 _SETTLE_S = 2.0
 
+# Give a woken panel time to leave powersave before the arm repaint.
+_WAKE_S = 1.0
+
 # Device panels are small (128x64 up to 320x240), so a documentation
 # screenshot usually wants enlarging. Nearest-neighbour keeps the pixel grid
 # crisp, which is what reads well for a device UI; 8x of the largest panel is
@@ -596,10 +609,21 @@ _SETTLE_S = 2.0
 MAX_SCALE = 8
 
 
-def capture(port: str | None = None, timeout_s: float = 20.0, scale: int = 1) -> dict[str, Any]:
+def capture(
+    port: str | None = None,
+    timeout_s: float = 20.0,
+    scale: int = 1,
+    wake: int | str | None = None,
+) -> dict[str, Any]:
     """Request one frame of the device's screen and return it as PNG bytes.
 
     Arms mirroring, requests a frame, and disarms in a `finally`.
+
+    `wake` sends that input event on this same connection just before arming.
+    A slept MUI panel repaints solid black, and a device whose handshake
+    outlasts the screen timeout is asleep again by the time a separate
+    `send_input_event` call's wake would help. The event is a real key press,
+    so pick one that is harmless on the screen being captured.
 
     The one-shot `get_display_frame_request` on its own looks tidier — the
     firmware clears it once the frame has drained, so it cannot leave the
@@ -614,7 +638,10 @@ def capture(port: str | None = None, timeout_s: float = 20.0, scale: int = 1) ->
     message says so.
     """
     from .connection import connect
+    from .input_events import coerce_event_code
 
+    # Validate before opening the port, so a bad name costs no handshake.
+    wake_code = coerce_event_code(wake) if wake is not None else None
     budget = max(1.0, min(float(timeout_s), MAX_TIMEOUT_S))
     canvas = _MirrorCanvas()
     last_chunk = 0.0
@@ -648,6 +675,10 @@ def capture(port: str | None = None, timeout_s: float = 20.0, scale: int = 1) ->
             # (not just the request — arming is the half that matters) if
             # nothing has arrived.
             time.sleep(_SETTLE_S)
+            if wake_code is not None:
+                # once only: a retry re-arms, but a second key press would move the UI
+                _send_admin(iface, admin_input_event(wake_code))
+                time.sleep(_WAKE_S)
             _arm_and_request(iface)
             deadline = time.monotonic() + budget
             retry_at = time.monotonic() + _RETRY_S

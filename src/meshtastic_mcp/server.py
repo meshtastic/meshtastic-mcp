@@ -2314,6 +2314,7 @@ def capture_display(
     out_path: str | None = None,
     scale: int = 1,
     timeout_s: float = 20.0,
+    wake: int | str | None = None,
 ) -> dict[str, Any]:
     """Capture the device's own screen from its framebuffer and write a PNG.
 
@@ -2326,8 +2327,12 @@ def capture_display(
 
     A `blank: true` result almost always means the panel had already timed
     out (`display.screen_on_secs`, reported alongside it) rather than a
-    mirroring failure — inject any `send_input_event` to wake it, then
-    capture again.
+    mirroring failure. Capture again with `wake` set to an input event name
+    or code (e.g. `"BACK"`): it is sent on the capture's own connection just
+    before arming, so the panel is lit when the frame is taken. A separate
+    `send_input_event` first is not enough on a device whose connection
+    handshake outlasts its screen timeout. The wake is a real key press, so
+    choose one that is harmless on the screen being captured.
 
     Colour is handled for both UIs: MUI streams RGB565 directly, and a
     colour BaseUI device streams its 1bpp frame plus the region palette its
@@ -2349,7 +2354,7 @@ def capture_display(
     """
     from . import display_mirror
 
-    result = display_mirror.capture(port=port, timeout_s=timeout_s, scale=scale)
+    result = display_mirror.capture(port=port, timeout_s=timeout_s, scale=scale, wake=wake)
     png = result.pop("png")
     if out_path:
         target = _capture_target(out_path)
