@@ -350,6 +350,7 @@ class _MirrorCanvas:
         self._buf: bytearray | None = None
         self._received = 0
         self._frame_id = 0
+        self._geometry: tuple[int, int] | None = None
         self._rect: tuple[int, int, int, int] | None = None
 
     @property
@@ -387,11 +388,15 @@ class _MirrorCanvas:
         except ValueError as exc:
             log.debug("display_frame: undecodable payload (%s)", exc)
             return
-        fmt = int(field(fields, _F_FORMAT) or FORMAT_MONO_VLSB)
+        fmt = int(field(fields, _F_FORMAT))
         if fmt == FORMAT_RGB565:
             self._handle_rect(fields)
-        else:
+        elif fmt == FORMAT_MONO_VLSB:
             self._handle_mono(fields)
+        else:
+            # FORMAT_UNSPECIFIED is never sent, and a newer format is not ours to guess at.
+            log.debug("display_frame: dropping chunk in unsupported format %d", fmt)
+            self._buf = None
 
     # -- shared -----------------------------------------------------------
 
@@ -402,14 +407,15 @@ class _MirrorCanvas:
         return self.rgb
 
     def _in_sequence(self, fields: dict[int, list[Any]]) -> bool:
-        """A continuation must match the buffer actually allocated at offset 0,
-        not merely its own `total_size` claim."""
+        """A continuation must match the buffer and panel geometry latched at
+        offset 0, not merely its own `total_size` claim."""
         offset = int(field(fields, _F_OFFSET))
         if offset == 0:
             return True
         return (
             self._buf is not None
             and len(self._buf) == int(field(fields, _F_TOTAL_SIZE))
+            and (int(field(fields, _F_WIDTH)), int(field(fields, _F_HEIGHT))) == self._geometry
             and int(field(fields, _F_FRAME_ID)) == self._frame_id
             and offset == self._received
         )
@@ -440,6 +446,7 @@ class _MirrorCanvas:
             self._buf = bytearray(total)
             self._frame_id = int(field(fields, _F_FRAME_ID))
             self._received = 0
+            self._geometry = (width, height)
             self.width, self.height = width, height
 
         buf = self._buf
@@ -510,6 +517,7 @@ class _MirrorCanvas:
             self._buf = bytearray(total)
             self._frame_id = int(field(fields, _F_FRAME_ID))
             self._received = 0
+            self._geometry = (width, height)
             self._rect = (rect_x, rect_y, rect_w, rect_h)
             self._ensure_canvas(width, height)
 
@@ -666,7 +674,9 @@ def capture(port: str | None = None, timeout_s: float = 20.0, scale: int = 1) ->
         raise TimeoutError(
             f"no display frame within {budget:g}s — the device must run firmware with "
             "screen-mirror support (meshtastic/firmware#11681); older firmware ignores "
-            "the get_display_frame_request admin verb silently"
+            "the get_display_frame_request admin verb silently. On an MUI (color LVGL) "
+            "device, another client that is already mirroring holds the rect stream, "
+            "which the firmware serves to one connection at a time; stop it and retry"
         )
 
     factor = max(1, min(int(scale), MAX_SCALE))

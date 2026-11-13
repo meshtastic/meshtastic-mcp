@@ -184,6 +184,23 @@ def test_mono_rejects_zero_dimensions() -> None:
     assert not canvas.complete
 
 
+def test_mono_continuation_with_transposed_geometry_drops_the_partial_frame() -> None:
+    # 16x8 and 8x16 are both 16 bytes, so only the latched geometry tells them apart.
+    canvas = dm._MirrorCanvas()
+    canvas.handle(_frame(width=16, height=8, fmt=dm.FORMAT_MONO_VLSB, total=16, data=b"\x01" * 8))
+    canvas.handle(
+        _frame(width=8, height=16, fmt=dm.FORMAT_MONO_VLSB, total=16, data=b"\x01" * 8, offset=8)
+    )
+    assert not canvas.complete
+
+
+@pytest.mark.parametrize("fmt", [0, 3])
+def test_unspecified_or_unknown_format_is_dropped(fmt: int) -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.handle(_frame(width=8, height=8, fmt=fmt, total=8, data=b"\x01" * 8))
+    assert not canvas.complete
+
+
 # ── RGB565 dirty rects ─────────────────────────────────────────────────────
 
 

@@ -227,7 +227,9 @@ optional — see `doctor` for the `[ui]` extra). This is device-only; for app UI
 **Prefer `capture_display` when the firmware supports it.** It reads the framebuffer over the
 phone API instead of photographing the panel, so it needs no camera and the pixels are exact
 (and OCR is far more reliable). It times out on firmware without screen-mirror support — fall
-back to `capture_screen` then. A `blank: true` result means the panel had hit
+back to `capture_screen` then. On an MUI (color LVGL) device it also times out while another
+client, such as the Android app, is mirroring: the firmware serves MUI rects to one connection
+at a time. A `blank: true` result means the panel had hit
 `display.screen_on_secs`, not that the capture failed: send any `send_input_event` to wake it
 and capture again.
 
