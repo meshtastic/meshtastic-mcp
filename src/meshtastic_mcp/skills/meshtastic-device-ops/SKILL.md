@@ -275,8 +275,11 @@ minute on a T-Deck with a large node DB). Check `blank` on every shot.
 - **Touch (MUI):** a tap is `USER_PRESS` with `touch_x`/`touch_y`; `SELECT` with coordinates is
   a touch long-press (on a chat row it reveals `DEL`).
 - **Typing:** any code with `kb_char` set, e.g. `{"event": 255, "kb_char": 104}` types `h`.
-- **Leaving a menu:** BaseUI menus close on `CANCEL`, not `BACK`. On MUI both map to Esc, which
-  no view tried so far acts on; tap the sidebar to navigate instead.
+- **Going back:** `BACK` is the back action. On BaseUI it closes an open menu and otherwise goes to
+  the previous frame; on MUI it closes overlays and returns focus to the sidebar. Firmware without
+  meshtastic/firmware#12358 closes BaseUI menus only on `CANCEL`, and MUI on a touch board without
+  meshtastic/device-ui#471 ignores `BACK`. Avoid `CANCEL` as a back key: on BaseUI with no menu
+  open it turns the screen off.
 - **Enter sends:** `SELECT` or `SELECT_LONG` with a focused MUI text field submits it as a mesh
   message. Clear typed text (or leave the chat) before any Enter-like step.
 
