@@ -28,11 +28,14 @@ tool surface.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import struct
 import time
 import types
 import zlib
+from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("meshtastic_mcp.display_mirror")
@@ -42,8 +45,25 @@ FROM_RADIO_DISPLAY_FRAME = 21
 FROM_RADIO_DISPLAY_PALETTE = 22
 
 # AdminMessage payload_variant field numbers (meshtastic/admin.proto).
+ADMIN_SEND_INPUT_EVENT = 27
 ADMIN_GET_DISPLAY_FRAME_REQUEST = 50
 ADMIN_SET_DISPLAY_MIRROR = 51
+
+# AdminMessage.InputEvent field numbers.
+_I_EVENT_CODE = 1
+_I_KB_CHAR = 2
+_I_TOUCH_X = 3
+_I_TOUCH_Y = 4
+
+# DeviceMetadata.display, and DisplayInfo's fields within it.
+METADATA_DISPLAY = 16
+_D_WIDTH = 1
+_D_HEIGHT = 2
+_D_FORMAT = 3
+_D_PANEL_CLASS = 4
+_D_HAS_TOUCH = 5
+_PANEL_CLASSES = {0: "UNSPECIFIED", 1: "OLED", 2: "LCD", 3: "TFT", 4: "EINK", 5: "HUB75"}
+_FORMAT_NAMES = {1: "MONO_VLSB", 2: "RGB565"}
 
 # DisplayFrame.Format
 FORMAT_MONO_VLSB = 1
@@ -178,6 +198,50 @@ def admin_request_frame() -> bytes:
 def admin_set_mirror(enabled: bool) -> bytes:
     """An `AdminMessage` carrying only `set_display_mirror`."""
     return encode_varint_field(ADMIN_SET_DISPLAY_MIRROR, 1 if enabled else 0)
+
+
+def admin_input_event(
+    event_code: int, kb_char: int = 0, touch_x: int = 0, touch_y: int = 0
+) -> bytes:
+    """An `AdminMessage` carrying only `send_input_event`, zero fields omitted as proto3 does."""
+    event = b"".join(
+        encode_varint_field(number, value)
+        for number, value in (
+            (_I_EVENT_CODE, event_code),
+            (_I_KB_CHAR, kb_char),
+            (_I_TOUCH_X, touch_x),
+            (_I_TOUCH_Y, touch_y),
+        )
+        if value
+    )
+    return _encode_varint((ADMIN_SEND_INPUT_EVENT << 3) | 2) + _encode_varint(len(event)) + event
+
+
+def display_info(metadata: Any) -> dict[str, Any] | None:
+    """`DeviceMetadata.display` from a generated metadata message, or None.
+
+    The released bindings predate the field, so it survives only as an unknown
+    field; re-serializing keeps it and the hand parser reads it back. None
+    means no screen, a build without mirroring, or pre-feature firmware.
+    """
+    if metadata is None:
+        return None
+    try:
+        raw = field(parse_fields(metadata.SerializeToString()), METADATA_DISPLAY, None)
+        if not isinstance(raw, bytes):
+            return None
+        info = parse_fields(raw)
+    except (AttributeError, ValueError):
+        return None
+    fmt = int(field(info, _D_FORMAT))
+    panel = int(field(info, _D_PANEL_CLASS))
+    return {
+        "width": int(field(info, _D_WIDTH)),
+        "height": int(field(info, _D_HEIGHT)),
+        "format": _FORMAT_NAMES.get(fmt, fmt),
+        "panel_class": _PANEL_CLASSES.get(panel, panel),
+        "has_touch": bool(field(info, _D_HAS_TOUCH)),
+    }
 
 
 # ── PNG output ─────────────────────────────────────────────────────────────
@@ -350,6 +414,7 @@ class _MirrorCanvas:
         self._buf: bytearray | None = None
         self._received = 0
         self._frame_id = 0
+        self._geometry: tuple[int, int] | None = None
         self._rect: tuple[int, int, int, int] | None = None
 
     @property
@@ -387,11 +452,15 @@ class _MirrorCanvas:
         except ValueError as exc:
             log.debug("display_frame: undecodable payload (%s)", exc)
             return
-        fmt = int(field(fields, _F_FORMAT) or FORMAT_MONO_VLSB)
+        fmt = int(field(fields, _F_FORMAT))
         if fmt == FORMAT_RGB565:
             self._handle_rect(fields)
-        else:
+        elif fmt == FORMAT_MONO_VLSB:
             self._handle_mono(fields)
+        else:
+            # FORMAT_UNSPECIFIED is never sent, and a newer format is not ours to guess at.
+            log.debug("display_frame: dropping chunk in unsupported format %d", fmt)
+            self._buf = None
 
     # -- shared -----------------------------------------------------------
 
@@ -402,14 +471,15 @@ class _MirrorCanvas:
         return self.rgb
 
     def _in_sequence(self, fields: dict[int, list[Any]]) -> bool:
-        """A continuation must match the buffer actually allocated at offset 0,
-        not merely its own `total_size` claim."""
+        """A continuation must match the buffer and panel geometry latched at
+        offset 0, not merely its own `total_size` claim."""
         offset = int(field(fields, _F_OFFSET))
         if offset == 0:
             return True
         return (
             self._buf is not None
             and len(self._buf) == int(field(fields, _F_TOTAL_SIZE))
+            and (int(field(fields, _F_WIDTH)), int(field(fields, _F_HEIGHT))) == self._geometry
             and int(field(fields, _F_FRAME_ID)) == self._frame_id
             and offset == self._received
         )
@@ -440,6 +510,7 @@ class _MirrorCanvas:
             self._buf = bytearray(total)
             self._frame_id = int(field(fields, _F_FRAME_ID))
             self._received = 0
+            self._geometry = (width, height)
             self.width, self.height = width, height
 
         buf = self._buf
@@ -510,6 +581,7 @@ class _MirrorCanvas:
             self._buf = bytearray(total)
             self._frame_id = int(field(fields, _F_FRAME_ID))
             self._received = 0
+            self._geometry = (width, height)
             self._rect = (rect_x, rect_y, rect_w, rect_h)
             self._ensure_canvas(width, height)
 
@@ -581,6 +653,9 @@ _RETRY_S = 4.0
 # Let the config handshake finish before speaking.
 _SETTLE_S = 2.0
 
+# Give a woken panel time to leave powersave before the arm repaint.
+_WAKE_S = 1.0
+
 # Device panels are small (128x64 up to 320x240), so a documentation
 # screenshot usually wants enlarging. Nearest-neighbour keeps the pixel grid
 # crisp, which is what reads well for a device UI; 8x of the largest panel is
@@ -588,10 +663,21 @@ _SETTLE_S = 2.0
 MAX_SCALE = 8
 
 
-def capture(port: str | None = None, timeout_s: float = 20.0, scale: int = 1) -> dict[str, Any]:
+def capture(
+    port: str | None = None,
+    timeout_s: float = 20.0,
+    scale: int = 1,
+    wake: int | str | None = None,
+) -> dict[str, Any]:
     """Request one frame of the device's screen and return it as PNG bytes.
 
     Arms mirroring, requests a frame, and disarms in a `finally`.
+
+    `wake` sends that input event on this same connection just before arming.
+    A slept MUI panel repaints solid black, and a device whose handshake
+    outlasts the screen timeout is asleep again by the time a separate
+    `send_input_event` call's wake would help. The event is a real key press,
+    so pick one that is harmless on the screen being captured.
 
     The one-shot `get_display_frame_request` on its own looks tidier — the
     firmware clears it once the frame has drained, so it cannot leave the
@@ -606,33 +692,15 @@ def capture(port: str | None = None, timeout_s: float = 20.0, scale: int = 1) ->
     message says so.
     """
     from .connection import connect
+    from .input_events import coerce_event_code
 
+    # Validate before opening the port, so a bad name costs no handshake.
+    wake_code = coerce_event_code(wake) if wake is not None else None
     budget = max(1.0, min(float(timeout_s), MAX_TIMEOUT_S))
     canvas = _MirrorCanvas()
-    last_chunk = 0.0
+    clock = {"last": 0.0}
 
-    with connect(port=port) as iface:
-        original = iface._handleFromRadio
-
-        def patched(self: Any, payload: bytes, **kwargs: Any) -> Any:
-            nonlocal last_chunk
-            try:
-                fields = parse_fields(payload)
-                # Palette first: the firmware sends it ahead of the frame so a
-                # client can colorize the first frame it renders.
-                for raw in fields.get(FROM_RADIO_DISPLAY_PALETTE, []):
-                    if isinstance(raw, bytes):
-                        canvas.palette.handle(raw)
-                        last_chunk = time.monotonic()
-                for raw in fields.get(FROM_RADIO_DISPLAY_FRAME, []):
-                    if isinstance(raw, bytes):
-                        canvas.handle(raw)
-                        last_chunk = time.monotonic()
-            except ValueError as exc:
-                log.debug("display_frame: unparsable FromRadio (%s)", exc)
-            return original(payload, **kwargs)
-
-        iface._handleFromRadio = types.MethodType(patched, iface)
+    with connect(port=port) as iface, _streaming_into(iface, canvas, clock):
         try:
             # connect() yields the moment the interface is constructed. An
             # admin message sent into the tail of the config handshake is
@@ -640,34 +708,28 @@ def capture(port: str | None = None, timeout_s: float = 20.0, scale: int = 1) ->
             # (not just the request — arming is the half that matters) if
             # nothing has arrived.
             time.sleep(_SETTLE_S)
+            if wake_code is not None:
+                # once only: a retry re-arms, but a second key press would move the UI
+                _send_admin(iface, admin_input_event(wake_code))
+                time.sleep(_WAKE_S)
             _arm_and_request(iface)
             deadline = time.monotonic() + budget
             retry_at = time.monotonic() + _RETRY_S
             while time.monotonic() < deadline:
-                if canvas.complete and time.monotonic() - last_chunk >= _QUIET_S:
+                if canvas.complete and time.monotonic() - clock["last"] >= _QUIET_S:
                     break
                 if not canvas.complete and time.monotonic() >= retry_at:
                     _arm_and_request(iface)
                     retry_at = time.monotonic() + _RETRY_S
                 time.sleep(_POLL_S)
         finally:
-            try:
-                _send_admin(iface, admin_set_mirror(False))
-            except Exception as exc:  # never mask the real result
-                log.debug("display mirror: disarm failed (%s)", exc)
-            # Instance attribute, so this never leaks into other interfaces
-            # held by the recorder/replay/cot_relay sessions in this process.
-            iface._handleFromRadio = original
+            _disarm(iface)
 
         screen_on_secs = _screen_on_secs(iface)
 
     rgb = canvas.render()
     if not canvas.complete or rgb is None:
-        raise TimeoutError(
-            f"no display frame within {budget:g}s — the device must run firmware with "
-            "screen-mirror support (meshtastic/firmware#11681); older firmware ignores "
-            "the get_display_frame_request admin verb silently"
-        )
+        raise TimeoutError(_no_frame_message(budget))
 
     factor = max(1, min(int(scale), MAX_SCALE))
     scaled, width, height = upscale(rgb, canvas.width, canvas.height, factor)
@@ -685,6 +747,193 @@ def capture(port: str | None = None, timeout_s: float = 20.0, scale: int = 1) ->
         "blank": _looks_blank(rgb),
         "screen_on_secs": screen_on_secs,
     }
+
+
+def _no_frame_message(budget: float) -> str:
+    return (
+        f"no display frame within {budget:g}s — the device must run firmware with "
+        "screen-mirror support (meshtastic/firmware#11681); older firmware ignores "
+        "the get_display_frame_request admin verb silently. On an MUI (color LVGL) "
+        "device, another client that is already mirroring holds the rect stream, "
+        "which the firmware serves to one connection at a time; stop it and retry"
+    )
+
+
+@contextlib.contextmanager
+def _streaming_into(
+    iface: Any, canvas: _MirrorCanvas, clock: dict[str, float]
+) -> Generator[None, None, None]:
+    """Feed every display_frame/display_palette the interface receives into `canvas`.
+
+    `clock["last"]` is the monotonic time of the newest chunk, which is how
+    callers tell a repaint burst from a quiet stream.
+    """
+    original = iface._handleFromRadio
+
+    def patched(self: Any, payload: bytes, **kwargs: Any) -> Any:
+        try:
+            fields = parse_fields(payload)
+            # Palette first: the firmware sends it ahead of the frame so a
+            # client can colorize the first frame it renders.
+            for raw in fields.get(FROM_RADIO_DISPLAY_PALETTE, []):
+                if isinstance(raw, bytes):
+                    canvas.palette.handle(raw)
+                    clock["last"] = time.monotonic()
+            for raw in fields.get(FROM_RADIO_DISPLAY_FRAME, []):
+                if isinstance(raw, bytes):
+                    canvas.handle(raw)
+                    clock["last"] = time.monotonic()
+        except ValueError as exc:
+            log.debug("display_frame: unparsable FromRadio (%s)", exc)
+        return original(payload, **kwargs)
+
+    iface._handleFromRadio = types.MethodType(patched, iface)
+    try:
+        yield
+    finally:
+        # Instance attribute, so this never leaks into other interfaces
+        # held by the recorder/replay/cot_relay sessions in this process.
+        iface._handleFromRadio = original
+
+
+def _disarm(iface: Any) -> None:
+    try:
+        _send_admin(iface, admin_set_mirror(False))
+    except Exception as exc:  # never mask the real result
+        log.debug("display mirror: disarm failed (%s)", exc)
+
+
+# ── drive: input steps against a live mirror ───────────────────────────────
+
+# Each step is a key press plus a settle, and the T-Deck's handshake alone
+# takes a minute, so a drive runs as a job; this bounds one job's length.
+MAX_DRIVE_STEPS = 32
+
+# After a step, wait until the stream has been quiet this long (an MUI clock
+# ticks every second, so a lit home screen is never quiet for longer), but
+# never longer than the cap.
+_STEP_QUIET_S = 1.5
+_STEP_CAP_S = 8.0
+
+# The arm repaint of a 320x240 MUI panel over serial takes several seconds.
+_START_QUIET_S = 2.0
+_START_CAP_S = 15.0
+
+
+def parse_steps(steps: Any) -> list[dict[str, Any]]:
+    """Validate drive steps before any port is opened.
+
+    Each step is `{"event": name|code, "kb_char"?, "touch_x"?, "touch_y"?,
+    "label"?}`; the result carries the coerced integer code and a file-safe
+    label.
+    """
+    from .input_events import coerce_event_code
+
+    if not isinstance(steps, list) or not steps:
+        raise ValueError("steps must be a non-empty list of {event, ...} objects")
+    if len(steps) > MAX_DRIVE_STEPS:
+        raise ValueError(f"at most {MAX_DRIVE_STEPS} steps per drive (got {len(steps)})")
+    out = []
+    for i, step in enumerate(steps, 1):
+        if not isinstance(step, dict) or "event" not in step:
+            raise ValueError(f"step {i}: expected an object with an 'event' key")
+        unknown = set(step) - {"event", "kb_char", "touch_x", "touch_y", "label"}
+        if unknown:
+            raise ValueError(f"step {i}: unknown keys {sorted(unknown)}")
+        code = coerce_event_code(step["event"])
+        kb, x, y = (int(step.get(k, 0)) for k in ("kb_char", "touch_x", "touch_y"))
+        if not 0 <= kb <= 255:
+            raise ValueError(f"step {i}: kb_char out of u8 range: {kb}")
+        if not (0 <= x <= 65535 and 0 <= y <= 65535):
+            raise ValueError(f"step {i}: touch coordinates out of u16 range: ({x}, {y})")
+        raw_label = str(step.get("label") or step["event"]).lower()
+        label = "".join(c if c.isalnum() else "-" for c in raw_label).strip("-")[:32] or "step"
+        out.append(
+            {"event": code, "kb_char": kb, "touch_x": x, "touch_y": y, "label": f"{i:02d}-{label}"}
+        )
+    return out
+
+
+def _settle(clock: dict[str, float], quiet_s: float, cap_s: float) -> None:
+    start = time.monotonic()
+    while time.monotonic() - start < cap_s:
+        now = time.monotonic()
+        if now - start >= quiet_s and now - max(clock["last"], start) >= quiet_s:
+            return
+        time.sleep(_POLL_S)
+
+
+def drive(
+    port: str | None,
+    steps: list[dict[str, Any]],
+    out_dir: Path,
+    scale: int = 1,
+    wake: int | str | None = None,
+    on_step: Any = None,
+) -> list[dict[str, Any]]:
+    """Run `steps` against a continuously mirrored screen on one connection.
+
+    Arms mirroring once, snapshots the screen, then for each step sends its
+    input event, waits for the stream to settle and writes a PNG of the
+    mirrored screen. Each result carries `changed_px` against the previous
+    snapshot, so a key that did nothing shows 0. `steps` must come from
+    `parse_steps`. `on_step(result)` is called after every snapshot.
+    """
+    from .connection import connect
+    from .input_events import coerce_event_code
+
+    wake_code = coerce_event_code(wake) if wake is not None else None
+    factor = max(1, min(int(scale), MAX_SCALE))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    canvas = _MirrorCanvas()
+    clock = {"last": 0.0}
+    results: list[dict[str, Any]] = []
+    prev: bytes | None = None
+
+    def snapshot(label: str) -> None:
+        nonlocal prev
+        rgb = canvas.render()
+        if rgb is None:
+            raise TimeoutError(_no_frame_message(_START_CAP_S))
+        scaled, width, height = upscale(rgb, canvas.width, canvas.height, factor)
+        path = out_dir / f"{label}.png"
+        path.write_bytes(write_png(width, height, scaled))
+        changed = None
+        if prev is not None and len(prev) == len(rgb):
+            changed = sum(1 for i in range(0, len(rgb), 3) if rgb[i : i + 3] != prev[i : i + 3])
+        prev = rgb
+        result = {
+            "label": label,
+            "path": str(path),
+            "changed_px": changed,
+            "units": canvas.frames + canvas.rects,
+            "blank": _looks_blank(rgb),
+        }
+        results.append(result)
+        if on_step is not None:
+            on_step(result)
+
+    with connect(port=port) as iface, _streaming_into(iface, canvas, clock):
+        try:
+            time.sleep(_SETTLE_S)
+            if wake_code is not None:
+                _send_admin(iface, admin_input_event(wake_code))
+                time.sleep(_WAKE_S)
+            _send_admin(iface, admin_set_mirror(True))
+            _settle(clock, _START_QUIET_S, _START_CAP_S)
+            snapshot("00-start")
+            for step in steps:
+                _send_admin(
+                    iface,
+                    admin_input_event(
+                        step["event"], step["kb_char"], step["touch_x"], step["touch_y"]
+                    ),
+                )
+                _settle(clock, _STEP_QUIET_S, _STEP_CAP_S)
+                snapshot(step["label"])
+        finally:
+            _disarm(iface)
+    return results
 
 
 def _screen_on_secs(iface: Any) -> int | None:

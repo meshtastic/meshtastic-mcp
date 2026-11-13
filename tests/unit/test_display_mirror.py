@@ -10,7 +10,9 @@ each one must be rejected before anything is allocated.
 
 from __future__ import annotations
 
+import contextlib
 import struct
+import types
 import zlib
 
 import pytest
@@ -181,6 +183,23 @@ def test_mono_size_must_match_the_declared_geometry() -> None:
 def test_mono_rejects_zero_dimensions() -> None:
     canvas = dm._MirrorCanvas()
     canvas.handle(_frame(width=0, height=8, fmt=dm.FORMAT_MONO_VLSB, total=0, data=b""))
+    assert not canvas.complete
+
+
+def test_mono_continuation_with_transposed_geometry_drops_the_partial_frame() -> None:
+    # 16x8 and 8x16 are both 16 bytes, so only the latched geometry tells them apart.
+    canvas = dm._MirrorCanvas()
+    canvas.handle(_frame(width=16, height=8, fmt=dm.FORMAT_MONO_VLSB, total=16, data=b"\x01" * 8))
+    canvas.handle(
+        _frame(width=8, height=16, fmt=dm.FORMAT_MONO_VLSB, total=16, data=b"\x01" * 8, offset=8)
+    )
+    assert not canvas.complete
+
+
+@pytest.mark.parametrize("fmt", [0, 3])
+def test_unspecified_or_unknown_format_is_dropped(fmt: int) -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.handle(_frame(width=8, height=8, fmt=fmt, total=8, data=b"\x01" * 8))
     assert not canvas.complete
 
 
@@ -539,3 +558,208 @@ def test_capture_paths_stay_inside_the_capture_base(tmp_path, monkeypatch) -> No
         server._capture_target("/etc/passwd.png")
     with pytest.raises(ValueError, match=r"\.png"):
         server._capture_target("notes.txt")
+
+
+# ── wake ───────────────────────────────────────────────────────────────────
+
+
+def test_admin_input_event_matches_the_generated_encoding() -> None:
+    from meshtastic.protobuf import admin_pb2  # type: ignore[import-untyped]
+
+    expected = admin_pb2.AdminMessage()
+    expected.send_input_event.event_code = 27
+    assert dm.admin_input_event(27) == expected.SerializeToString()
+
+
+class _FakeIface:
+    """Answers a frame request with one 8x8 mono frame and records every admin payload."""
+
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+        self.myInfo = types.SimpleNamespace(my_node_num=1)
+        display = types.SimpleNamespace(screen_on_secs=30)
+        self.localNode = types.SimpleNamespace(localConfig=types.SimpleNamespace(display=display))
+
+    def _handleFromRadio(self, payload: bytes, **kwargs) -> None:
+        return None
+
+    def sendData(self, payload: bytes, **kwargs) -> None:
+        self.sent.append(payload)
+        if payload == dm.admin_request_frame():
+            frame = _frame(width=8, height=8, fmt=dm.FORMAT_MONO_VLSB, total=8, data=b"\x01" * 8)
+            self._handleFromRadio(_bytes_field(dm.FROM_RADIO_DISPLAY_FRAME, frame))
+
+
+@pytest.fixture
+def fake_iface(monkeypatch) -> _FakeIface:
+    from meshtastic_mcp import connection
+
+    iface = _FakeIface()
+
+    @contextlib.contextmanager
+    def fake_connect(port=None, **kwargs):
+        yield iface
+
+    monkeypatch.setattr(connection, "connect", fake_connect)
+    monkeypatch.setattr(dm, "_SETTLE_S", 0.0)
+    monkeypatch.setattr(dm, "_WAKE_S", 0.0)
+    monkeypatch.setattr(dm, "_QUIET_S", 0.01)
+    return iface
+
+
+def test_capture_presses_wake_once_on_its_own_connection_before_arming(fake_iface) -> None:
+    result = dm.capture(port="fake", timeout_s=2, wake="BACK")
+
+    assert result["frames"] == 1
+    assert fake_iface.sent[:3] == [
+        dm.admin_input_event(27),
+        dm.admin_set_mirror(True),
+        dm.admin_request_frame(),
+    ]
+    assert fake_iface.sent.count(dm.admin_input_event(27)) == 1
+    assert fake_iface.sent[-1] == dm.admin_set_mirror(False)
+
+
+def test_capture_without_wake_sends_no_input_event(fake_iface) -> None:
+    dm.capture(port="fake", timeout_s=2)
+    assert fake_iface.sent[:2] == [dm.admin_set_mirror(True), dm.admin_request_frame()]
+    assert dm.admin_input_event(27) not in fake_iface.sent
+
+
+def test_capture_rejects_an_unknown_wake_name_before_opening_the_port(fake_iface) -> None:
+    with pytest.raises(ValueError, match="unknown event code"):
+        dm.capture(port="fake", wake="NOT_A_KEY")
+    assert fake_iface.sent == []
+
+
+def test_admin_input_event_carries_touch_and_kb_fields_like_the_generated_encoding() -> None:
+    from meshtastic.protobuf import admin_pb2  # type: ignore[import-untyped]
+
+    expected = admin_pb2.AdminMessage()
+    expected.send_input_event.event_code = 10
+    expected.send_input_event.kb_char = 104
+    expected.send_input_event.touch_x = 180
+    expected.send_input_event.touch_y = 142
+    assert dm.admin_input_event(10, 104, 180, 142) == expected.SerializeToString()
+
+
+# ── DisplayInfo ────────────────────────────────────────────────────────────
+
+
+def test_display_info_reads_the_field_the_released_bindings_do_not_know() -> None:
+    from meshtastic.protobuf import mesh_pb2  # type: ignore[import-untyped]
+
+    info = (
+        dm.encode_varint_field(1, 320)
+        + dm.encode_varint_field(2, 240)
+        + dm.encode_varint_field(3, dm.FORMAT_RGB565)
+        + dm.encode_varint_field(4, 3)
+        + dm.encode_varint_field(5, 1)
+    )
+    wire = dm.encode_varint_field(2, 25) + _bytes_field(dm.METADATA_DISPLAY, info)
+    meta = mesh_pb2.DeviceMetadata()
+    meta.ParseFromString(wire)
+
+    assert dm.display_info(meta) == {
+        "width": 320,
+        "height": 240,
+        "format": "RGB565",
+        "panel_class": "TFT",
+        "has_touch": True,
+    }
+
+
+def test_display_info_is_none_without_the_field() -> None:
+    from meshtastic.protobuf import mesh_pb2  # type: ignore[import-untyped]
+
+    assert dm.display_info(mesh_pb2.DeviceMetadata(firmware_version="2.7.0")) is None
+    assert dm.display_info(None) is None
+
+
+# ── drive ──────────────────────────────────────────────────────────────────
+
+
+def test_parse_steps_coerces_names_and_makes_file_safe_labels() -> None:
+    steps = dm.parse_steps(
+        [
+            {"event": "DOWN"},
+            {"event": "USER_PRESS", "touch_x": 20, "touch_y": 70, "label": "tap nodes/icon"},
+            {"event": 255, "kb_char": ord("h")},
+        ]
+    )
+    assert [s["event"] for s in steps] == [18, 28, 255]
+    assert [s["label"] for s in steps] == ["01-down", "02-tap-nodes-icon", "03-255"]
+    assert steps[1]["touch_x"] == 20 and steps[2]["kb_char"] == 104
+
+
+@pytest.mark.parametrize(
+    ("steps", "match"),
+    [
+        ([], "non-empty"),
+        ([{"key": "DOWN"}], "'event'"),
+        ([{"event": "DOWN", "extra": 1}], "unknown keys"),
+        ([{"event": "NOT_A_KEY"}], "unknown event code"),
+        ([{"event": "SELECT", "kb_char": 256}], "kb_char"),
+        ([{"event": "USER_PRESS", "touch_x": 70000}], "touch"),
+        ([{"event": "DOWN"}] * (dm.MAX_DRIVE_STEPS + 1), "at most"),
+    ],
+)
+def test_parse_steps_rejects_bad_input_before_any_port_opens(steps, match) -> None:
+    with pytest.raises(ValueError, match=match):
+        dm.parse_steps(steps)
+
+
+class _DrivenIface(_FakeIface):
+    """Streams a new 8x8 mono frame on arm and on every key, lighting one more row each time."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.frame_id = 0
+
+    def _emit(self, rows: int) -> None:
+        self.frame_id += 1
+        data = bytes([(1 << rows) - 1]) * 8
+        frame = _frame(
+            width=8, height=8, fmt=dm.FORMAT_MONO_VLSB, total=8, data=data, frame_id=self.frame_id
+        )
+        self._handleFromRadio(_bytes_field(dm.FROM_RADIO_DISPLAY_FRAME, frame))
+
+    def sendData(self, payload: bytes, **kwargs) -> None:
+        self.sent.append(payload)
+        if payload == dm.admin_set_mirror(True):
+            self._emit(1)
+        elif dm.ADMIN_SEND_INPUT_EVENT in dm.parse_fields(payload):
+            self._emit(min(self.frame_id + 1, 8))
+
+
+def test_drive_snapshots_each_step_on_one_mirrored_connection(monkeypatch, tmp_path) -> None:
+    from meshtastic_mcp import connection
+
+    iface = _DrivenIface()
+
+    @contextlib.contextmanager
+    def fake_connect(port=None, **kwargs):
+        yield iface
+
+    monkeypatch.setattr(connection, "connect", fake_connect)
+    for name in ("_SETTLE_S", "_WAKE_S"):
+        monkeypatch.setattr(dm, name, 0.0)
+    for name in ("_START_QUIET_S", "_STEP_QUIET_S"):
+        monkeypatch.setattr(dm, name, 0.01)
+    seen: list[str] = []
+
+    results = dm.drive(
+        "fake",
+        dm.parse_steps([{"event": "DOWN"}, {"event": "USER_PRESS", "touch_x": 3, "touch_y": 4}]),
+        tmp_path,
+        on_step=lambda r: seen.append(r["label"]),
+    )
+
+    assert [r["label"] for r in results] == ["00-start", "01-down", "02-user-press"] == seen
+    assert results[0]["changed_px"] is None
+    assert all(r["changed_px"] == 8 for r in results[1:])  # one more lit row of 8 pixels
+    assert all((tmp_path / f"{r['label']}.png").exists() for r in results)
+    # one arm, one input per step, one disarm, and nothing else
+    assert iface.sent[0] == dm.admin_set_mirror(True)
+    assert iface.sent[1:3] == [dm.admin_input_event(18), dm.admin_input_event(28, 0, 3, 4)]
+    assert iface.sent[-1] == dm.admin_set_mirror(False) and len(iface.sent) == 4
