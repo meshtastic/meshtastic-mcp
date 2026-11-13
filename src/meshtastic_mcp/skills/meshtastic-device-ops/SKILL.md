@@ -249,20 +249,36 @@ arguments exist for this case:
   purpose — a smoothed device UI reads as a blurry photo of a screen. `width`/`height` in the
   result describe the written image, `panel_width`/`panel_height` the device.
 
-Walking a menu is a loop of capture and advance, waking on the first shot:
+A walk through several screens is one `drive_display_start` job: it keeps a single connection
+with mirroring armed, presses each step and writes a PNG after it, so the panel never sleeps
+between shots and the handshake is paid once:
 
 ```
-capture_display(port=P, out_path="docs/img/01-home.png", scale=2, wake="BACK")
-send_input_event(port=P, event_code="DOWN")
-capture_display(port=P, out_path="docs/img/02-nodes.png", scale=2)
+drive_display_start(port=P, out_dir="docs/img", scale=2, wake="BACK", steps=[
+    {"event": "DOWN", "label": "nodes"},
+    {"event": "USER_PRESS", "touch_x": 20, "touch_y": 140, "label": "chats"},
+])
+drive_display_poll(job_id)          # until status=done; steps[] holds each PNG and changed_px
 ```
 
-If a later shot comes back blank, retake it with a `wake` event that is a no-op on that screen.
+`changed_px` is the diff against the previous shot; 0 means the press changed nothing on screen.
+`capture_display` alone takes one shot per connection (settle + handshake + quiet period, a
+minute on a T-Deck with a large node DB). Check `blank` on every shot.
 
-Each call opens and closes the port (settle + handshake + a quiet period before the frame is
-considered whole), so budget roughly 6-10s per capture and do not interleave other port work.
-Check `blank` on every shot — a blank frame means the panel slept mid-walk, so wake and retake
-rather than shipping it.
+### Driving the UI remotely
+
+`send_input_event` and `drive_display_start` speak the same events, and they are real presses:
+
+- **D-pad and select:** `UP`/`DOWN`/`LEFT`/`RIGHT`, `SELECT`, `SELECT_LONG`. On MUI the arrows
+  are D-pad keys whose effect depends on the focused widget (in the sidebar, `UP`/`DOWN` change
+  screens and `LEFT`/`RIGHT` do nothing).
+- **Touch (MUI):** a tap is `USER_PRESS` with `touch_x`/`touch_y`; `SELECT` with coordinates is
+  a touch long-press (on a chat row it reveals `DEL`).
+- **Typing:** any code with `kb_char` set, e.g. `{"event": 255, "kb_char": 104}` types `h`.
+- **Leaving a menu:** BaseUI menus close on `CANCEL`, not `BACK`. On MUI both map to Esc, which
+  no view tried so far acts on; tap the sidebar to navigate instead.
+- **Enter sends:** `SELECT` or `SELECT_LONG` with a focused MUI text field submits it as a mesh
+  message. Clear typed text (or leave the chat) before any Enter-like step.
 
 Two things that bite in practice:
 

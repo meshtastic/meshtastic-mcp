@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import display_mirror
 from .connection import connect
 
 
@@ -90,6 +91,8 @@ def device_info(port: str | None = None, timeout_s: float = 8.0) -> dict[str, An
             "primary_channel": primary_channel_name(iface),
             "modem_preset": modem_preset_name(iface),
             "channel_num": channel_num(iface),
+            # Screen-mirror capability (DisplayInfo); None without a mirroring build.
+            "display": display_mirror.display_info(meta),
         }
 
 

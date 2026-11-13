@@ -36,6 +36,7 @@ from . import (
     flash,
     hw_tools,
     info,
+    jobs,
     log_query,
     registry,
     rf_oracle,
@@ -2365,6 +2366,96 @@ def capture_display(
     return {"path": str(target), "bytes": len(png), **result}
 
 
+def _capture_dir(out_dir: str) -> Path:
+    """Resolve a caller-named directory inside the capture base, or raise.
+
+    Same containment rule as `_capture_target`, without the `.png` suffix.
+    """
+    base = Path(os.environ.get("MESHTASTIC_MCP_CAPTURE_DIR") or Path.cwd()).expanduser().resolve()
+    target = (base / Path(out_dir).expanduser()).resolve()
+    if not target.is_relative_to(base):
+        raise ValueError(
+            f"out_dir must be inside {base} (set MESHTASTIC_MCP_CAPTURE_DIR to change it)"
+        )
+    return target
+
+
+@app.tool()
+def drive_display_start(
+    steps: list[dict[str, Any]],
+    port: str | None = None,
+    out_dir: str | None = None,
+    scale: int = 1,
+    wake: int | str | None = None,
+) -> dict[str, Any]:
+    """Drive the device UI with input steps and capture the mirrored screen after each.
+
+    Holds one connection with screen mirroring armed, so a whole walkthrough
+    costs one handshake. Returns a `job_id` at once; poll `drive_display_poll`.
+
+    `steps` is a list of `{"event", "kb_char"?, "touch_x"?, "touch_y"?, "label"?}`
+    (max 32). `event` takes the `send_input_event` names or codes: arrows,
+    `SELECT`, `SELECT_LONG`, `BACK`, `CANCEL`, a tap is `USER_PRESS` with
+    `touch_x`/`touch_y`, and a touch long-press is `SELECT` with coordinates.
+    Typing is any code with `kb_char` set (e.g. `{"event": 255, "kb_char": 104}`).
+
+    Each step reports `changed_px` against the previous snapshot, so a key the
+    UI ignored shows 0. Frames stream only when the screen changes, so 0 can
+    also mean the input landed on a no-op. `wake` presses one event before the
+    first snapshot, as in `capture_display`.
+
+    These are real key presses: Enter (`SELECT` or `SELECT_LONG`) in a focused
+    MUI text field sends the message on the mesh. BaseUI menus close on
+    `CANCEL`, not `BACK`. PNGs go to `out_dir` inside `MESHTASTIC_MCP_CAPTURE_DIR`,
+    or a per-job directory, and show mesh-sourced text.
+    """
+    from . import display_mirror
+    from .input_events import coerce_event_code
+
+    parsed = display_mirror.parse_steps(steps)
+    if wake is not None:
+        coerce_event_code(wake)
+    target = _capture_dir(out_dir) if out_dir else None
+    factor = int(scale)
+
+    def _body(state: dict[str, Any], log_path: Path) -> None:
+        dest = target or jobs.data_dir("display-drives") / state["job_id"]
+
+        def on_step(result: dict[str, Any]) -> None:
+            with jobs.LOCK:
+                state["artifacts"].append(result["path"])
+                state.setdefault("steps", []).append(result)
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    f"{result['label']}: changed_px={result['changed_px']} "
+                    f"blank={result['blank']}\n"
+                )
+
+        started = time.time()
+        display_mirror.drive(port, parsed, dest, scale=factor, wake=wake, on_step=on_step)
+        with jobs.LOCK:
+            state["status"] = "done"
+            state["exit_code"] = 0
+            state["finished_at"] = time.time()
+            state["duration_s"] = round(time.time() - started, 1)
+
+    return jobs.start("display-drives", port or "default", _body)
+
+
+@app.tool()
+def drive_display_poll(job_id: str) -> dict[str, Any]:
+    """Status of a `drive_display_start` job, with each finished step's PNG and `changed_px`."""
+    from . import display_mirror
+
+    out = jobs.poll(job_id, tail_lines=display_mirror.MAX_DRIVE_STEPS + 2)
+    if "job_id" not in out:  # unknown id — jobs.poll returns a bare {"error": ...}
+        return out
+    state = jobs.state_of(job_id) or {}
+    with jobs.LOCK:
+        out["steps"] = list(state.get("steps", []))
+    return out
+
+
 @app.tool()
 def capture_screen(role: str | None = None, ocr: bool = True) -> dict[str, Any]:
     """Grab a frame from the USB webcam pointed at the device screen.
@@ -3905,6 +3996,7 @@ _READ_ONLY = {
     "flash_poll",  # reads background-flash state; never mutates
     "vanity_preview",  # pure key -> id/colour derivation; no device, no host state
     "vanity_grind_poll",  # reads grind-job state; never mutates
+    "drive_display_poll",  # reads drive-job state; never touches the device
     "serial_list",
     "serial_read",  # reads buffered bytes; no write side-effect
     "device_info",
@@ -3977,6 +4069,8 @@ _DESTRUCTIVE = {
     # band -> same curve) and harmless to any DUT; the set_config-style pattern.
     "pa_measure",
     "pa_sweep",  # writes lora.tx_power, keys TX, may reboot the node
+    # Presses real keys; Enter in a focused MUI text field sends a mesh message.
+    "drive_display_start",
     # Drives the device (one-shot mirror verb) and overwrites the PNG at its
     # fixed path — the same shape as android_screenshot below.
     "capture_display",
@@ -4085,6 +4179,8 @@ _OPEN_WORLD = {
     # payload exactly like android_screenshot. Untrusted content, one hop
     # closer to the source.
     "capture_display",
+    "drive_display_start",
+    "drive_display_poll",  # returns the PNG paths of those same screens
     "touch_1200bps",
     "pio_flash",
     "flash_start",
