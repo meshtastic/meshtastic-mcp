@@ -2405,8 +2405,9 @@ def drive_display_start(
     first snapshot, as in `capture_display`.
 
     These are real key presses: Enter (`SELECT` or `SELECT_LONG`) in a focused
-    MUI text field sends the message on the mesh. `BACK` is the back action;
-    `CANCEL` turns a BaseUI screen off when no menu is open (firmware without
+    MUI text field sends the message on the mesh. `BACK` is the back action,
+    except on an MUI touch board without meshtastic/device-ui#471, which ignores
+    it. `CANCEL` turns a BaseUI screen off when no menu is open (firmware without
     meshtastic/firmware#12358 needs it to close a menu). PNGs go to `out_dir`
     inside `MESHTASTIC_MCP_CAPTURE_DIR`,
     or a per-job directory, and show mesh-sourced text.
