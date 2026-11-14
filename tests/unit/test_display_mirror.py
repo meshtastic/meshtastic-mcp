@@ -154,6 +154,17 @@ def test_mono_frame_lights_the_expected_pixels() -> None:
     assert rgb[24:48] == b"\x00\x00\x00" * 8  # row 1 dark
 
 
+def test_eink_mono_frame_renders_set_pixels_black_on_white() -> None:
+    canvas = dm._MirrorCanvas()
+    canvas.eink = True
+    canvas.handle(_frame(width=8, height=8, fmt=dm.FORMAT_MONO_VLSB, total=8, data=b"\x01" * 8))
+
+    rgb = canvas.render()
+    assert rgb is not None
+    assert rgb[:24] == b"\x00\x00\x00" * 8  # row 0 set, painted black
+    assert rgb[24:48] == b"\xff\xff\xff" * 8  # row 1 clear, the white page
+
+
 def test_mono_height_not_a_multiple_of_eight_still_rounds_up_to_whole_pages() -> None:
     # 8x12 needs 2 pages (16 bytes), not 12 — the validator and the renderer
     # must agree, or a legitimate frame is rejected.
@@ -674,6 +685,17 @@ def test_display_info_is_none_without_the_field() -> None:
 
     assert dm.display_info(mesh_pb2.DeviceMetadata(firmware_version="2.7.0")) is None
     assert dm.display_info(None) is None
+
+
+def test_panel_class_comes_from_the_handshake_metadata() -> None:
+    from meshtastic.protobuf import mesh_pb2  # type: ignore[import-untyped]
+
+    meta = mesh_pb2.DeviceMetadata()
+    meta.ParseFromString(_bytes_field(dm.METADATA_DISPLAY, dm.encode_varint_field(4, 4)))
+
+    assert dm._panel_class(types.SimpleNamespace(metadata=meta)) == "EINK"
+    assert dm._panel_class(types.SimpleNamespace(metadata=None)) is None
+    assert dm._panel_class(object()) is None
 
 
 # ── drive ──────────────────────────────────────────────────────────────────
