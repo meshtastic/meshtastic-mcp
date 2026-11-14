@@ -46,6 +46,7 @@ from meshtastic.protobuf import (
 from ..recorder.recorder import _default_dir as _recorder_default_dir
 from ..recorder.rotating import _RotatingJsonl
 from . import mdns as _mdns
+from .build import mesh_beacon_module_config
 from .capture import Capture, node_to_nodeinfo
 from .fuzz import FuzzConfig, Fuzzer
 
@@ -70,8 +71,19 @@ def _replay_log_dir() -> Path:
 START1 = 0x94
 START2 = 0xC3
 
-# want-config nonces the app uses (config phase, then node-DB phase).
-NONCE_CONFIG = 69420
+# Real clients (phone apps, the `meshtastic` CLI/python lib) send a SINGLE
+# `want_config_id` with a random nonce, and the firmware answers it with the
+# full config in one stream: my_info, metadata, all channels, every config
+# section, the whole node DB, then `config_complete_id`, and then streams
+# packets. The one reserved value is NODELESS (69420) — "send my own config but
+# skip the bulk node DB" (meshtastic.NODELESS_WANT_CONFIG_ID). We therefore send
+# the config content (my_info + channels + config sections) on the FIRST
+# want-config of a connection whatever its nonce, and the node DB + packet
+# stream whenever the nonce is not NODELESS. NONCE_DB is kept only so the older
+# two-request test/CLI pattern (69420 for config, then 69421 for the DB) still
+# maps cleanly onto that behaviour.
+NONCE_NODELESS = 69420
+NONCE_CONFIG = NONCE_NODELESS  # backwards-compatible alias
 NONCE_DB = 69421
 
 # A radio's want-config carries every channel slot, unused ones DISABLED; strict clients
@@ -283,6 +295,9 @@ class ReplayParams:
     # Replay Clock: post a kickoff + periodic "ETA — done/total" to the busiest
     # channel so you can see, from inside the app, that it's a replay. 0 = off.
     announce_interval: float = 0.0
+    # Advertise ModuleConfig.mesh_beacon with FLAG_LISTEN_ENABLED in the config phase, so
+    # the app treats the connected device as listening for MESH_BEACON_APP packets.
+    beacon_listen: bool = False
     # Observer LocalStats cadence while replay packets flow. The initial snapshot is
     # always sent before the bulk node DB; 0 disables only periodic updates.
     stats_interval: float = 5.0
@@ -358,7 +373,7 @@ class ReplaySession:
         # than in synthetic noise: the median of every DeviceMetrics sample in the
         # replay window. Computed once — the window never changes.
         self._channel_utilization, self._air_util_tx = _representative_radio_metrics(window)
-        # Guards the observer LocalStats counters. `_send_db_phase` runs on the
+        # Guards the observer LocalStats counters. `_send_node_db` runs on the
         # reader thread and can re-enter on a second want_config_id while the
         # stream thread is already emitting periodic stats + counting duplicates.
         self._stats_lock = threading.Lock()
@@ -377,11 +392,15 @@ class ReplaySession:
         self._inject_q: queue.Queue[tuple[mesh_pb2.MeshPacket, str, bool]] = queue.Queue()
         # live-injection queue for top-level FromRadio messages (FileInfo, MyInfo, Config,
         # ModuleConfig, Channel, ...) -- the handshake-phase counterpart to _inject_q. These
-        # oneofs are only ever sent during _send_config_phase/_send_db_phase today, so there was
+        # oneofs are only ever sent during _send_config_phase/_send_node_db today, so there was
         # no way to exercise a handler for them (e.g. handleFileInfo) outside the initial
         # handshake window. Most app-side handlers don't gate on handshake state, so injecting
         # one mid-session is a legitimate way to fuzz/exercise that code path on demand.
         self._inject_fr_q: queue.Queue[mesh_pb2.FromRadio] = queue.Queue()
+        # Nodes the client deleted (AdminMessage.remove_by_nodenum). Unlike firmware, which
+        # re-adds a node the next time it's heard, the replay keeps them gone for the rest of
+        # the session: left out of the node DB on reconnect, their packets dropped.
+        self._removed_nodes: set[int] = set()
         self.fuzzer: Fuzzer | None = (
             Fuzzer(params.fuzz, capture.nodes, self._ch_index) if params.fuzz else None
         )
@@ -536,6 +555,7 @@ class ReplaySession:
     def _serve_client(self, client: socket.socket) -> None:
         send_lock = threading.Lock()
         streaming = [False]
+        config_sent = [False]
 
         def send(fr: mesh_pb2.FromRadio) -> None:
             data = _frame(fr.SerializeToString())
@@ -574,24 +594,41 @@ class ReplaySession:
                 return
             if tr.HasField("want_config_id"):
                 nonce = tr.want_config_id
-                if nonce == NONCE_DB:
-                    self._send_db_phase(send, nonce)
-                    if not streaming[0]:
-                        streaming[0] = True
-                        threading.Thread(
-                            target=self._stream,
-                            args=(send, client),
-                            daemon=True,
-                            name=f"replay-stream-{self.state.id}",
-                        ).start()
-                else:
-                    self._send_config_phase(send, nonce)
+                nodeless = nonce == NONCE_NODELESS
+                self._log_event("want_config", nonce=nonce, nodeless=nodeless)
+                # Config content (my_info, channels, config sections) goes out on
+                # the first want-config of the connection regardless of nonce, so
+                # a single-request client still receives its channels. The bulk
+                # node DB + packet stream follow whenever the request is not the
+                # nodeless variant. `config_complete_id` closes each request.
+                if not config_sent[0]:
+                    config_sent[0] = True
+                    self._send_config_phase(send)
+                if not nodeless:
+                    self._send_node_db(send)
+                fr = mesh_pb2.FromRadio()
+                fr.config_complete_id = nonce
+                send(fr)
+                if not nodeless and not streaming[0]:
+                    streaming[0] = True
+                    threading.Thread(
+                        target=self._stream,
+                        args=(send, client),
+                        daemon=True,
+                        name=f"replay-stream-{self.state.id}",
+                    ).start()
             elif tr.HasField("packet"):
                 self._handle_client_packet(tr.packet, send)
             # heartbeats / other ToRadio: drain and ignore
 
     # -- handshake phases --
-    def _send_config_phase(self, send: Any, nonce: int) -> None:
+    def _send_config_phase(self, send: Any) -> None:
+        """my_info + metadata + observer NodeInfo + channels + config sections.
+
+        Sent once per connection, on the first want-config, ahead of the bulk
+        node DB. `config_complete_id` is emitted by the caller after the DB (if
+        any) so a single request closes with one completion for its own nonce.
+        """
         n_nodes = len(self.capture.nodes)
         fr = mesh_pb2.FromRadio()
         mi = fr.my_info
@@ -617,7 +654,7 @@ class ReplaySession:
         send(self._observer_nodeinfo())
 
         specs = self.capture.channel_specs
-        for idx, name in enumerate(self.capture.channels):
+        for idx, name in enumerate(self.capture.channels[:MAX_CHANNELS]):
             fr = mesh_pb2.FromRadio()
             fr.channel.index = idx
             if specs is not None and idx < len(specs):
@@ -639,7 +676,7 @@ class ReplaySession:
                 fr.channel.settings.psk = bytes([(0x10 + idx) & 0xFF] * 16)
                 fr.channel.settings.name = name
             send(fr)
-        for idx in range(len(self.capture.channels), MAX_CHANNELS):
+        for idx in range(len(self.capture.channels[:MAX_CHANNELS]), MAX_CHANNELS):
             fr = mesh_pb2.FromRadio()
             fr.channel.index = idx
             fr.channel.role = channel_pb2.Channel.Role.DISABLED
@@ -664,26 +701,31 @@ class ReplaySession:
         fr = mesh_pb2.FromRadio()
         fr.moduleConfig.mqtt.enabled = False
         send(fr)
+        if self.params.beacon_listen:
+            fr = mesh_pb2.FromRadio()
+            fr.moduleConfig.MergeFromString(mesh_beacon_module_config(listen=True))
+            send(fr)
 
-        fr = mesh_pb2.FromRadio()
-        fr.config_complete_id = nonce
-        send(fr)
+    def _send_node_db(self, send: Any) -> None:
+        """Observer LocalStats, then the bulk node DB.
 
-    def _send_db_phase(self, send: Any, nonce: int) -> None:
+        The observer NodeInfo already went out during `_send_config_phase`, so
+        this streams stats (ahead of the bulk rows, so a stats row renders before
+        a large download can stall the UI) followed by every captured node. The
+        caller emits `config_complete_id` afterward.
+        """
         now = int(time.time())
-        send(self._observer_nodeinfo())
         self._send_observer_stats(send)
         if self.params.node_delay > 0:
             time.sleep(self.params.node_delay)
         for n in self.capture.nodes:
+            if n.num & 0xFFFFFFFF in self._removed_nodes:
+                continue
             fr = mesh_pb2.FromRadio()
             fr.node_info.CopyFrom(node_to_nodeinfo(n, last_heard=now))
             send(fr)
             if self.params.node_delay > 0:
                 time.sleep(self.params.node_delay)
-        fr = mesh_pb2.FromRadio()
-        fr.config_complete_id = nonce
-        send(fr)
 
     def _send_observer_stats(self, send: Any) -> None:
         """Publish LocalStats from the connected observer.
@@ -743,7 +785,13 @@ class ReplaySession:
             req.ParseFromString(pkt.decoded.payload)
         except Exception:  # malformed admin payload: ignore, like firmware
             return
-        if req.WhichOneof("payload_variant") != "get_owner_request":
+        variant = req.WhichOneof("payload_variant")
+        if variant == "remove_by_nodenum":
+            num = req.remove_by_nodenum & 0xFFFFFFFF
+            self._removed_nodes.add(num)
+            self._log_event("node_removed", node=f"!{num:08x}")
+            return
+        if variant != "get_owner_request":
             return
 
         requester = getattr(pkt, "from", 0) or self.params.observer_num
@@ -1047,6 +1095,8 @@ class ReplaySession:
                 self.fuzzer.on_packet(mp, ch_name) if (fuzz and self.fuzzer is not None) else [mp]
             )
             for out_mp in outs:
+                if getattr(out_mp, "from") in self._removed_nodes:
+                    continue
                 fr = mesh_pb2.FromRadio()
                 fr.packet.CopyFrom(out_mp)
                 try:
@@ -1149,6 +1199,8 @@ class ReplaySession:
                 if self.fuzzer is not None:
                     outs = outs + self.fuzzer.on_tick(time.time())
                 for out_mp in outs:
+                    if getattr(out_mp, "from") in self._removed_nodes:
+                        continue
                     fr = mesh_pb2.FromRadio()
                     fr.packet.CopyFrom(out_mp)
                     try:
