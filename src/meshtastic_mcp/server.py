@@ -2339,7 +2339,8 @@ def capture_display(
     colour BaseUI device streams its 1bpp frame plus the region palette its
     panel paints with, which is applied here. `colorized` reports whether a
     palette was actually matched and applied; a monochrome panel has none and
-    renders black-and-white.
+    renders black-and-white. A device reporting `panel_class: EINK` renders
+    black on white, as its panel paints.
 
     For documentation shots, pass `out_path` to name the file — without it
     every capture overwrites one scratch path, so a walkthrough ends up as a
@@ -2351,7 +2352,7 @@ def capture_display(
 
     Returns:
         {path, bytes, width, height, panel_width, panel_height, scale,
-         format, blank, colorized, screen_on_secs, frames, rects}
+         format, blank, colorized, screen_on_secs, panel_class, frames, rects}
     """
     from . import display_mirror
 
