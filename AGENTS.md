@@ -145,7 +145,7 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
 
 - **JDK/Python:** Python ≥ 3.11. Keep the core dependency-light (`fastmcp`, `mcp`,
   `pyserial`, `meshtastic`, `platformdirs`); heavy deps go in extras (`[test]`, `[ui]`).
-  `fastmcp` is the MCP server runtime (standalone FastMCP 3); `mcp` is kept as a direct
+  `fastmcp` is the MCP server runtime (standalone FastMCP 4 on the `mcp` 2 SDK); `mcp` is kept as a direct
   dep for `mcp.types.ToolAnnotations` (not re-exported by fastmcp).
 - **No firmware-tree assumptions in core.** Core modules must import and run without
   `MESHTASTIC_FIRMWARE_ROOT`. Recorder data dir is `MESHTASTIC_MCP_DATA_DIR` → platformdirs →
