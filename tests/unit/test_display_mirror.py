@@ -637,6 +637,40 @@ def test_capture_without_wake_sends_no_input_event(fake_iface) -> None:
     assert dm.admin_input_event(27) not in fake_iface.sent
 
 
+def _eink_metadata():
+    from meshtastic.protobuf import mesh_pb2  # type: ignore[import-untyped]
+
+    meta = mesh_pb2.DeviceMetadata()
+    meta.ParseFromString(_bytes_field(dm.METADATA_DISPLAY, dm.encode_varint_field(4, 4)))
+    return meta
+
+
+def _first_pixel(png: bytes) -> bytes:
+    """Top-left RGB of a write_png image: one IDAT, filter byte then the row."""
+    pos, idat = 8, b""
+    while pos < len(png):
+        (length,) = struct.unpack(">I", png[pos : pos + 4])
+        if png[pos + 4 : pos + 8] == b"IDAT":
+            idat += png[pos + 8 : pos + 8 + length]
+        pos += 12 + length
+    return zlib.decompress(idat)[1:4]
+
+
+def test_capture_renders_an_eink_device_black_on_white(fake_iface) -> None:
+    fake_iface.metadata = _eink_metadata()
+    result = dm.capture(port="fake", timeout_s=2)
+
+    assert result["panel_class"] == "EINK"
+    assert _first_pixel(result["png"]) == b"\x00\x00\x00"  # row 0 is set
+
+
+def test_capture_without_display_metadata_renders_white_on_black(fake_iface) -> None:
+    result = dm.capture(port="fake", timeout_s=2)
+
+    assert result["panel_class"] is None
+    assert _first_pixel(result["png"]) == b"\xff\xff\xff"
+
+
 def test_capture_rejects_an_unknown_wake_name_before_opening_the_port(fake_iface) -> None:
     with pytest.raises(ValueError, match="unknown event code"):
         dm.capture(port="fake", wake="NOT_A_KEY")
@@ -785,3 +819,24 @@ def test_drive_snapshots_each_step_on_one_mirrored_connection(monkeypatch, tmp_p
     assert iface.sent[0] == dm.admin_set_mirror(True)
     assert iface.sent[1:3] == [dm.admin_input_event(18), dm.admin_input_event(28, 0, 3, 4)]
     assert iface.sent[-1] == dm.admin_set_mirror(False) and len(iface.sent) == 4
+
+
+def test_drive_renders_an_eink_device_black_on_white(monkeypatch, tmp_path) -> None:
+    from meshtastic_mcp import connection
+
+    iface = _DrivenIface()
+    iface.metadata = _eink_metadata()
+
+    @contextlib.contextmanager
+    def fake_connect(port=None, **kwargs):
+        yield iface
+
+    monkeypatch.setattr(connection, "connect", fake_connect)
+    for name in ("_SETTLE_S", "_WAKE_S"):
+        monkeypatch.setattr(dm, name, 0.0)
+    for name in ("_START_QUIET_S", "_STEP_QUIET_S"):
+        monkeypatch.setattr(dm, name, 0.01)
+
+    results = dm.drive("fake", dm.parse_steps([{"event": "DOWN"}]), tmp_path)
+
+    assert _first_pixel((tmp_path / f"{results[0]['label']}.png").read_bytes()) == b"\x00\x00\x00"
