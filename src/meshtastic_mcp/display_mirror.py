@@ -409,6 +409,8 @@ class _MirrorCanvas:
         self.rects = 0
         self.format: int | None = None
         self.palette = _Palette()
+        # set from DeviceMetadata.display.panel_class before rendering
+        self.eink = False
         self._mono: bytearray | None = None
         self._mono_palette_sig = 0
         self._buf: bytearray | None = None
@@ -536,6 +538,9 @@ class _MirrorCanvas:
         palette = self.palette if self.colorized else None
         rgb = bytearray(self.width * self.height * 3)
         plain_on, plain_off = b"\xff\xff\xff", b"\x00\x00\x00"
+        if self.eink:
+            # an e-ink panel paints a set bit black on a white page
+            plain_on, plain_off = plain_off, plain_on
         for y in range(self.height):
             page = (y // _PIXELS_PER_PAGE) * self.width
             bit = 1 << (y % _PIXELS_PER_PAGE)
@@ -726,7 +731,9 @@ def capture(
             _disarm(iface)
 
         screen_on_secs = _screen_on_secs(iface)
+        panel_class = _panel_class(iface)
 
+    canvas.eink = panel_class == "EINK"
     rgb = canvas.render()
     if not canvas.complete or rgb is None:
         raise TimeoutError(_no_frame_message(budget))
@@ -746,7 +753,14 @@ def capture(
         "colorized": canvas.colorized,
         "blank": _looks_blank(rgb),
         "screen_on_secs": screen_on_secs,
+        "panel_class": panel_class,
     }
+
+
+def _panel_class(iface: Any) -> str | None:
+    """The panel class the device reported in its handshake metadata, or None."""
+    info = display_info(getattr(iface, "metadata", None))
+    return None if info is None else str(info["panel_class"])
 
 
 def _no_frame_message(budget: float) -> str:
@@ -892,6 +906,7 @@ def drive(
 
     def snapshot(label: str) -> None:
         nonlocal prev
+        canvas.eink = _panel_class(iface) == "EINK"
         rgb = canvas.render()
         if rgb is None:
             raise TimeoutError(_no_frame_message(_START_CAP_S))
