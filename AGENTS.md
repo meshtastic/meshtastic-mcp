@@ -145,7 +145,7 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
 
 - **JDK/Python:** Python ≥ 3.11. Keep the core dependency-light (`fastmcp`, `mcp`,
   `pyserial`, `meshtastic`, `platformdirs`); heavy deps go in extras (`[test]`, `[ui]`).
-  `fastmcp` is the MCP server runtime (standalone FastMCP 3); `mcp` is kept as a direct
+  `fastmcp` is the MCP server runtime (standalone FastMCP 4 on the `mcp` 2 SDK); `mcp` is kept as a direct
   dep for `mcp.types.ToolAnnotations` (not re-exported by fastmcp).
 - **The protos are ours, not the library's.** `meshtastic` releases trail `meshtastic/protobufs`
   by months, so `meshtastic_mcp.protos` serves every `meshtastic.protobuf.*_pb2` import from
