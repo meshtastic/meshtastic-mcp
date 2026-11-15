@@ -103,6 +103,10 @@ def invalidate_cache() -> None:
         _CACHE["mtime"] = None
 
 
+def _arch_key(value: str | None) -> str:
+    return (value or "").lower().replace("-", "").replace("_", "")
+
+
 def _public_record(rec: dict[str, Any]) -> dict[str, Any]:
     """Strip the `_raw` field for list outputs."""
     return {k: v for k, v in rec.items() if not k.startswith("_")}
@@ -121,10 +125,12 @@ def list_boards(
     """
     envs = _get_cached()
     q = query.lower().strip() if query else None
+    # Firmware spells it `esp32-s3`; callers and docs also write `esp32s3`.
+    arch = _arch_key(architecture) if architecture else None
 
     out = []
     for rec in envs.values():
-        if architecture and rec.get("architecture") != architecture:
+        if arch and _arch_key(rec.get("architecture")) != arch:
             continue
         if actively_supported_only and not rec.get("actively_supported"):
             continue
