@@ -147,6 +147,10 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   `pyserial`, `meshtastic`, `platformdirs`); heavy deps go in extras (`[test]`, `[ui]`).
   `fastmcp` is the MCP server runtime (standalone FastMCP 3); `mcp` is kept as a direct
   dep for `mcp.types.ToolAnnotations` (not re-exported by fastmcp).
+- **The protos are ours, not the library's.** `meshtastic` releases trail `meshtastic/protobufs`
+  by months, so `meshtastic_mcp.protos` serves every `meshtastic.protobuf.*_pb2` import from
+  `protos/generated/` (commit in `PROTOBUFS_REF`). It installs when `meshtastic_mcp` is imported,
+  so nothing may import `meshtastic` first. Bump with `scripts/regen_protos.sh <protobufs-ref>`.
 - **No firmware-tree assumptions in core.** Core modules must import and run without
   `MESHTASTIC_FIRMWARE_ROOT`. Recorder data dir is `MESHTASTIC_MCP_DATA_DIR` → platformdirs →
   cwd, never firmware-relative.

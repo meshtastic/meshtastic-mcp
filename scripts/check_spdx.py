@@ -30,7 +30,7 @@ PATTERNS = [
 
 # Generated or vendored files that legitimately have no header.
 SKIP_NAMES = {"_version.py"}
-SKIP_PARTS = {".venv", "node_modules", "__pycache__", "static"}
+SKIP_PARTS = {".venv", "node_modules", "__pycache__", "static", "generated"}
 
 
 def main() -> int:

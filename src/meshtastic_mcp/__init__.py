@@ -5,6 +5,11 @@
 
 from __future__ import annotations
 
+from .protos import install as _install_protos
+
+# Before anything imports meshtastic, so its protobuf imports resolve to ours.
+_install_protos()
+
 try:
     # Written by hatch-vcs at build time (single source of truth: git tags).
     from ._version import __version__
