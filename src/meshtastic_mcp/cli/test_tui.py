@@ -1191,11 +1191,12 @@ def _build_app(
                     self._state.running_nodeid = nodeid
                     self._state.running_started_at = time.monotonic()
                     self._refresh_device_status()
-                elif when == "call" or (when == "setup" and outcome in ("failed", "skipped")):
-                    if self._state.running_nodeid == nodeid:
-                        self._state.running_nodeid = None
-                        self._state.running_started_at = None
-                        self._refresh_device_status()
+                elif (
+                    when == "call" or (when == "setup" and outcome in ("failed", "skipped"))
+                ) and self._state.running_nodeid == nodeid:
+                    self._state.running_nodeid = None
+                    self._state.running_started_at = None
+                    self._refresh_device_status()
 
                 # Phase 2: emit an authoritative leaf outcome.
                 #   `call` + terminal: test body ran.
