@@ -64,6 +64,8 @@ class BenchTokenVerifier(TokenVerifier):
 
 
 def serve(host: str, port: int, token: str) -> None:
+    # The server spawns pio, install scripts, emulators and model servers; none needs the token.
+    os.environ.pop(TOKEN_ENV, None)
     from .server import app
 
     app.auth = BenchTokenVerifier(token)

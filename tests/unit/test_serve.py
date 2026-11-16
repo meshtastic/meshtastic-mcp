@@ -44,3 +44,17 @@ def test_verifier_accepts_only_the_configured_token() -> None:
     assert asyncio.run(v.verify_token(GOOD)) is not None
     assert asyncio.run(v.verify_token(GOOD + "x")) is None
     assert asyncio.run(v.verify_token("")) is None
+
+
+def test_serving_removes_the_token_from_the_environment(monkeypatch) -> None:
+    import sys
+    import types
+
+    ran: list[dict] = []
+    fake_app = types.SimpleNamespace(auth=None, run=lambda **kw: ran.append(kw))
+    monkeypatch.setitem(sys.modules, "meshtastic_mcp.server", types.SimpleNamespace(app=fake_app))
+    monkeypatch.setenv(serve.TOKEN_ENV, GOOD)
+    serve.serve("127.0.0.1", 8765, GOOD)
+    assert serve.TOKEN_ENV not in os.environ
+    assert ran == [{"transport": "http", "host": "127.0.0.1", "port": 8765}]
+    assert isinstance(fake_app.auth, serve.BenchTokenVerifier)
