@@ -1534,6 +1534,7 @@ dependencies = [
     { name = "meshtastic" },
     { name = "platformdirs" },
     { name = "pyserial" },
+    { name = "typing-extensions", marker = "python_full_version < '3.12'" },
 ]
 
 [package.optional-dependencies]
@@ -1632,6 +1633,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "rumps", marker = "sys_platform == 'darwin' and extra == 'menubar'", specifier = ">=0.4" },
     { name = "textual", marker = "extra == 'test'", specifier = ">=0.50" },
+    { name = "typing-extensions", marker = "python_full_version < '3.12'", specifier = ">=4.12" },
     { name = "uiautomator2", marker = "extra == 'android-fast'", specifier = ">=3.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.27" },
 ]
