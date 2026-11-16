@@ -52,6 +52,59 @@ _MAX_LINGER_S = 60.0
 _CLOSE_TIMEOUT_S = 5.0
 
 
+# Extra time past `timeout_s` for opening a serial interface. The library's own timeout bounds
+# only the config wait; a wedged nRF52 CDC can block the open itself, and a real `device_info`
+# sat there for 19 minutes.
+_OPEN_GRACE_S = 10.0
+
+# Ports whose open was abandoned and is still blocked, keyed by resolved port. A call to one of
+# these fails fast instead of starting another blocked open.
+_wedged_opens: dict[str, threading.Thread] = {}
+
+
+def _open_bounded(factory, port: str, deadline_s: float):
+    """Run `factory()` (a blocking interface constructor) with a deadline.
+
+    On timeout the worker is abandoned; if it ever returns an interface, that interface is
+    closed so the port is released.
+    """
+    stuck = _wedged_opens.get(port)
+    if stuck is not None:
+        if stuck.is_alive():
+            raise ConnectionError(
+                f"Port {port} is still stuck in an earlier open that never returned. "
+                "Power-cycle the board (uhubctl_cycle) and retry."
+            )
+        _wedged_opens.pop(port, None)
+
+    box: dict = {}
+    done = threading.Event()
+    abandoned = threading.Event()
+
+    def _run() -> None:
+        try:
+            box["iface"] = factory()
+        except BaseException as exc:
+            box["error"] = exc
+        finally:
+            done.set()
+            if abandoned.is_set() and "iface" in box:
+                _close_bounded(box["iface"])
+
+    worker = threading.Thread(target=_run, daemon=True, name=f"open-{port}")
+    worker.start()
+    if not done.wait(deadline_s):
+        abandoned.set()
+        _wedged_opens[port] = worker
+        raise ConnectionError(
+            f"Opening {port} did not return within {deadline_s:.0f}s; the board's USB serial "
+            "looks wedged. Power-cycle it (uhubctl_cycle) and retry."
+        )
+    if "error" in box:
+        raise box["error"]
+    return box["iface"]
+
+
 def close_bounded(iface) -> None:
     """Close a meshtastic interface without letting a wedged close hang the
     caller. Public for long-held interfaces (the nightly soak's API observers)
@@ -265,11 +318,15 @@ def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0
     iface = None
     ok = False
     try:
-        iface = SerialInterface(
-            devPath=resolved,
-            connectNow=True,
-            noProto=False,
-            timeout=timeout,
+        iface = _open_bounded(
+            lambda: SerialInterface(
+                devPath=resolved,
+                connectNow=True,
+                noProto=False,
+                timeout=timeout,
+            ),
+            resolved,
+            timeout_s + _OPEN_GRACE_S,
         )
         yield iface
         ok = True
