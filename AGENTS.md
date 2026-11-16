@@ -167,7 +167,10 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   blocks, so the caller must catch and retry.
 - **Anything that can outrun a 60 s MCP call gets a job, not a longer timeout.** `jobs.py`
   is the one registry (build, flash, grind): `jobs.start()` returns a `job_id`, the tool
-  pairs it with a `_poll`. Don't add a second registry.
+  pairs it with a `_poll`. Don't add a second registry. An MCP background task (`task=True`, the
+  `[tasks]` extra) is an async wrapper that awaits a job with `jobs.wait`, never a registry of its
+  own; only jobs started `cancellable=True` (builds) stop when the task is cancelled, a flash keeps
+  running.
 - **Destructive tools stay `confirm`-gated** (`reboot`, `factory_reset`, `erase_and_flash`,
   `uhubctl_*`) **and `destructiveHint`-annotated** (see the annotation maps in `server.py`).
   Don't bypass the gate. New tools get the right read/destructive/open-world hint.
