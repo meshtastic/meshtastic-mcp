@@ -14,6 +14,8 @@ moment can still differ between the two apps.
 
 from __future__ import annotations
 
+import json
+import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,8 +98,38 @@ class AndroidDriver:
     def _shell(self, *args: str) -> None:
         self._avd.adb("shell", *args, serial=self.serial, check=False)
 
+    def _center_of(self, text: str) -> tuple[int, int] | None:
+        """Center of the element whose text is exactly `text`, across every window.
+
+        Reads `android layout` itself: its output is a list of windows, so a dialog's
+        buttons sit in a second window's `content`, and `--no-idle` copes with the
+        connecting spinner animating behind the dialog.
+        """
+        out = self._avd.android(
+            "layout", "--device", str(self.serial), "--flat", "--no-idle", "--full"
+        ).stdout
+        stack: list[Any] = list(json.loads(out or "[]"))
+        while stack:
+            node = stack.pop()
+            if not isinstance(node, dict):
+                continue
+            if (node.get("text") or "").strip() == text and node.get("center"):
+                x, y = (int(v) for v in str(node["center"]).strip("[]").split(","))
+                return x, y
+            stack.extend(node.get("content") or [])
+            stack.extend(node.get("children") or [])
+        return None
+
     def connect(self, port: int) -> None:
         self._avd.connect_app_via_deeplink(f"t10.0.2.2:{port}", serial=self.serial)
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            center = self._center_of("Connect")
+            if center is not None:
+                self._avd.tap(*center, serial=self.serial)
+                return
+            time.sleep(1.0)
+        raise RuntimeError("no connect prompt appeared after the connect link")
 
     def appearance(self, mode: str) -> None:
         self._shell("cmd", "uimode", "night", "yes" if mode == "dark" else "no")
@@ -221,6 +253,9 @@ def run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
     plan.out_dir.mkdir(parents=True, exist_ok=True)
     manager = get_manager()
     start = int(time.time()) - plan.sim_days * 86400
+    # Both apps keep a node database per connected node, so a fresh node number each
+    # run (one for both apps) keeps nodes from earlier runs out of the captures.
+    observer_num = random.randint(0x10000000, 0x7FFFFFFF)
     drivers: dict[str, Any] = {}
     sessions: list[str] = []
     try:
@@ -242,7 +277,14 @@ def run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
             )
             status = manager.start(
                 cap,
-                ReplayParams(host="0.0.0.0", port=0, rate=0.2, loop=True, mdns=False),
+                ReplayParams(
+                    host="0.0.0.0",
+                    port=0,
+                    rate=0.2,
+                    loop=True,
+                    mdns=False,
+                    observer_num=observer_num,
+                ),
             )
             sessions.append(status["id"])
             port = int(status["listen"].rsplit(":", 1)[1])

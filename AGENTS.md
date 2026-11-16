@@ -34,6 +34,9 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   (light/dark, App Store status bar), `ios_open_url` (deep links, and the connect link to a
   `replay_start` node so iOS and the Android emulator show one simulated mesh),
   `ios_ui_dump`, `ios_tap` and `ios_type_text` (the last three need idb).
+  `screenshot_set_start`/`_poll` (`screenshot_set.py`, registered with either capability)
+  serves each app a replay node from one seed, connects both, and captures matching
+  Android and iOS screens by deep link in light and dark.
 - **local-model capability** (needs a reachable Ollama / OpenAI-compatible `llama-server`, or a
   `llama` binary to start one): `local_model.py` offload client + `llama_server.py`. Gates the
   offload tools (`summarize_window` / `vision_oracle` / `triage_window`) and backend bootstrap

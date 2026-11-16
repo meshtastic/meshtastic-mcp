@@ -2186,3 +2186,18 @@ def test_new_client_preempts_an_idle_one():
         idle.close()
     finally:
         sess.stop()
+
+
+def test_local_telemetry_comes_from_the_sessions_own_node():
+    """A session with its own observer_num must not send telemetry as the default node.
+
+    Sent from the default number, an app saw a second, phantom "Meshtastic 4331" node.
+    """
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    custom = 0x1234ABCD
+    sess = ReplaySession(
+        "own-num", cap, ReplayParams(host="127.0.0.1", port=0, observer_num=custom)
+    )
+    fr = sess._local_telemetry_fr(telemetry_pb2.Telemetry())
+    assert getattr(fr.packet, "from") == custom
+    assert fr.packet.to == custom

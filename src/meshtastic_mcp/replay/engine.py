@@ -948,8 +948,8 @@ class ReplaySession:
         """
         fr = mesh_pb2.FromRadio()
         mp = fr.packet
-        setattr(mp, "from", OBSERVER_NUM)
-        mp.to = OBSERVER_NUM  # a node's own telemetry is addressed to itself
+        setattr(mp, "from", self.params.observer_num)
+        mp.to = self.params.observer_num  # a node's own telemetry is addressed to itself
         mp.channel = 0
         mp.id = random.getrandbits(31) or 1
         mp.rx_time = int(time.time())

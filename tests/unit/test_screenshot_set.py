@@ -52,3 +52,27 @@ def test_make_plan_validates_platforms_and_appearances(tmp_path: Path) -> None:
         ss.make_plan(["nodes"], ["ios"], ["sepia"], tmp_path)
     with pytest.raises(ValueError):
         ss.make_plan([], ["ios"], ["light"], tmp_path)
+
+
+def test_android_finds_a_dialog_button_in_a_second_window(monkeypatch) -> None:
+    # `android layout` returns one entry per window; a dialog's buttons live in the
+    # second window's content, and "Connect to this device?" must not match "Connect".
+    import subprocess
+
+    from meshtastic_mcp.emulator import avd
+
+    layout = (
+        '[{"window-title": "", "content": [{"text": "Nodes", "center": "[1,1]"}]},'
+        ' {"window-title": "", "content": ['
+        '{"text": "Connect to this device?", "center": "[540,989]"},'
+        '{"text": "Connect", "center": "[754,1431]"}]}]'
+    )
+    monkeypatch.setattr(
+        avd,
+        "android",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=layout, stderr=""),
+    )
+    monkeypatch.setattr(avd, "first_emulator_serial", lambda: "emulator-5554")
+    driver = ss.AndroidDriver(None)
+    assert driver._center_of("Connect") == (754, 1431)
+    assert driver._center_of("Cancel") is None
