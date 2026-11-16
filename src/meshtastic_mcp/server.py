@@ -1494,13 +1494,15 @@ def userprefs_testing_profile(
 
 @app.tool()
 def touch_1200bps(port: str, settle_ms: int = 250) -> dict[str, Any]:
-    """Open `port` at 1200 baud and immediately close, triggering USB CDC
-    bootloader entry on nRF52840, ESP32-S3 (native USB), RP2040, etc.
+    """Open `port` at 1200 baud and close it, triggering USB CDC bootloader
+    entry on nRF52840, ESP32-S3 (native USB), RP2040, etc. On an nRF52 the
+    touch also drops DTR while open, which its Adafruit core needs.
 
-    After the touch, polls serial devices for up to 3 seconds and reports any
-    new port that appeared (the bootloader often enumerates as a different
-    device). Reboots the device into its bootloader (annotated destructive
-    for that reason) but erases nothing — it is just a mode-switch signal.
+    After the touch, polls serial devices and reports the bootloader's port:
+    a new port, or the same node under a new PID (Linux keeps the
+    /dev/ttyACM node and renames the /dev/serial/by-id link). Reboots the
+    device into its bootloader (annotated destructive for that reason) but
+    erases nothing — it is just a mode-switch signal.
     """
     return flash.touch_1200bps(port, settle_ms=settle_ms)
 

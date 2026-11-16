@@ -573,15 +573,19 @@ def update_flash(
     return result
 
 
-def _do_1200bps_touch(port: str, settle_ms: int, touch_timeout_s: float = 3.0) -> None:
+def _do_1200bps_touch(
+    port: str, settle_ms: int, touch_timeout_s: float = 3.0, drop_dtr: bool = False
+) -> None:
     """Open port at 1200 baud and close, bounded by a worker thread.
+
+    The Adafruit nRF52 core enters DFU on a DTR-low line state while the line
+    coding is 1200 baud. A plain close lowers DTR only when the tty has HUPCL
+    set, and meshtastic-python clears HUPCL on every POSIX open, so
+    `drop_dtr` lowers it explicitly, as PlatformIO's touch does.
 
     Both the open and the close can block on a busy CDC device — we wrap the
     whole thing in a worker so the caller returns in at most `touch_timeout_s`
-    regardless. The touch is signal-only: the USB configuration change to
-    1200 baud alone is enough to trip the Adafruit bootloader's reset, so a
-    worker that's still blocked in the background after timeout has already
-    delivered the signal.
+    regardless; a worker still blocked in the close has already sent the signal.
     """
     errors: list[BaseException] = []
 
@@ -593,6 +597,8 @@ def _do_1200bps_touch(port: str, settle_ms: int, touch_timeout_s: float = 3.0) -
                 raise
             return  # other serial errors mid-open are expected during DFU entry
         try:
+            if drop_dtr:
+                s.dtr = False
             time.sleep(settle_ms / 1000.0)
         finally:
             try:
@@ -623,6 +629,11 @@ _NRF52_BOOTLOADER_PIDS = {
     0x002A,  # Adafruit Feather Express bootloader variant
     0x4029,  # alt seen on some boards
 }
+
+# USB VIDs Meshtastic's nRF52 apps present (firmware boards/*.json hwids). The
+# touch drops DTR only for these; Seeed's ESP32-S3 boards also use 0x2886, and
+# their TinyUSB CDC reboots on the 1200 baud line coding before DTR moves.
+_NRF52_APP_VIDS = {0x239A, 0x2886}
 
 
 def _parse_hex(value: Any) -> int | None:
@@ -674,42 +685,48 @@ def touch_1200bps(
     poll_timeout_s: float = 8.0,
     retries: int = 2,
 ) -> dict[str, Any]:
-    """Open port at 1200 baud, close immediately — triggers USB CDC bootloader.
+    """Touch port at 1200 baud — triggers USB CDC bootloader.
 
     Works for: nRF52840 (Adafruit bootloader), ESP32-S3 (native USB download
     mode), RP2040 (when built with 1200bps-reset stdio), Arduino Leonardo/Micro.
+    On an nRF52 (a `_NRF52_APP_VIDS` port) the touch drops DTR while open, which
+    the Adafruit core needs; every other port gets a plain open and close.
 
     For nRF52 specifically: after the touch, polls for the Adafruit bootloader
     VID/PID (0x239A / 0x0029) for up to `poll_timeout_s` seconds. Adafruit's
     bootloader docs note a touch sometimes needs to be repeated, so this
     retries up to `retries` times. The returned `new_port` is the bootloader
-    port (distinct from the app port) — exactly what's needed for `pio run
-    -t upload` to drive nrfutil.
+    port — on macOS a new path, on Linux usually the same /dev/ttyACM node
+    under a new PID — exactly what's needed for `pio run -t upload` to drive
+    nrfutil.
 
-    For non-nRF52 devices (ESP32-S3, RP2040, Arduino), falls back to
-    "any-new-port appeared" detection.
+    For non-nRF52 devices (ESP32-S3, RP2040, Arduino), falls back to "a new
+    port appeared, or a known port changed PID" detection.
 
     Returns `{ok, former_port, new_port, new_port_vid_pid, attempts}`.
     """
     connection.reject_if_tcp(port, "touch_1200bps")
     before_list = devices.list_devices(include_unknown=True)
-    before_ports = {d["port"] for d in before_list}
     # Pre-touch VID/PID per port, so we can distinguish a genuine DFU
     # re-enumeration (PID changed at a known port, or a brand-new port) from an
     # app-mode/wedged port that merely carries a VID/PID colliding with a
     # bootloader PID (e.g. a wedged T-Echo at 0x239A/0x002A).
     before_pids = {d["port"]: _parse_hex(d.get("pid")) for d in before_list}
+    # list_devices names kernel nodes; `port` may be a /dev/serial/by-id link.
+    touched = {port, os.path.realpath(port)}
+    vid = next((_parse_hex(d.get("vid")) for d in before_list if d["port"] in touched), None)
+    drop_dtr = vid in _NRF52_APP_VIDS
 
     attempts = 0
     new_port_info: dict[str, Any] | None = None
 
     for attempt in range(1, retries + 1):
         attempts = attempt
-        _do_1200bps_touch(port, settle_ms=settle_ms, touch_timeout_s=3.0)
+        _do_1200bps_touch(port, settle_ms=settle_ms, touch_timeout_s=3.0, drop_dtr=drop_dtr)
 
         # Poll for either (a) the nRF52 bootloader VID/PID appearing as a real
-        # DFU re-enumeration (new port, or changed PID), or (b) a brand-new port
-        # appearing that wasn't there before.
+        # DFU re-enumeration (new port, or changed PID), or (b) any port that
+        # is new or carries a different PID than before the touch.
         deadline = time.monotonic() + poll_timeout_s
         while time.monotonic() < deadline:
             time.sleep(0.2)
@@ -720,13 +737,18 @@ def touch_1200bps(
                 break
 
             current = devices.list_devices(include_unknown=True)
-            current_paths = {d["port"] for d in current}
-            added = current_paths - before_ports
-            if added:
-                added_record = next((d for d in current if d["port"] in added), None)
-                if added_record:
-                    new_port_info = added_record
-                    break
+            changed = next(
+                (
+                    d
+                    for d in current
+                    if d["port"] not in before_pids
+                    or before_pids[d["port"]] != _parse_hex(d.get("pid"))
+                ),
+                None,
+            )
+            if changed is not None:
+                new_port_info = changed
+                break
 
         if new_port_info is not None:
             break
