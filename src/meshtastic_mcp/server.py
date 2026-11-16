@@ -555,12 +555,15 @@ def screenshot_set_start(
     sim_seed: int = 1337,
     settle_s: float = 3.0,
     clean_status_bar: bool = True,
+    reset_apps: bool = False,
 ) -> dict[str, Any]:
     """Capture matching Android and iOS screenshots of the apps on one simulated mesh.
 
-    Serves each app its own replay node from the same seed, so both show the same
-    nodes and channels, connects them through their connect links, then opens each
-    screen by deep link and screenshots both, in each appearance. Returns a `job_id`
+    Serves each app its own replay node from the same seed and clock anchor, so both
+    show the same nodes, channels, last-heard times and messages. Sets each device's
+    location to the mesh's center, connects the apps through their connect links,
+    plays the capture once, then opens each screen by deep link and screenshots
+    both, in each appearance. Returns a `job_id`
     at once; poll `screenshot_set_poll`. PNGs land in
     `<out_dir>/<screen>/<platform>-<appearance>.png`.
 
@@ -573,8 +576,13 @@ def screenshot_set_start(
     Needs a running Android emulator with Meshtastic-Android, and a booted iOS
     Simulator with Meshtastic-Apple 2.7.28 or later past onboarding, plus idb.
     Connecting switches each app to the replay node. A platform that can't be driven
-    is skipped and named in the log. Relative times ("2 min ago") can still differ
-    between the apps.
+    is skipped and named in the log, as is the app each platform used.
+
+    `reset_apps` first returns each app's settings (sort, filters, theme, units) to
+    their defaults so earlier use can't show in the shots: Android clears the app's
+    data and needs a debug build, which skips onboarding; iOS deletes the app's
+    UserDefaults and keeps its stored data. The emulator keeps the mesh's location
+    afterwards; the simulator's is cleared.
     """
     from . import jobs
     from . import screenshot_set as ss
@@ -594,6 +602,7 @@ def screenshot_set_start(
         sim_seed=sim_seed,
         settle_s=settle_s,
         clean_status_bar=clean_status_bar,
+        reset_apps=reset_apps,
     )
 
     def _body(state: dict[str, Any], log_path: Path) -> None:

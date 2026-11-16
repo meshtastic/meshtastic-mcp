@@ -3,18 +3,15 @@
 """Matching screenshots of the Android and iOS apps on one simulated mesh.
 
 Each platform gets its own replay session (a replay node serves one app at a time),
-both generated from the same seed and start, so the apps hold the same nodes,
-channels and positions. Streaming is slowed to a trickle so the screens stay put
-while both apps are captured. Navigation is by deep link, which both apps accept
-for the screens in `SCREENS`.
-
-Times shown relative to now ("2 min ago") and the order of nodes heard at the same
-moment can still differ between the two apps.
+both generated from the same seed and stamped from one clock anchor, so the apps
+hold the same nodes, channels, positions, last-heard times and messages. Each
+session plays its capture once, fast, then holds the connection quiet while both
+apps are captured. Both devices report the mesh's center as their own location.
+Navigation is by deep link, which both apps accept for the screens in `SCREENS`.
 """
 
 from __future__ import annotations
 
-import json
 import random
 import time
 from dataclasses import dataclass, field
@@ -94,42 +91,40 @@ class AndroidDriver:
         self.serial = serial or avd.first_emulator_serial()
         if not self.serial:
             raise RuntimeError("no Android emulator is running (see `list_devices`)")
+        package = avd.resolve_package(serial=self.serial)
+        if not package:
+            raise RuntimeError("no Meshtastic app is installed on the emulator")
+        self.package: str = package
+        self.app = package
 
     def _shell(self, *args: str) -> None:
         self._avd.adb("shell", *args, serial=self.serial, check=False)
 
-    def _center_of(self, text: str) -> tuple[int, int] | None:
-        """Center of the element whose text is exactly `text`, across every window.
+    def reset_app(self) -> None:
+        """Clear the app's data, regrant permissions and launch past onboarding."""
+        if not self.package.endswith(".debug"):
+            raise RuntimeError(
+                f"{self.package} is not a debug build: it ignores the onboarding skip, "
+                "so a reset would leave it on the intro screens"
+            )
+        self._shell("pm", "clear", self.package)
+        self._avd.grant_runtime_permissions(self.package, serial=self.serial)
+        self._avd.launch_app(self.package, serial=self.serial, skip_onboarding=True)
+        time.sleep(3.0)
 
-        Reads `android layout` itself: its output is a list of windows, so a dialog's
-        buttons sit in a second window's `content`, and `--no-idle` copes with the
-        connecting spinner animating behind the dialog.
-        """
-        out = self._avd.android(
-            "layout", "--device", str(self.serial), "--flat", "--no-idle", "--full"
-        ).stdout
-        stack: list[Any] = list(json.loads(out or "[]"))
-        while stack:
-            node = stack.pop()
-            if not isinstance(node, dict):
-                continue
-            if (node.get("text") or "").strip() == text and node.get("center"):
-                x, y = (int(v) for v in str(node["center"]).strip("[]").split(","))
-                return x, y
-            stack.extend(node.get("content") or [])
-            stack.extend(node.get("children") or [])
-        return None
+    def set_location(self, lat: float, lon: float) -> None:
+        # The emulator console takes longitude first.
+        self._avd.adb("emu", "geo", "fix", f"{lon:.7f}", f"{lat:.7f}", serial=self.serial)
+
+    def clear_location(self) -> None:
+        """The emulator console cannot unset a fix; the mesh's position stays."""
 
     def connect(self, port: int) -> None:
-        self._avd.connect_app_via_deeplink(f"t10.0.2.2:{port}", serial=self.serial)
-        deadline = time.time() + 10.0
-        while time.time() < deadline:
-            center = self._center_of("Connect")
-            if center is not None:
-                self._avd.tap(*center, serial=self.serial)
-                return
-            time.sleep(1.0)
-        raise RuntimeError("no connect prompt appeared after the connect link")
+        self._avd.connect_app_via_deeplink(
+            f"t10.0.2.2:{port}", serial=self.serial, package=self.package
+        )
+        if not self._avd.tap_text("Connect", serial=self.serial, timeout=10.0):
+            raise RuntimeError("no connect prompt appeared after the connect link")
 
     def appearance(self, mode: str) -> None:
         self._shell("cmd", "uimode", "night", "yes" if mode == "dark" else "no")
@@ -160,7 +155,7 @@ class AndroidDriver:
         self._shell("am", "broadcast", "-a", "com.android.systemui.demo", "-e", "command", "exit")
 
     def open(self, path: str) -> None:
-        self._avd.deeplink(path, serial=self.serial)
+        self._avd.deeplink(path, serial=self.serial, package=self.package, clear_task=True)
 
     def screenshot(self, out: Path) -> None:
         self._avd.screenshot(out, serial=self.serial)
@@ -170,6 +165,7 @@ class IosDriver:
     """The iOS Simulator, through `apple_sim`. UI confirmation needs idb."""
 
     name = "ios"
+    bundle_id = "gvh.MeshtasticClient"
 
     def __init__(self, udid: str | None) -> None:
         from .emulator import apple_sim
@@ -178,6 +174,21 @@ class IosDriver:
         self.udid = apple_sim.ensure_booted(udid=udid) if udid else apple_sim.ensure_booted()
         if not apple_sim.has_idb():
             raise RuntimeError("iOS needs idb to confirm the connect prompt (run `doctor`)")
+        if not apple_sim.is_app_installed(self.bundle_id, udid=self.udid):
+            raise RuntimeError(f"{self.bundle_id} is not installed on simulator {self.udid}")
+        self.app = self.bundle_id
+
+    def reset_app(self) -> None:
+        """Return the app's settings to their defaults; its stored data stays."""
+        self._sim.reset_app_prefs(self.bundle_id, udid=self.udid)
+        self._sim.launch(self.bundle_id, udid=self.udid)
+        time.sleep(3.0)
+
+    def set_location(self, lat: float, lon: float) -> None:
+        self._sim.set_location(lat, lon, udid=self.udid)
+
+    def clear_location(self) -> None:
+        self._sim.clear_location(udid=self.udid)
 
     def connect(self, port: int) -> None:
         self._sim.open_url(self._sim.connect_link(port), udid=self.udid)
@@ -217,8 +228,13 @@ class Plan:
     sim_seed: int = 1337
     sim_days: int = 1
     settle_s: float = 3.0
-    connect_wait_s: float = 45.0
+    # Only the capture's last hours are streamed (the node DB covers the rest), and
+    # slowly: Meshtastic-Apple resets the connection under a few hundred packets/s.
+    stream_hours: float = 2.0
+    stream_rate: float = 20.0
+    connect_wait_s: float = 90.0
     clean_status_bar: bool = True
+    reset_apps: bool = False
     shots: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -252,7 +268,8 @@ def run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
 
     plan.out_dir.mkdir(parents=True, exist_ok=True)
     manager = get_manager()
-    start = int(time.time()) - plan.sim_days * 86400
+    anchor = int(time.time())
+    start = anchor - plan.sim_days * 86400
     # Both apps keep a node database per connected node, so a fresh node number each
     # run (one for both apps) keeps nodes from earlier runs out of the captures.
     observer_num = random.randint(0x10000000, 0x7FFFFFFF)
@@ -271,19 +288,28 @@ def run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
         if not drivers:
             raise RuntimeError("no platform could be driven")
 
+        cap = sim.generate(
+            nodes=plan.sim_nodes, days=plan.sim_days, seed=plan.sim_seed, start=start
+        )
+        center = cap.center()
         for platform, driver in drivers.items():
-            cap = sim.generate(
-                nodes=plan.sim_nodes, days=plan.sim_days, seed=plan.sim_seed, start=start
-            )
+            _log(log_path, f"{platform}: app {driver.app}")
+            if plan.reset_apps:
+                driver.reset_app()
+                _log(log_path, f"{platform}: app settings reset")
+            if center is not None:
+                driver.set_location(center[0] / 1e7, center[1] / 1e7)
             status = manager.start(
                 cap,
                 ReplayParams(
                     host="0.0.0.0",
                     port=0,
-                    rate=0.2,
-                    loop=True,
+                    start=anchor - int(plan.stream_hours * 3600),
+                    rate=plan.stream_rate,
+                    loop=False,
                     mdns=False,
                     observer_num=observer_num,
+                    clock_anchor=anchor,
                 ),
             )
             sessions.append(status["id"])
@@ -291,16 +317,25 @@ def run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
             _log(log_path, f"{platform}: replay {status['id']} on port {port}")
             driver.connect(port)
 
+        # Wait for each app to receive the whole capture; the sessions then hold quiet.
         deadline = time.time() + plan.connect_wait_s
         while time.time() < deadline:
             states = [manager.status(sid) for sid in sessions]
-            if all(s.get("connected") and s.get("packets_sent", 0) > 0 for s in states):
+            if all(s.get("packets_sent", 0) >= s.get("packets_total", 1) for s in states):
                 break
+            if any(s.get("ended") and not s.get("connected") for s in states):
+                break  # an app hung up; a non-loop session will not take it back
             time.sleep(1.0)
         for sid, platform in zip(sessions, drivers, strict=True):
             s = manager.status(sid)
-            _log(log_path, f"{platform}: connected={s.get('connected')}")
-        time.sleep(plan.settle_s * 2)  # let both apps finish drawing the node list
+            _log(
+                log_path,
+                f"{platform}: connected={s.get('connected')} "
+                f"sent {s.get('packets_sent')}/{s.get('packets_total')}",
+            )
+            if not s.get("connected"):
+                raise RuntimeError(f"{platform} dropped the replay connection: {s.get('error')}")
+        time.sleep(plan.settle_s * 2)  # let both apps finish writing what they received
 
         if plan.clean_status_bar:
             for driver in drivers.values():
@@ -334,9 +369,10 @@ def run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
     finally:
         for sid in sessions:
             manager.stop(sid)
-        if plan.clean_status_bar:
-            for driver in drivers.values():
-                try:
+        for driver in drivers.values():
+            try:
+                driver.clear_location()
+                if plan.clean_status_bar:
                     driver.reset_status_bar()
-                except Exception as exc:  # cleanup must not mask the job's own error
-                    _log(log_path, f"status bar reset failed: {exc}")
+            except Exception as exc:  # cleanup must not mask the job's own error
+                _log(log_path, f"{driver.name}: cleanup failed: {exc}")

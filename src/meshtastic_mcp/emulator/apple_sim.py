@@ -342,6 +342,26 @@ def reset_status_bar(*, udid: str | None = None) -> None:
     simctl("status_bar", udid or "booted", "clear", check=False)
 
 
+def set_location(lat: float, lon: float, *, udid: str | None = None) -> None:
+    simctl("location", udid or "booted", "set", f"{lat:.7f},{lon:.7f}")
+
+
+def clear_location(*, udid: str | None = None) -> None:
+    simctl("location", udid or "booted", "clear", check=False)
+
+
+def reset_app_prefs(bundle_id: str, *, udid: str | None = None) -> None:
+    """Quit the app and delete its UserDefaults, keeping onboarding marked done.
+
+    Sort, filter and display choices go back to their defaults. Granted permissions
+    and the app's stored data stay.
+    """
+    target = udid or "booted"
+    simctl("terminate", target, bundle_id, check=False)
+    simctl("spawn", target, "defaults", "delete", bundle_id, check=False)
+    simctl("spawn", target, "defaults", "write", bundle_id, "firstLaunch", "-bool", "NO")
+
+
 def open_url(url: str, *, udid: str | None = None) -> None:
     """Open a URL in the simulator, as if tapped: a deep link reaches the installed app."""
     simctl("openurl", udid or "booted", url)
