@@ -1326,8 +1326,14 @@ def _raise_if_failed(result: dict[str, Any], what: str) -> dict[str, Any]:
     mismatch = result.get("upload_port_mismatch")
     if code in (0, None) and not mismatch:
         return result
-    tail = _output_tail(result.get("stderr_tail")) or _output_tail(
-        result.get("stdout_tail") or result.get("log_tail")
+    # Tools put the cause in either stream (adafruit-nrfutil prints it to stdout), so show both.
+    tail = "\n".join(
+        part
+        for part in (
+            _output_tail(result.get("stdout_tail") or result.get("log_tail"), 1000),
+            _output_tail(result.get("stderr_tail"), 500),
+        )
+        if part
     )
     detail = f": {mismatch}" if mismatch else ""
     raise ToolError(f"{what} failed with exit code {code}{detail}\n{tail}".rstrip())

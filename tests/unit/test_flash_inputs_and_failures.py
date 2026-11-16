@@ -188,21 +188,71 @@ def adafruit(monkeypatch, tmp_path):
         return {"exit_code": 0, "stdout": out["stdout"], "stderr": "", "stdout_tail": out["stdout"]}
 
     monkeypatch.setattr(hw_tools, "_run", fake_run)
-    return pkg, runs, out
+    touches: list[str] = []
+    monkeypatch.setattr(hw_tools, "_touch_into_dfu", lambda device: touches.append(device))
+    by_id = tmp_path / "by-id"
+    by_id.mkdir()
+    monkeypatch.setattr(hw_tools, "_BY_ID", by_id)
+    return SimpleNamespace(pkg=pkg, runs=runs, out=out, touches=touches)
 
 
-def test_adafruit_dfu_touches_and_uses_single_bank_in_one_command(adafruit) -> None:
-    pkg, runs, out = adafruit
-    out["stdout"] = "Upgrading target...\nDevice programmed.\n"
-    res = hw_tools.nrfutil_dfu("/dev/x", str(pkg), confirm=True)
+def test_with_by_id_links_the_tool_touches_then_transfers_single_bank(adafruit) -> None:
+    a = adafruit
+    a.out["stdout"] = "Upgrading target...\nDevice programmed.\n"
+    res = hw_tools.nrfutil_dfu("/dev/x", str(a.pkg), confirm=True)
     assert res["exit_code"] == 0
-    assert runs[0][-3:] == ["--singlebank", "-t", "1200"]
+    assert a.touches == ["/dev/x"]
+    assert a.runs[0][-1] == "--singlebank" and "-t" not in a.runs[0]
+
+
+def test_without_by_id_links_adafruit_nrfutil_does_the_touch(
+    adafruit, monkeypatch, tmp_path
+) -> None:
+    a = adafruit
+    monkeypatch.setattr(hw_tools, "_BY_ID", tmp_path / "absent")
+    a.out["stdout"] = "Device programmed.\n"
+    hw_tools.nrfutil_dfu("/dev/x", str(a.pkg), confirm=True)
+    assert a.touches == []
+    assert a.runs[0][-3:] == ["--singlebank", "-t", "1200"]
+
+
+def test_the_touch_drops_dtr_at_1200_and_waits_for_the_bootloader(monkeypatch, tmp_path) -> None:
+    by_id = tmp_path / "by-id"
+    by_id.mkdir()
+    device = tmp_path / "ttyACM0"
+    device.write_text("")
+    (by_id / "usb-app-if00").symlink_to(device)
+    monkeypatch.setattr(hw_tools, "_BY_ID", by_id)
+    events: list[tuple] = []
+
+    class FakeSerial:
+        def __init__(self, port, baud):
+            events.append(("open", port, baud))
+
+        @property
+        def dtr(self):
+            return True
+
+        @dtr.setter
+        def dtr(self, value):
+            events.append(("dtr", value))
+
+        def close(self):
+            events.append(("close",))
+            (by_id / "usb-app-if00").unlink()
+            (by_id / "usb-bootloader-if00").symlink_to(device)
+
+    import serial
+
+    monkeypatch.setattr(serial, "Serial", FakeSerial)
+    hw_tools._touch_into_dfu(str(device))
+    assert events == [("open", str(device), 1200), ("dtr", False), ("close",)]
 
 
 def test_adafruit_dfu_that_never_programmed_is_a_failure(adafruit) -> None:
-    pkg, _, out = adafruit
-    out["stdout"] = "Failed to upgrade target. Error is: No data received on serial port.\n"
-    assert hw_tools.nrfutil_dfu("/dev/x", str(pkg), confirm=True)["exit_code"] == 1
+    a = adafruit
+    a.out["stdout"] = "Failed to upgrade target. Error is: No data received on serial port.\n"
+    assert hw_tools.nrfutil_dfu("/dev/x", str(a.pkg), confirm=True)["exit_code"] == 1
 
 
 def test_nordic_nrfutil_keeps_its_own_arguments(monkeypatch, tmp_path) -> None:
@@ -220,12 +270,13 @@ def test_nordic_nrfutil_keeps_its_own_arguments(monkeypatch, tmp_path) -> None:
 
 
 def test_adafruit_dfu_resolves_a_by_id_link_to_its_device(adafruit, tmp_path) -> None:
-    pkg, runs, out = adafruit
-    out["stdout"] = "Device programmed.\n"
+    a = adafruit
+    a.out["stdout"] = "Device programmed.\n"
     device = tmp_path / "ttyACM0"
     device.write_text("")
     link = tmp_path / "usb-RAKwireless_WisCore_RAK4631_Board-if00"
     link.symlink_to(device)
-    hw_tools.nrfutil_dfu(str(link), str(pkg), confirm=True)
-    port_arg = runs[0][runs[0].index("--port") + 1]
+    hw_tools.nrfutil_dfu(str(link), str(a.pkg), confirm=True)
+    port_arg = a.runs[0][a.runs[0].index("--port") + 1]
     assert port_arg == str(device)
+    assert a.touches == [str(device)]
