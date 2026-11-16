@@ -255,9 +255,12 @@ def _ensure_companion(udid: str) -> None:
         return
     # A companion started by another process (an earlier server, an e2e run) already
     # serves this udid, and a second one exits at once; reuse it when UI calls answer.
-    probe = idb("ui", "describe-all", "--json", udid=udid, timeout=15, check=False)
-    if probe.returncode == 0:
-        return
+    try:
+        probe = idb("ui", "describe-all", "--json", udid=udid, timeout=15, check=False)
+        if probe.returncode == 0:
+            return
+    except AppleSimError:
+        pass  # a stalled probe means no usable companion; start one
     start_companion(udid)
 
 
