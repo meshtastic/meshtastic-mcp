@@ -445,7 +445,13 @@ def prepare_fresh_install(
 # ---------------------------------------------------------------------------
 # Deep links (fast, version-resilient navigation — prefer over UI taps)
 # ---------------------------------------------------------------------------
-def deeplink(path: str, *, serial: str | None = None, package: str | None = None) -> None:
+def deeplink(
+    path: str,
+    *,
+    serial: str | None = None,
+    package: str | None = None,
+    clear_task: bool = False,
+) -> None:
     """Fire a Meshtastic-Android deep link via `am start -a VIEW`.
 
     `path` is the part after the host, e.g. `connections?address=t192.168.1.1:4403`,
@@ -458,7 +464,9 @@ def deeplink(path: str, *, serial: str | None = None, package: str | None = None
     call before the app has completed first-run onboarding: the app applies a
     pending deep-link route once onboarding clears rather than dropping it
     (verified live against 2.8.0 fdroid debug, 2026-07-01) — no need to dismiss
-    onboarding screens first.
+    onboarding screens first. `clear_task` rebuilds the activity, so the screen opens
+    with no scroll or other state left from an earlier visit; the radio connection
+    lives in the service and survives it.
     """
     pkg = package or resolve_package(serial=serial)
     uri = f"{DEEPLINK_SCHEME}/{path.lstrip('/')}"
@@ -478,6 +486,8 @@ def deeplink(path: str, *, serial: str | None = None, package: str | None = None
         "-d",
         uri,
     ]
+    if clear_task:
+        args[3:3] = ["--activity-clear-task"]
     if pkg:
         args.append(pkg)
     adb(*args, serial=serial, check=False)
@@ -630,6 +640,48 @@ def _ui_dump_physical(serial: str) -> list[dict[str, Any]]:
     return _parse_uiautomator_xml(out)
 
 
+def _rect(value: Any) -> list[int] | None:
+    """`"[x1,y1][x2,y2]"` or `"[x,y]"` as a list of ints; a list passes through."""
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str):
+        return None
+    nums = [int(n) for n in re.findall(r"-?\d+", value)]
+    return nums if len(nums) in (2, 4) else None
+
+
+def _flatten_layout(tree: list[Any]) -> list[dict[str, Any]]:
+    """Flatten `android layout` output into the documented element schema.
+
+    The CLI returns one entry per window, each holding a `content` tree; a dialog
+    is its own window. Windows are read top layer first, so the first match for a
+    label is the one on top. A plain element list (older CLIs) is accepted too.
+    """
+    windows = [w for w in tree if isinstance(w, dict) and "content" in w]
+    if not windows:
+        windows = [{"content": tree}]
+    windows.sort(key=lambda w: -int(w.get("layer") or 0))
+    out: list[dict[str, Any]] = []
+    for win in windows:
+        stack = list(reversed(win.get("content") or []))
+        while stack:
+            node = stack.pop()
+            if not isinstance(node, dict):
+                continue
+            el = {k: v for k, v in node.items() if k != "children"}
+            for raw, alias in (("content-desc", "content_desc"), ("resource-id", "resource_id")):
+                if raw in el:
+                    el[alias] = el.pop(raw)
+            for key in ("center", "bounds"):
+                if key in el and (rect := _rect(el[key])) is not None:
+                    el[key] = rect
+            if "type" in win:
+                el["window"] = win["type"]
+            out.append(el)
+            stack.extend(reversed(node.get("children") or []))
+    return out
+
+
 def ui_dump(serial: str | None = None, diff: bool = False) -> list[dict[str, Any]]:
     """Return a parsed UI element list for the target device.
 
@@ -638,9 +690,9 @@ def ui_dump(serial: str | None = None, diff: bool = False) -> list[dict[str, Any
     any failure falls back to the plain paths below. ``diff=True`` bypasses the
     fast path (only ``android layout`` supports it).
 
-    Emulator: uses ``android layout`` (supports --diff).
-    Physical device: uses ``adb exec-out uiautomator dump`` (diff not supported;
-    the full tree is returned and callers can diff themselves).
+    Emulator: uses ``android layout``, flattened across windows (a dialog's
+    elements come first). ``diff`` is ignored: the CLI made ``--diff`` a no-op.
+    Physical device: uses ``adb exec-out uiautomator dump``.
     """
     if not diff and u2.available():
         try:
@@ -652,11 +704,13 @@ def ui_dump(serial: str | None = None, diff: bool = False) -> list[dict[str, Any
     args = ["layout"]
     if serial:
         args += ["--device", serial]
-    if diff:
-        args.append("--diff")
-    out = android(*args).stdout.strip()
     try:
-        return json.loads(out) if out else []
+        out = android(*args, timeout=20.0).stdout.strip()
+    except EmulatorError:
+        # The idle wait never ends behind an animation (a spinner under a dialog).
+        out = android(*args, "--no-idle").stdout.strip()
+    try:
+        return _flatten_layout(json.loads(out)) if out else []
     except json.JSONDecodeError as exc:
         raise EmulatorError(f"layout returned non-JSON (WebView/animation?): {exc}") from exc
 

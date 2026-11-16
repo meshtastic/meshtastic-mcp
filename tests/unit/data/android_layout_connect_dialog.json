@@ -1,0 +1,119 @@
+[
+ {
+  "window-title": "",
+  "type": "SYSTEM",
+  "layer": 1,
+  "bounds": "[0,0][1080,63]",
+  "content": [
+   {
+    "class": "android.widget.TextView",
+    "resource-id": "com.android.systemui:id/clock",
+    "text": "1:31",
+    "content-desc": "1:31 PM",
+    "bounds": "[11,10][115,53]",
+    "center": "[63,31]"
+   },
+   {
+    "class": "android.widget.ImageView",
+    "content-desc": "Fdroid Debug notification: ",
+    "bounds": "[115,0][173,63]",
+    "center": "[144,31]"
+   },
+   {
+    "class": "android.widget.ImageView",
+    "content-desc": "Security & privacy notification: ",
+    "bounds": "[173,0][231,63]",
+    "center": "[202,31]"
+   },
+   {
+    "class": "android.widget.ImageView",
+    "content-desc": "Fdroid Debug notification: ",
+    "bounds": "[231,0][289,63]",
+    "center": "[260,31]"
+   },
+   {
+    "class": "android.widget.ImageView",
+    "content-desc": "Location requests active",
+    "bounds": "[821,2][884,60]",
+    "center": "[852,31]"
+   },
+   {
+    "class": "android.widget.ImageView",
+    "resource-id": "com.android.systemui:id/wifi_signal",
+    "content-desc": "Wifi signal full.",
+    "bounds": "[891,11][930,50]",
+    "center": "[910,30]"
+   },
+   {
+    "class": "android.widget.FrameLayout",
+    "resource-id": "com.android.systemui:id/mobile_combo",
+    "content-desc": "T-Mobile, three bars.",
+    "bounds": "[930,2][969,60]",
+    "center": "[949,31]"
+   },
+   {
+    "class": "android.widget.LinearLayout",
+    "resource-id": "com.android.systemui:id/battery",
+    "content-desc": "Battery 100 percent.",
+    "bounds": "[985,14][1005,48]",
+    "center": "[995,31]"
+   }
+  ]
+ },
+ {
+  "window-title": "",
+  "type": "APPLICATION",
+  "active": true,
+  "focused": true,
+  "layer": 0,
+  "bounds": "[120,842][960,1557]",
+  "content": [
+   {
+    "class": "android.widget.TextView",
+    "text": "Connect to this device?",
+    "bounds": "[183,947][897,1031]",
+    "center": "[540,989]"
+   },
+   {
+    "class": "android.widget.TextView",
+    "text": "A link is asking this app to connect to the device at t10.0.2.2:4499. Only continue if you trust where the link came from.",
+    "bounds": "[183,1073][897,1305]",
+    "center": "[540,1189]"
+   },
+   {
+    "class": "android.view.View",
+    "interactions": [
+     "CLICKABLE",
+     "FOCUSABLE"
+    ],
+    "bounds": "[654,1369][855,1495]",
+    "center": "[754,1432]",
+    "children": [
+     {
+      "class": "android.widget.TextView",
+      "text": "Connect",
+      "bounds": "[686,1405][823,1458]",
+      "center": "[754,1431]"
+     }
+    ]
+   },
+   {
+    "class": "android.view.View",
+    "interactions": [
+     "CLICKABLE",
+     "FOCUSABLE"
+    ],
+    "bounds": "[372,1369][549,1495]",
+    "center": "[460,1432]",
+    "children": [
+     {
+      "class": "android.widget.TextView",
+      "text": "Cancel",
+      "bounds": "[404,1405][517,1458]",
+      "center": "[460,1431]"
+     }
+    ]
+   }
+  ]
+ }
+]
