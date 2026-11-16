@@ -95,3 +95,25 @@ def test_android_reset_refuses_a_release_build(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="not a debug build"):
         driver.reset_app()
     assert shell == []
+
+
+def test_android_map_waits_for_its_tiles(monkeypatch) -> None:
+    from meshtastic_mcp.emulator import avd
+
+    calls: list[str] = []
+    monkeypatch.setattr(avd, "first_emulator_serial", lambda: "emulator-5554")
+    monkeypatch.setattr(avd, "resolve_package", lambda serial=None: "com.geeksville.mesh.debug")
+    monkeypatch.setattr(avd, "deeplink", lambda path, **k: calls.append(f"open {path}"))
+    monkeypatch.setattr(avd, "clear_logcat", lambda **k: calls.append("clear"))
+
+    def poll(token, **k):
+        calls.append(f"poll {k['tags']} {token}")
+        return None
+
+    monkeypatch.setattr(avd, "poll_logcat", poll)
+    driver = ss.AndroidDriver(None)
+    driver.open("nodes")
+    assert driver.wait_ready() is True
+    driver.open("map")
+    assert driver.wait_ready() is False
+    assert calls == ["open nodes", "clear", "open map", "poll ['MapDrawn'] tiles drawn"]

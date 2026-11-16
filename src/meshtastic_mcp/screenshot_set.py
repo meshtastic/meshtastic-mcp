@@ -97,6 +97,7 @@ class AndroidDriver:
             raise RuntimeError("no Meshtastic app is installed on the emulator")
         self.package: str = package
         self.app = package
+        self._awaits_map = False
 
     def _shell(self, *args: str) -> None:
         self._avd.adb("shell", *args, serial=self.serial, check=False)
@@ -155,8 +156,25 @@ class AndroidDriver:
     def reset_status_bar(self) -> None:
         self._shell("am", "broadcast", "-a", "com.android.systemui.demo", "-e", "command", "exit")
 
+    map_drawn_timeout_s = 45.0
+
     def open(self, path: str) -> None:
+        self._awaits_map = path.split("?")[0].strip("/") == "map"
+        if self._awaits_map:
+            self._avd.clear_logcat(serial=self.serial)  # an earlier map's line must not match
         self._avd.deeplink(path, serial=self.serial, package=self.package, clear_task=True)
+
+    def wait_ready(self) -> bool:
+        """Block until the map logs that its tiles are drawn; False on timeout."""
+        if not self._awaits_map:
+            return True
+        line = self._avd.poll_logcat(
+            "tiles drawn",
+            serial=self.serial,
+            tags=["MapDrawn"],
+            timeout=self.map_drawn_timeout_s,
+        )
+        return line is not None
 
     def screenshot(self, out: Path) -> None:
         self._avd.screenshot(out, serial=self.serial)
@@ -212,6 +230,9 @@ class IosDriver:
     def open(self, path: str) -> None:
         self._sim.open_url(f"meshtastic://meshtastic/{path}", udid=self.udid)
         self._sim.dismiss_open_sheet(udid=self.udid)
+
+    def wait_ready(self) -> bool:
+        return True
 
     def screenshot(self, out: Path) -> None:
         self._sim.screenshot(out, udid=self.udid)
@@ -370,6 +391,9 @@ def _run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
                     if path is None:
                         continue
                     driver.open(path)
+                for platform, driver in drivers.items():
+                    if platform in paths and not driver.wait_ready():
+                        _log(log_path, f"{name} {platform}: not ready, capturing anyway")
                 time.sleep(plan.settle_s)
                 for platform, driver in drivers.items():
                     if platform not in paths:
