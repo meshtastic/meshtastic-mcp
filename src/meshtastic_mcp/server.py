@@ -17,12 +17,17 @@ import os
 import tempfile
 import threading
 import time
+from collections.abc import Sequence
 from datetime import UTC
 from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.tools import FunctionTool
+from fastmcp.exceptions import ToolError
+from fastmcp.server.transforms import GetToolNext, Transform
+from fastmcp.tools import Tool
+from fastmcp.utilities.versions import VersionSpec
+from mcp.types import ToolAnnotations
 
 from . import (
     admin,
@@ -698,7 +703,7 @@ def summarize_window(
     try:
         summary = local_model.complete(prompt, system=system, lane=lane, num_predict=400)
     except local_model.LocalModelError as exc:
-        return {"error": str(exc)}
+        raise ToolError(str(exc)) from exc
     return {
         "summary": summary,
         "model": local_model.model(lane),
@@ -728,7 +733,7 @@ def vision_oracle(image_path: str, question: str) -> dict[str, Any]:
     try:
         return local_model.vision_assert(image_path, question)
     except (local_model.LocalModelError, OSError) as exc:
-        return {"error": str(exc)}
+        raise ToolError(str(exc)) from exc
 
 
 @local_tool()
@@ -779,7 +784,7 @@ def triage_window(
     try:
         raw = local_model.complete(prompt, system=system, lane="default", num_predict=160)
     except local_model.LocalModelError as exc:
-        return {"error": str(exc)}
+        raise ToolError(str(exc)) from exc
     bucket, why = "unclear", raw.strip()
     for line in raw.splitlines():
         low = line.strip().lower()
@@ -3184,7 +3189,7 @@ def replay_start(
     try:
         return get_replay_manager().start(cap, params)
     except (replay_engine.PortInUseError, ValueError) as exc:
-        return {"error": str(exc)}
+        raise ToolError(str(exc)) from exc
 
 
 @app.tool()
@@ -3582,20 +3587,19 @@ def cot_relay_start(port: int = 8087, session: str | None = None) -> dict[str, A
             _safe_session_name(session) if session else datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         )
     except ValueError as exc:
-        return {"error": str(exc)}
+        raise ToolError(str(exc)) from exc
     # Hold the lifecycle lock across the None-check → bind → publish so two
     # concurrent starts can't both bind a listener and leak one.
     with _COT_LOCK:
         if _COT_RELAY is not None:
-            return {
-                "error": "a relay is already running; call cot_relay_stop first",
-                **_COT_RELAY.status(),
-            }
+            raise ToolError("a relay is already running; call cot_relay_stop first")
         relay = CotRelay(outdir=_cot_data_dir() / name, port=port)
         try:
             bound = relay.start()
         except OSError as exc:
-            return {"error": f"could not bind port {port}: {exc}. Free it or pick another port."}
+            raise ToolError(
+                f"could not bind port {port}: {exc}. Free it or pick another port."
+            ) from exc
         _COT_RELAY = relay
     return {"started": True, "port": bound, **relay.status()}
 
@@ -3646,16 +3650,15 @@ def atak_fleet_up(
 
     with _ATAK_LOCK:
         if _ATAK_FLEET is not None:
-            return {
-                "error": "a fleet is already up; call atak_fleet_down first",
-                "nodes": [n.__dict__ for n in _ATAK_FLEET.nodes],
-            }
+            raise ToolError(
+                "a fleet is already up; call atak_fleet_status for its nodes, or atak_fleet_down"
+            )
         if _ATAK_UP["phase"] == "bringing_up":
-            return {"error": "a fleet bring-up is already in progress; poll atak_fleet_status"}
+            raise ToolError("a fleet bring-up is already in progress; poll atak_fleet_status")
         if _ATAK_UP["phase"] == "tearing_down":
-            return {
-                "error": "a fleet teardown is in progress; wait for atak_fleet_status phase=idle"
-            }
+            raise ToolError(
+                "a fleet teardown is in progress; wait for atak_fleet_status phase=idle"
+            )
         _ATAK_UP.update(thread=None, phase="bringing_up", error=None)
 
     def _run() -> None:
@@ -3713,16 +3716,15 @@ def atak_fleet_down(delete_clones: bool = False, confirm: bool = False) -> dict[
     from .emulator import atak
 
     if delete_clones and not confirm:
-        return {
-            "error": "delete_clones=True irreversibly removes the cloned AVDs + "
-            "provisioned snapshots; pass confirm=True to proceed.",
-            "confirmation_required": True,
-        }
+        raise ToolError(
+            "delete_clones=True irreversibly removes the cloned AVDs + "
+            "provisioned snapshots; pass confirm=True to proceed."
+        )
     with _ATAK_LOCK:
         if _ATAK_UP["phase"] == "bringing_up":
-            return {"error": "fleet is still bringing up; wait for atak_fleet_status phase=ready"}
+            raise ToolError("fleet is still bringing up; wait for atak_fleet_status phase=ready")
         if _ATAK_UP["phase"] == "tearing_down":
-            return {"error": "a teardown is already in progress"}
+            raise ToolError("a teardown is already in progress")
         fleet = _ATAK_FLEET
         if fleet is None:
             return {"running": False}
@@ -3763,11 +3765,11 @@ def atak_drive_route(
 
     pts = [(float(w[0]), float(w[1])) for w in waypoints]
     if len(pts) < 2:
-        return {"error": "drive_route needs at least 2 waypoints"}
+        raise ToolError("drive_route needs at least 2 waypoints")
     with _ATAK_LOCK:
         existing = _ATAK_DRIVES.get(serial)
         if existing and existing["phase"] == "driving":
-            return {"error": f"{serial} is already driving; atak_drive_stop it first"}
+            raise ToolError(f"{serial} is already driving; atak_drive_stop it first")
         stop = threading.Event()
         state: dict[str, Any] = {
             "thread": None,
@@ -3797,14 +3799,14 @@ def atak_share_item(serial: str, name: str) -> dict[str, Any]:
     """Broadcast an existing ATAK map item (marker, shape, route, R&B, bullseye)
     named `name` to all contacts, driving the UI by view-hierarchy resource-ids:
     Overlay Manager → search → details → send → Broadcast. Blocks ~10-20 s.
-    Returns `{"shared": true, "name", "via": <send control resource-id>}`, or
-    `{"error": ...}` when the item isn't found / has no send control."""
+    Returns `{"shared": true, "name", "via": <send control resource-id>}`, or fails
+    when the item isn't found / has no send control."""
     from .emulator import atak
 
     try:
         return atak.share_item(serial, name)
     except atak.AtakError as exc:
-        return {"error": str(exc)}
+        raise ToolError(str(exc)) from exc
 
 
 @android_tool()
@@ -4288,58 +4290,33 @@ _TITLE_OVERRIDES: dict[str, str] = {
 }
 
 
-def _apply_tool_annotations() -> None:
-    """Apply MCP hint metadata to every registered tool.
-
-    Walks FastMCP's local provider component registry and filters by
-    ``FunctionTool`` type (not key-string prefix), so a future key-scheme
-    change cannot silently leave every tool unannotated. Raises on private-API
-    changes or if zero tools are found to annotate.
-    """
-    try:
-        from mcp.types import ToolAnnotations
-    except ImportError as exc:
-        log.warning("mcp.types.ToolAnnotations not available — skipping: %s", exc)
-        return
-
-    try:
-        components = app.local_provider._components
-    except AttributeError as exc:
-        # FastMCP private API changed. Fail loudly — unprotected tools are a
-        # security regression that must be fixed, not logged and forgotten.
-        log.error(
-            "_apply_tool_annotations: FastMCP private API changed (%s). "
-            "All tools lack annotations and will be treated as destructive/open-world "
-            "by MCP clients. Fix this before deployment.",
-            exc,
-        )
-        raise
-
-    annotated = 0
-    for tool in components.values():
-        if not isinstance(tool, FunctionTool):
-            continue
-        name = tool.name
-        read_only = name in _READ_ONLY
-        title = _TITLE_OVERRIDES.get(name) or name.replace("_", " ").title()
-        tool.annotations = ToolAnnotations(
-            title=title,
-            read_only_hint=read_only,
-            destructive_hint=name in _DESTRUCTIVE,
-            idempotent_hint=read_only or name in _IDEMPOTENT_WRITES,
-            open_world_hint=name in _OPEN_WORLD,
-        )
-        annotated += 1
-
-    if annotated == 0:
-        raise RuntimeError(
-            "_apply_tool_annotations: found zero FunctionTool components in "
-            "local_provider._components — FastMCP private API may have changed. "
-            "All tools would ship unannotated (destructive/open-world defaults)."
-        )
+def _annotations_for(name: str) -> ToolAnnotations:
+    read_only = name in _READ_ONLY
+    return ToolAnnotations(
+        title=_TITLE_OVERRIDES.get(name) or name.replace("_", " ").title(),
+        read_only_hint=read_only,
+        destructive_hint=name in _DESTRUCTIVE,
+        idempotent_hint=read_only or name in _IDEMPOTENT_WRITES,
+        open_world_hint=name in _OPEN_WORLD,
+    )
 
 
-_apply_tool_annotations()
+class _AnnotationTransform(Transform):
+    """Stamp the classification maps' hints onto every tool the server lists or resolves."""
+
+    async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
+        return [t.model_copy(update={"annotations": _annotations_for(t.name)}) for t in tools]
+
+    async def get_tool(
+        self, name: str, call_next: GetToolNext, *, version: VersionSpec | None = None
+    ) -> Tool | None:
+        tool = await call_next(name, version=version)
+        if tool is None:
+            return None
+        return tool.model_copy(update={"annotations": _annotations_for(tool.name)})
+
+
+app.add_transform(_AnnotationTransform())
 
 
 # ---------- MCP resources (readable context, no tool round-trip) -----------
