@@ -13,6 +13,7 @@
 - [AGENTS.md](AGENTS.md): architecture, capability model, rules
 - [CONTRIBUTING](CONTRIBUTING.md): setup + gates
 - [docs/local-models.md](docs/local-models.md): local-model offload (tools, backends, config)
+- [docs/serve.md](docs/serve.md): `meshtastic-mcp serve`, a token-authenticated HTTP server for a shared bench
 - [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md): experimental Kotlin-SDK device-IO backend
 - [docs/vanity.md](docs/vanity.md): vanity NodeNums / app colours — grind (mvgrind), verify, apply
 - [docs/discord.md](docs/discord.md): read-only Discord source tools (`discord_*`) and token setup
