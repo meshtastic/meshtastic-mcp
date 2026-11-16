@@ -2275,3 +2275,38 @@ def test_heartbeat_gets_a_queue_status_reply():
         client.close()
     finally:
         sess.stop()
+
+
+def test_hold_serves_a_client_that_reconnects_after_hanging_up():
+    """A held session plays the window once per connection and outlives a hang-up."""
+    cap = sim.generate(nodes=4, days=1, seed=10, start=1_700_000_000)
+    end = cap.span[1]
+    params = ReplayParams(
+        host="127.0.0.1",
+        port=0,
+        rate=2000,
+        node_delay=0,
+        start=end - 3600,
+        hold=True,
+        local_metrics_interval=0,
+        stats_interval=0,
+    )
+    sess = ReplaySession("hold", cap, params)
+    sess.start()
+    try:
+        for _ in range(2):
+            client = socket.create_connection(("127.0.0.1", sess.params.port), timeout=5)
+            _send_toradio(client, want_config_id=replay_engine.NONCE_DB)
+            deadline = time.time() + 5
+            while not sess.state.pass_complete and time.time() < deadline:
+                time.sleep(0.05)
+            assert sess.state.pass_complete
+            client.close()
+            deadline = time.time() + 5
+            while sess.state.connected and time.time() < deadline:
+                time.sleep(0.05)
+            time.sleep(1.5)  # past the listener's 1 s accept timeout, where it checks for a hang-up
+            assert not sess.state.ended
+        assert sess.state.packets_sent >= 2 * sess.state.packets_total
+    finally:
+        sess.stop()

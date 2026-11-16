@@ -264,6 +264,9 @@ class ReplayParams:
     start: int | None = None  # window start epoch
     end: int | None = None  # window end epoch
     loop: bool = False
+    # Play the window once per connection, then stay connected and quiet; a client
+    # that hangs up or is preempted can reconnect, as with a radio. Ignored with `loop`.
+    hold: bool = False
     limit_nodes: int = 200
     node_delay: float = 0.01  # spacing between NodeInfos during DB download
     fuzz: FuzzConfig | None = None  # fault-injection / adversary layer (None = clean)
@@ -329,6 +332,7 @@ class _SessionState:
     # *achieved* stream rate (self-verifying stress tests). Reset per connection
     # so idle gaps between a disconnect and a reconnect don't dilute the rate.
     stream_started_at: float | None = None
+    pass_complete: bool = False  # the current connection has received the whole window
     stream_base: int = 0
     local_metrics_sent: int = 0  # DEVICE_METRICS telemetry emitted for the local node
     connected: bool = False
@@ -482,7 +486,8 @@ class ReplaySession:
         serving: tuple[socket.socket, threading.Thread] | None = None
         try:
             while not self.state.stop.is_set():
-                if serving is not None and not serving[1].is_alive() and not self.params.loop:
+                keep_listening = self.params.loop or self.params.hold
+                if serving is not None and not serving[1].is_alive() and not keep_listening:
                     break  # the client hung up on its own; a non-loop session is done
                 try:
                     client, addr = self._srv.accept()
@@ -551,6 +556,7 @@ class ReplaySession:
             with contextlib.suppress(OSError):
                 client.close()
             self.state.connected = False
+            self.state.pass_complete = False
             self._client = None
             self._log_event(
                 "client_disconnected",
@@ -1145,6 +1151,7 @@ class ReplaySession:
         # accurate across wraps; a reconnect gets a fresh anchor + baseline so
         # the idle gap between connections doesn't dilute the reading.
         self.state.stream_started_at = time.time()
+        self.state.pass_complete = False
         self.state.stream_base = self.state.packets_sent - self.state.injected
         next_stats_at = (
             time.time() + p.stats_interval if p.stats_interval and p.stats_interval > 0 else None
@@ -1235,7 +1242,9 @@ class ReplaySession:
                 except (OSError, ConnectionError):
                     self._sever(client)
                     return
-                self.state.ended = True
+                self.state.pass_complete = True
+                if not p.hold:
+                    self.state.ended = True
                 return
 
 
@@ -1348,6 +1357,8 @@ def _status_dict(sess: ReplaySession) -> dict[str, Any]:
         "target_rate": round(p.rate, 2) if p.rate else None,
         "achieved_rate": achieved_rate,
         "loop": p.loop,
+        "hold": p.hold,
+        "pass_complete": st.pass_complete,
         "nodes": len(sess.capture.nodes),
         "channels": sess.capture.channels,
         "packets_total": st.packets_total,
