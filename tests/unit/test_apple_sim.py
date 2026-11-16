@@ -52,3 +52,85 @@ def test_find_text_across_accessibility_fields(monkeypatch) -> None:
     monkeypatch.setattr(apple_sim, "idb", lambda *a, **k: _cp('[{"AXValue": "E2E-123"}]'))
     assert apple_sim.find_text("E2E-123") is True
     assert apple_sim.find_text("nope") is False
+
+
+def _record_simctl(monkeypatch) -> list[tuple[str, ...]]:
+    calls: list[tuple[str, ...]] = []
+
+    def fake(*args: str, **kwargs: object) -> subprocess.CompletedProcess:
+        calls.append(args)
+        return _cp("")
+
+    monkeypatch.setattr(apple_sim, "simctl", fake)
+    return calls
+
+
+def test_set_appearance_validates_and_targets_device(monkeypatch) -> None:
+    calls = _record_simctl(monkeypatch)
+    apple_sim.set_appearance("dark", udid="AAA")
+    assert calls == [("ui", "AAA", "appearance", "dark")]
+    try:
+        apple_sim.set_appearance("sepia")
+    except apple_sim.AppleSimError:
+        pass
+    else:
+        raise AssertionError("an unknown appearance must raise")
+    assert len(calls) == 1
+
+
+def test_clean_status_bar_pins_time(monkeypatch) -> None:
+    calls = _record_simctl(monkeypatch)
+    apple_sim.clean_status_bar()
+    args = calls[0]
+    assert args[:3] == ("status_bar", "booted", "override")
+    assert args[args.index("--time") + 1] == "9:41"
+
+
+def test_connect_link_points_at_host_node() -> None:
+    assert (
+        apple_sim.connect_link(4403)
+        == "meshtastic://meshtastic/connections?address=t127.0.0.1:4403"
+    )
+
+
+def test_open_url_uses_simctl_openurl(monkeypatch) -> None:
+    calls = _record_simctl(monkeypatch)
+    apple_sim.open_url("meshtastic://meshtastic/messages", udid="AAA")
+    assert calls == [("openurl", "AAA", "meshtastic://meshtastic/messages")]
+
+
+def test_ensure_booted_without_idb_skips_companion(monkeypatch) -> None:
+    payload = {"devices": {"rt": [{"udid": "BBB", "name": "iPhone 17", "state": "Shutdown"}]}}
+    monkeypatch.setattr(apple_sim, "simctl", lambda *a, **k: _cp(json.dumps(payload)))
+    monkeypatch.setattr(apple_sim, "_run", lambda *a, **k: _cp(""))
+    monkeypatch.setattr(apple_sim, "_xcrun_bin", lambda: "xcrun")
+    monkeypatch.setattr(apple_sim, "has_idb", lambda: False)
+
+    def no_companion(udid: str, **kwargs: object) -> int:
+        raise AssertionError("idb_companion must not start without idb")
+
+    monkeypatch.setattr(apple_sim, "start_companion", no_companion)
+    assert apple_sim.ensure_booted("iPhone") == "BBB"
+
+
+def test_ensure_companion_reuses_a_working_one(monkeypatch) -> None:
+    # A companion another process started already answers UI calls; a second one would exit.
+    monkeypatch.setattr(apple_sim, "has_idb", lambda: True)
+    monkeypatch.setattr(apple_sim.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(apple_sim, "idb", lambda *a, **k: _cp("[]"))
+
+    def no_companion(udid: str, **kwargs: object) -> int:
+        raise AssertionError("must reuse the companion that already answers")
+
+    monkeypatch.setattr(apple_sim, "start_companion", no_companion)
+    apple_sim._ensure_companion("AAA")
+
+
+def test_ensure_companion_starts_one_when_ui_calls_fail(monkeypatch) -> None:
+    started: list[str] = []
+    monkeypatch.setattr(apple_sim, "has_idb", lambda: True)
+    monkeypatch.setattr(apple_sim.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(apple_sim, "idb", lambda *a, **k: _cp("", returncode=1))
+    monkeypatch.setattr(apple_sim, "start_companion", lambda udid, **k: started.append(udid) or 1)
+    apple_sim._ensure_companion("AAA")
+    assert started == ["AAA"]
