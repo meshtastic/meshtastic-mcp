@@ -2145,3 +2145,44 @@ def test_firmware_version_defaults_per_edition():
     # An explicit override always wins, for any edition.
     assert firmware_version_for("DEFCON", "2.7.0.deadbee") == "2.7.0.deadbee"
     assert firmware_version_for("VANILLA", "2.9.9") == "2.9.9"
+
+
+def test_new_client_preempts_an_idle_one():
+    """A second connection takes over from the first, as firmware's APIServerPort does.
+
+    Meshtastic-Apple holds a heartbeat-only socket open and sends want_config on a
+    second one; served in turn, the second sat in the backlog and never got a reply.
+    """
+    cap = sim.generate(nodes=10, days=1, seed=9, start=1_700_000_000)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession(
+        "preempt",
+        cap,
+        ReplayParams(host="127.0.0.1", port=port, rate=300, node_delay=0, loop=False),
+    )
+    sess.start()
+    try:
+        idle = socket.create_connection(("127.0.0.1", port), timeout=5)
+        _send_toradio(idle, heartbeat=mesh_pb2.Heartbeat())
+        deadline = time.time() + 3
+        while time.time() < deadline and not sess.state.connected:
+            time.sleep(0.05)
+        active = socket.create_connection(("127.0.0.1", port), timeout=5)
+        active.settimeout(5)
+        _send_toradio(active, want_config_id=69420)
+        kinds = set()
+        t0 = time.time()
+        while time.time() - t0 < 5 and "config_complete_id" not in kinds:
+            kinds.add(_read_frame(active).WhichOneof("payload_variant"))
+        assert "config_complete_id" in kinds
+        idle.settimeout(5)
+        while chunk := idle.recv(4096):  # drain anything sent before the close
+            assert chunk
+        assert sess.state.ended is False, "a preempted client must not end a non-loop session"
+        active.close()
+        idle.close()
+    finally:
+        sess.stop()

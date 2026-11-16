@@ -426,7 +426,7 @@ class ReplaySession:
             ) from exc
         # port=0 -> OS picks a free port; surface the real one in status
         self.params.port = srv.getsockname()[1]
-        srv.listen(1)
+        srv.listen(4)
         srv.settimeout(1.0)
         self._srv = srv
         t = threading.Thread(target=self._accept_loop, name=f"replay-{self.state.id}", daemon=True)
@@ -471,8 +471,11 @@ class ReplaySession:
     # -- server loop --
     def _accept_loop(self) -> None:
         assert self._srv is not None
+        serving: tuple[socket.socket, threading.Thread] | None = None
         try:
             while not self.state.stop.is_set():
+                if serving is not None and not serving[1].is_alive() and not self.params.loop:
+                    break  # the client hung up on its own; a non-loop session is done
                 try:
                     client, addr = self._srv.accept()
                 except TimeoutError:
@@ -489,34 +492,26 @@ class ReplaySession:
                     with contextlib.suppress(OSError):
                         client.close()
                     continue
-                self.state.client_addr = f"{addr[0]}:{addr[1]}"
-                self.state.connected = True
-                self._client = client
-                self.state.error = None  # clear any prior disconnect's error on a fresh connect
-                self._log_event("client_connected", client=self.state.client_addr)
-                packets_before = self.state.packets_sent
-                try:
-                    self._serve_client(client)
-                except (OSError, ConnectionError) as exc:
-                    self.state.error = str(exc)
-                finally:
-                    try:
-                        client.close()
-                    except OSError:
-                        pass
-                    self.state.connected = False
-                    self._client = None
-                    self._log_event(
-                        "client_disconnected",
-                        client=self.state.client_addr,
-                        error=self.state.error,
-                        packets_sent_this_connection=self.state.packets_sent - packets_before,
-                        packets_sent_total=self.state.packets_sent,
-                        fuzz=self.fuzzer.status() if self.fuzzer is not None else None,
-                    )
-                if not self.params.loop:
-                    break
+                # Like firmware's APIServerPort, a new connection force-closes the
+                # previous one. Apps open a fresh socket before giving up on the old
+                # one, and Meshtastic-Apple holds a heartbeat-only socket open while it
+                # sends want_config on a second, so serving clients in turn hangs it.
+                if serving is not None and serving[1].is_alive():
+                    self._log_event("client_preempted", client=self.state.client_addr)
+                    self._sever(serving[0])
+                    serving[1].join(timeout=10.0)
+                t = threading.Thread(
+                    target=self._run_client,
+                    args=(client, addr),
+                    daemon=True,
+                    name=f"replay-client-{self.state.id}",
+                )
+                serving = (client, t)
+                t.start()
         finally:
+            if serving is not None:
+                self._sever(serving[0])
+                serving[1].join(timeout=10.0)
             try:
                 self._srv.close()
             except OSError:
@@ -532,6 +527,31 @@ class ReplaySession:
             )
             self._log.close()
             self.state.ended = True
+
+    def _run_client(self, client: socket.socket, addr: tuple[str, int]) -> None:
+        self.state.client_addr = f"{addr[0]}:{addr[1]}"
+        self.state.connected = True
+        self._client = client
+        self.state.error = None  # clear any prior disconnect's error on a fresh connect
+        self._log_event("client_connected", client=self.state.client_addr)
+        packets_before = self.state.packets_sent
+        try:
+            self._serve_client(client)
+        except (OSError, ConnectionError) as exc:
+            self.state.error = str(exc)
+        finally:
+            with contextlib.suppress(OSError):
+                client.close()
+            self.state.connected = False
+            self._client = None
+            self._log_event(
+                "client_disconnected",
+                client=f"{addr[0]}:{addr[1]}",
+                error=self.state.error,
+                packets_sent_this_connection=self.state.packets_sent - packets_before,
+                packets_sent_total=self.state.packets_sent,
+                fuzz=self.fuzzer.status() if self.fuzzer is not None else None,
+            )
 
     def _serve_client(self, client: socket.socket) -> None:
         send_lock = threading.Lock()
