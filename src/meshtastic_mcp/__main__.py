@@ -621,7 +621,7 @@ def _cmd_completion(args) -> int:
     """Print a shell completion script for bash or zsh."""
     cmds = (
         "install uninstall doctor skills provision devices boards info nodes "
-        "watch replay capture-stats completion"
+        "watch replay capture-stats serve completion"
     )
     if args.shell == "bash":
         print(f"""# meshtastic-mcp bash completion
@@ -830,7 +830,24 @@ def main(argv=None) -> None:
     comp = sub.add_parser("completion", help="print a shell completion script")
     comp.add_argument("shell", choices=("bash", "zsh"), help="target shell")
 
+    srv = sub.add_parser(
+        "serve",
+        help="serve the MCP surface over HTTP with bearer-token auth (shared bench host)",
+    )
+    srv.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback)")
+    srv.add_argument("--port", type=int, default=8765)
+
     args = p.parse_args(argv)
+
+    if args.cmd == "serve":
+        from meshtastic_mcp import serve as serve_mod
+
+        try:
+            token = serve_mod.load_token()
+        except serve_mod.TokenConfigError as exc:
+            raise SystemExit(f"meshtastic-mcp serve: {exc}") from exc
+        serve_mod.serve(args.host, args.port, token)
+        raise SystemExit(0)
 
     if args.cmd == "doctor":
         from meshtastic_mcp import doctor
