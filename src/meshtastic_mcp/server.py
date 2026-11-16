@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import secrets
 import tempfile
 import threading
@@ -45,6 +46,7 @@ from . import (
     info,
     jobs,
     log_query,
+    nrf52_bootloader,
     registry,
     rf_oracle,
     serial_session,
@@ -3242,6 +3244,191 @@ async def picotool_raw(ctx: Context, args: list[str], confirm: bool = False) -> 
     return await _confirmed_hw_call(ctx, lambda c: hw_tools.picotool_raw(args, confirm=c), confirm)
 
 
+# ---------- nRF52 bootloader UF2 drive --------------------------------------
+# The Meshtastic nRF52 bootloader (meshtastic/nRF52_Bootloader) shows a USB drive in UF2 mode:
+# INFO_UF2.TXT names its version, board and SoftDevice and whether it takes the factory-erase
+# file, and CURRENT.UF2 is the installed app. See nrf52_bootloader.py.
+
+# Application start for each SoftDevice; a UF2 built for the other one does not boot.
+_SD_APP_START = {"S140 6.1.1": 0x26000, "S140 7.3.0": 0x27000}
+_BY_ID_SERIAL = re.compile(r"_([0-9A-Fa-f]{8,})-if\d+$")
+
+
+def _uf2_drive(port: str | None) -> dict[str, Any]:
+    """The mounted UF2 drive for `port`'s board, or the only one mounted when `port` is None."""
+    drives = nrf52_bootloader.find_uf2_drives().get("drives", [])
+    if port is None:
+        if len(drives) == 1:
+            return drives[0]
+        if not drives:
+            raise ToolError(
+                "no UF2 drive is mounted; put the board in UF2 mode with nrf52_enter_uf2"
+            )
+        raise ToolError(f"{len(drives)} UF2 drives are mounted; pass the board's port")
+    # In UF2 mode the app's by-id link is gone, but its name still carries the USB serial the
+    # drive reports.
+    serial = None
+    if not os.path.exists(port):
+        m = _BY_ID_SERIAL.search(os.path.basename(port))
+        serial = m.group(1) if m else None
+    match = nrf52_bootloader.find_drive_for_port(
+        port=None if serial else port, serial_number=serial, drives=drives
+    )
+    if not match.get("ok"):
+        raise ToolError(match.get("error") or f"no mounted UF2 drive belongs to {port}")
+    return cast(dict[str, Any], match["drive"])
+
+
+def _wait_for_uf2_drive(port: str, timeout_s: float = 15.0) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            return _uf2_drive(port)
+        except ToolError:
+            if time.monotonic() > deadline:
+                raise
+        time.sleep(0.5)
+
+
+@app.tool()
+def nrf52_bootloader_info(port: str | None = None) -> dict[str, Any]:
+    """Read the mounted nRF52 bootloader UF2 drive(s): bootloader version, board, SoftDevice,
+    whether it accepts the factory-erase file, and any recorded fault (`Last-Fault`).
+
+    With `port`, returns the drive for that board (matched by USB serial; the app's by-id path
+    works even though it is gone in UF2 mode). Without it, lists every mounted UF2 drive. The
+    board must already be in UF2 mode: `nrf52_enter_uf2`, or double-press reset.
+    """
+    if port is not None:
+        return {"drive": _uf2_drive(port)}
+    return nrf52_bootloader.find_uf2_drives()
+
+
+@app.tool()
+async def nrf52_enter_uf2(
+    ctx: Context, port: str | None = None, confirm: bool = False
+) -> dict[str, Any]:
+    """Reboot an nRF52 node into its bootloader's UF2 drive and return the drive's info.
+
+    Sends `enter_dfu_mode_request`; the drive appears within a couple of seconds. The node
+    stays in UF2 mode until a UF2 is written to it or it is power-cycled (`uhubctl_cycle`).
+    Requires confirm=True, or the user's answer when the client can ask.
+    """
+    pending = await confirm_mod.gate(
+        ctx, f"reboot the node on {port or 'the default port'} into its UF2 bootloader", confirm
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+    resolved = connection.resolve_port(port)
+
+    def _enter() -> dict[str, Any]:
+        sent = admin.enter_uf2_mode(port=resolved, confirm=True)
+        return {**sent, "drive": _wait_for_uf2_drive(resolved)}
+
+    return cast(dict[str, Any], await _off_loop(_enter))
+
+
+@app.tool()
+async def nrf52_backup_firmware(port: str | None = None) -> dict[str, Any]:
+    """Copy CURRENT.UF2 (the installed application) off a board's UF2 drive into the data dir.
+
+    The dump restores byte-for-byte with `nrf52_flash_uf2`. Reads only; the board stays in UF2
+    mode.
+    """
+    drive = _uf2_drive(port)
+    dest = config.mcp_data_dir() / "uf2-backups"
+    return cast(
+        dict[str, Any], await _off_loop(lambda: nrf52_bootloader.backup_current_uf2(drive, dest))
+    )
+
+
+def _check_softdevice(drive: dict[str, Any], uf2_path: str) -> dict[str, Any]:
+    image = nrf52_bootloader.uf2_file_info(uf2_path)
+    softdevice = (drive.get("info") or {}).get("softdevice")
+    start = _SD_APP_START.get(softdevice or "")
+    target = image.get("target_start")
+    if start is not None and target is not None and int(str(target), 16) != start:
+        raise ToolError(
+            f"{os.path.basename(uf2_path)} starts at {target}, but this board's {softdevice} "
+            f"application starts at 0x{start:05X}; it is built for the other SoftDevice."
+        )
+    return image
+
+
+@app.tool(**tasks_mod.task_kwargs())
+async def nrf52_flash_uf2(
+    ctx: Context, uf2_path: str, port: str | None = None, confirm: bool = False
+) -> dict[str, Any]:
+    """Flash an nRF52 board by copying a .uf2 onto its bootloader UF2 drive.
+
+    Several times faster than serial DFU, and no touch or DFU window is involved. The board
+    must be in UF2 mode (`nrf52_enter_uf2`). Refuses a file that is not a UF2 and an image built
+    for the other SoftDevice than the one INFO_UF2.TXT reports. Requires confirm=True, or the
+    user's answer when the client can ask.
+    """
+    drive = _uf2_drive(port)
+    image = _check_softdevice(drive, uf2_path)
+    pending = await confirm_mod.gate(
+        ctx,
+        f"flash {os.path.basename(uf2_path)} onto {drive.get('label')} at {drive.get('mount')}",
+        confirm,
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+    result = await _run_job(
+        ctx,
+        "flashes",
+        str(drive.get("label")),
+        lambda: _uf2_result(nrf52_bootloader.flash_uf2(drive, uf2_path, timeout_s=60)),
+    )
+    return {**result, "image": image}
+
+
+def _uf2_result(res: dict[str, Any]) -> dict[str, Any]:
+    # A copy the bootloader took detaches the drive; anything else did not program the board.
+    ok = res.get("ok") and res.get("outcome") == "detached"
+    return {**res, "exit_code": 0 if ok else 1, "stderr_tail": "" if ok else str(res)}
+
+
+@app.tool()
+async def nrf52_factory_erase(
+    ctx: Context, port: str | None = None, confirm: bool = False
+) -> dict[str, Any]:
+    """Wipe an nRF52 node's saved data (config, node DB, keys, BLE bonds) through its bootloader,
+    leaving the firmware installed.
+
+    Needs a bootloader whose INFO_UF2.TXT has a `Factory-Erase:` line (Meshtastic bootloader
+    0.9.2-OTAFIX2.4 and later); older ones silently ignore the file, so this refuses them. The
+    board must be in UF2 mode and returns to it after the erase. Requires confirm=True, or the
+    user's answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
+    """
+    drive = _uf2_drive(port)
+    if not ((drive.get("info") or {}).get("factory_erase") or {}).get("supported"):
+        version = (drive.get("info") or {}).get("bootloader_version")
+        raise ToolError(
+            f"bootloader {version} on {drive.get('label')} does not accept the factory-erase file"
+        )
+    pending = await confirm_mod.gate(
+        ctx,
+        f"erase all saved data (config, node DB, keys) on {drive.get('label')}",
+        confirm,
+        irreversible=True,
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+
+    def _erase() -> dict[str, Any]:
+        with tempfile.TemporaryDirectory() as tmp:
+            erase = Path(tmp) / "meshtastic_factory_erase.uf2"
+            erase.write_bytes(nrf52_bootloader.factory_erase_uf2_bytes())
+            return nrf52_bootloader.factory_erase(drive, erase)
+
+    result = await _off_loop(_erase)
+    if not result.get("ok"):
+        raise ToolError(f"factory erase did not complete: {result}")
+    return cast(dict[str, Any], result)
+
+
 # ---------- Persistent device-log capture (recorder) ----------------------
 #
 # The recorder is autouse — it starts at server import and continuously
@@ -4488,6 +4675,8 @@ async def vanity_apply(
 # Read-only: observe without changing device/host state.
 _READ_ONLY: set[str] = {
     "doctor",
+    "nrf52_bootloader_info",  # reads INFO_UF2.TXT off a mounted bootloader drive
+    "nrf52_backup_firmware",  # copies CURRENT.UF2 off the drive; writes only the data dir
     "get_environment_doctor_report",
     "get_active_capabilities",
     "android_docs_search",
@@ -4558,6 +4747,9 @@ _READ_ONLY: set[str] = {
 }
 # Destructive: irreversible or device-state-mutating (most are confirm-gated too).
 _DESTRUCTIVE = {
+    "nrf52_enter_uf2",  # reboots the node into its bootloader
+    "nrf52_flash_uf2",  # replaces the installed firmware
+    "nrf52_factory_erase",  # wipes config, node DB and keys
     "build_start",  # launches a pio subprocess; cannot be undone mid-flight
     "flash_start",  # launches a pio upload subprocess
     "vanity_grind_start",  # spawns a GPU grinder; writes private-key material to disk

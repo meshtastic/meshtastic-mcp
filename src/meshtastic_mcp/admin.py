@@ -354,6 +354,19 @@ def reboot(port: str | None = None, confirm: bool = False, seconds: int = 10) ->
     return {"ok": True, "rebooting_in_s": seconds}
 
 
+def enter_uf2_mode(port: str | None = None, confirm: bool = False) -> dict[str, Any]:
+    """Ask an nRF52 node to reboot into its bootloader's UF2 drive (`enter_dfu_mode_request`).
+
+    The bootloader shows a USB drive with INFO_UF2.TXT and CURRENT.UF2 next to a serial port, and
+    boots the app again if no USB host enumerates it within about 3 s. Variants built with
+    `NRF_USE_SERIAL_DFU` land in serial-only DFU instead, with no drive.
+    """
+    _require_confirm(confirm, "enter_uf2_mode")
+    with connect(port=port, linger_s=1.0) as iface:
+        iface.localNode.enterDFUMode()
+    return {"ok": True, "requested": "uf2"}
+
+
 def shutdown(port: str | None = None, confirm: bool = False, seconds: int = 10) -> dict[str, Any]:
     _require_confirm(confirm, "shutdown")
     with connect(port=port) as iface:
