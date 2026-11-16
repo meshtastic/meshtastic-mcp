@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import secrets
 import tempfile
 import threading
 import time
@@ -590,7 +591,8 @@ def screenshot_set_start(
     if out_dir:
         target = _capture_dir(out_dir)
     else:
-        target = jobs.data_dir("screenshot_set") / time.strftime("%Y%m%d-%H%M%S")
+        stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
+        target = jobs.data_dir("screenshot_set") / stamp
     plan = ss.make_plan(
         screens,
         platforms or list(ss.PLATFORMS),

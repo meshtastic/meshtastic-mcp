@@ -13,6 +13,7 @@ Navigation is by deep link, which both apps accept for the screens in `SCREENS`.
 from __future__ import annotations
 
 import random
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -252,7 +253,10 @@ def make_plan(
     bad = [a for a in appearances if a not in APPEARANCES]
     if bad or not appearances:
         raise ValueError(f"appearances must be a non-empty subset of {APPEARANCES}")
-    return Plan([resolve_screen(s) for s in screens], platforms, appearances, out_dir, **kwargs)
+    resolved = [resolve_screen(s) for s in screens]
+    if not any(p in paths for _, paths in resolved for p in platforms):
+        raise ValueError(f"no screen has a path for platforms {platforms}")
+    return Plan(resolved, platforms, appearances, out_dir, **kwargs)
 
 
 def _log(log_path: Path, msg: str) -> None:
@@ -260,8 +264,22 @@ def _log(log_path: Path, msg: str) -> None:
         f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
 
 
+_RUN_LOCK = threading.Lock()
+
+
 def run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
     """Job body: serve the mesh, connect each app, capture every screen and appearance."""
+    # Runs share the emulator and simulator, so a second run waits for the first.
+    if not _RUN_LOCK.acquire(blocking=False):
+        _log(log_path, "waiting for another screenshot_set run")
+        _RUN_LOCK.acquire()
+    try:
+        _run(plan, state, log_path)
+    finally:
+        _RUN_LOCK.release()
+
+
+def _run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
     from . import jobs
     from .replay import ReplayParams, get_manager, sim
 

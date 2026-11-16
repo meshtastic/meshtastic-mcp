@@ -695,6 +695,8 @@ def _flatten_layout(tree: list[Any]) -> list[dict[str, Any]]:
             for key in ("center", "bounds"):
                 if key in el and (rect := _rect(el[key])) is not None:
                     el[key] = rect
+            if isinstance(el.get("interactions"), list):
+                el["interactions"] = [str(i).lower() for i in el["interactions"]]
             if "type" in win:
                 el["window"] = win["type"]
             out.append(el)

@@ -63,6 +63,8 @@ def test_ui_dump_flattens_windows_with_the_dialog_reachable(monkeypatch) -> None
     assert connect["bounds"] == [686, 1405, 823, 1458]
     assert connect["window"] == "APPLICATION"
     assert "children" not in connect
+    button = next(el for el in els if el.get("center") == [754, 1432])
+    assert button["interactions"] == ["clickable", "focusable"]
     clock = next(el for el in els if el.get("resource_id") == "com.android.systemui:id/clock")
     assert clock["content_desc"]
 

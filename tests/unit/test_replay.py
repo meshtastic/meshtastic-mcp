@@ -2188,6 +2188,46 @@ def test_new_client_preempts_an_idle_one():
         sess.stop()
 
 
+def test_a_preempted_connection_leaves_its_successor_connected():
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    sess = ReplaySession("own", cap, ReplayParams(host="127.0.0.1", port=0))
+    successor = object()
+
+    def serve(_client):
+        sess._client = successor  # a newer connection took over while this one was busy
+        sess.state.connected = True
+        raise OSError("severed")
+
+    sess._serve_client = serve  # type: ignore[method-assign]
+    sess._run_client(socket.socket(), ("127.0.0.1", 1))
+    assert sess._client is successor
+    assert sess.state.connected is True
+
+
+def test_an_empty_window_completes_its_pass():
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    sess = ReplaySession("empty", cap, ReplayParams(host="127.0.0.1", port=0, hold=True))
+    sess.window = []
+    sess._stream(lambda fr: None, None)
+    assert sess.state.pass_complete is True
+    assert sess.state.ended is False
+
+
+def test_injected_items_survive_a_dead_connection():
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    sess = ReplaySession("requeue", cap, ReplayParams(host="127.0.0.1", port=0))
+
+    def dead(fr):
+        raise ConnectionError("closed")
+
+    sess.inject_fromradio([mesh_pb2.FromRadio()])
+    sess._inject_fromradio_loop(dead)
+    sess.inject([mesh_pb2.MeshPacket()])
+    sess._inject_loop(dead)
+    assert sess._inject_fr_q.qsize() == 1
+    assert sess._inject_q.qsize() == 1
+
+
 def test_local_telemetry_comes_from_the_sessions_own_node():
     """A session with its own observer_num must not send telemetry as the default node.
 

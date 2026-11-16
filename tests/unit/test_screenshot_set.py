@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -52,6 +54,33 @@ def test_make_plan_validates_platforms_and_appearances(tmp_path: Path) -> None:
         ss.make_plan(["nodes"], ["ios"], ["sepia"], tmp_path)
     with pytest.raises(ValueError):
         ss.make_plan([], ["ios"], ["light"], tmp_path)
+
+
+def test_make_plan_rejects_screens_with_no_path_for_the_platforms(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        ss.make_plan([{"name": "map", "ios": "map"}], ["android"], ["light"], tmp_path)
+
+
+def test_runs_wait_for_each_other(monkeypatch, tmp_path: Path) -> None:
+    active: list[int] = []
+    overlap: list[bool] = []
+
+    def fake_run(plan, state, log_path) -> None:
+        active.append(1)
+        overlap.append(len(active) > 1)
+        time.sleep(0.2)
+        active.pop()
+
+    monkeypatch.setattr(ss, "_run", fake_run)
+    plan = ss.make_plan(["nodes"], ["android"], ["light"], tmp_path)
+    threads = [
+        threading.Thread(target=ss.run, args=(plan, {}, tmp_path / f"{i}.log")) for i in range(2)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert overlap == [False, False]
 
 
 def test_android_reset_refuses_a_release_build(monkeypatch) -> None:

@@ -555,9 +555,11 @@ class ReplaySession:
         finally:
             with contextlib.suppress(OSError):
                 client.close()
-            self.state.connected = False
-            self.state.pass_complete = False
-            self._client = None
+            # A preempted connection that outlived its join must not clear its successor's state.
+            if self._client is client:
+                self.state.connected = False
+                self.state.pass_complete = False
+                self._client = None
             self._log_event(
                 "client_disconnected",
                 client=f"{addr[0]}:{addr[1]}",
@@ -1062,6 +1064,7 @@ class ReplaySession:
             try:
                 send(fr)
             except (OSError, ConnectionError):
+                self._inject_fr_q.put(fr)  # leave it for the live connection
                 return
             self.state.packets_sent += 1
             self.state.injected += 1
@@ -1098,6 +1101,7 @@ class ReplaySession:
                 try:
                     send(fr)
                 except (OSError, ConnectionError):
+                    self._inject_q.put((mp, ch_name, fuzz))  # leave it for the live connection
                     return
                 self.state.packets_sent += 1
                 self.state.injected += 1
@@ -1122,6 +1126,10 @@ class ReplaySession:
         p = self.params
         pkts = self.window
         if not pkts:
+            if not p.loop:
+                self.state.pass_complete = True
+                if not p.hold:
+                    self.state.ended = True
             return
         mp = mesh_pb2.MeshPacket()
         fixed_delay = (1.0 / p.rate) if p.rate else None
