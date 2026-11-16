@@ -46,6 +46,7 @@ from . import (
     registry,
     rf_oracle,
     serial_session,
+    toolsets,
     vanity,
 )
 from . import (
@@ -88,6 +89,7 @@ from . import __version__ as _pkg_version  # noqa: E402
 # Report our package version in the MCP handshake; otherwise the SDK falls back to
 # advertising its own version (`pkg_version("mcp")`) as the server version.
 app = FastMCP("meshtastic-mcp", version=_pkg_version)
+app.add_transform(toolsets.ToolsetTransform(os.environ, lambda: _READ_ONLY))
 
 # Capability detection drives conditional tool registration. The portable core always
 # registers; firmware-coupled tools (build/flash/boards/userprefs) register only when a
@@ -3998,7 +4000,7 @@ def vanity_apply(
 # call sites by hand. See https://modelcontextprotocol.io (Tool annotations).
 
 # Read-only: observe without changing device/host state.
-_READ_ONLY = {
+_READ_ONLY: set[str] = {
     "doctor",
     "get_environment_doctor_report",
     "get_active_capabilities",
