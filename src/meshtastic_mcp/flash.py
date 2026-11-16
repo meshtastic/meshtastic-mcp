@@ -814,7 +814,7 @@ def build_start(
             state["artifacts"] = [str(p) for p in _artifacts_for(env)]
             state["status"] = "done" if result.returncode == 0 else "failed"
 
-    out = jobs.start("builds", env, _body)
+    out = jobs.start("builds", env, _body, cancellable=True)
     # Back-compat alias: callers/tests historically read build_id.
     out["build_id"] = out["job_id"]
     return out

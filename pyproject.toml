@@ -38,8 +38,11 @@ inject = ["cryptography>=42.0"]
 # ~100x faster hierarchy dumps, Unicode-safe input, atomic find-then-tap. Import-guarded;
 # without it every driving helper falls back to plain adb.
 android-fast = ["uiautomator2>=3.0"]
+# Background MCP tasks (`task=True` tools such as `build`). Without it those tools run inline.
+tasks = ["fastmcp[tasks]>=4.1,<5"]
 # Hardware test harness (pytest + live TUI).
 test = [
+  "fastmcp[tasks]>=4.1,<5",
   "pytest>=8",
   "pytest-html>=4",
   "pytest-reportlog>=0.4",

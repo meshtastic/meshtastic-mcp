@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
-from . import config
+from . import config, jobs
 
 # 10 MB matches the reference impl (jl-codes/platformio-mcp). Build output can
 # be hundreds of KB; we'd rather keep it in memory than truncate.
@@ -121,6 +121,28 @@ def _run_capturing(
     if extra_env:
         env = {**os.environ, **extra_env}
 
+    interruptible = jobs.cancellable_job_running()
+
+    if log_path is None and line_cb is None and interruptible:
+        # A cancellable job gets its own process group so `jobs.cancel` stops pio's children too.
+        proc = subprocess.Popen(
+            list(argv),
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            start_new_session=True,
+        )
+        jobs.register_process(proc)
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
+        return (proc.returncode, out or "", err or "", time.monotonic() - t0)
+
     if log_path is None and line_cb is None:
         # Fast path — unchanged.
         completed = subprocess.run(
@@ -160,7 +182,10 @@ def _run_capturing(
         text=True,
         bufsize=1,  # line-buffered
         env=env,
+        start_new_session=interruptible,
     )
+    if interruptible:
+        jobs.register_process(proc)
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
     log_lock = threading.Lock()

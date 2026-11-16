@@ -63,6 +63,7 @@ from . import (
     pa_sweep as pa_sweep_mod,
 )
 from . import sdk_cli as sdk_cli_mod
+from . import tasks as tasks_mod
 from . import userprefs as userprefs_mod
 from .recorder import get_recorder
 from .replay import ReplayParams
@@ -89,6 +90,7 @@ from . import __version__ as _pkg_version  # noqa: E402
 # Report our package version in the MCP handshake; otherwise the SDK falls back to
 # advertising its own version (`pkg_version("mcp")`) as the server version.
 app = FastMCP("meshtastic-mcp", version=_pkg_version)
+tasks_mod.install(app)
 app.add_transform(toolsets.ToolsetTransform(os.environ, lambda: _READ_ONLY))
 
 # Capability detection drives conditional tool registration. The portable core always
@@ -1225,8 +1227,8 @@ def build_poll(build_id: str, tail_lines: int = 50) -> dict[str, Any]:
     return flash.build_poll(build_id, tail_lines=tail_lines)
 
 
-@firmware_tool()
-def build(
+@firmware_tool(**tasks_mod.task_kwargs())
+async def build(
     env: str,
     with_manifest: bool = True,
     userprefs: dict[str, Any] | None = None,
@@ -1234,8 +1236,12 @@ def build(
 ) -> dict[str, Any]:
     """Build firmware for one env via `pio run -e <env>`.
 
+    Runs as a background task for clients that support MCP tasks (needs the `[tasks]` extra on the
+    server); other clients block until it finishes, so prefer `build_start` + `build_poll` there.
+    Cancelling the task stops the build. The same job is pollable with `build_poll(job_id)`.
+
     Returns exit_code, duration, artifact paths under .pio/build/<env>/, and
-    tails of stdout/stderr (last 200 lines each). with_manifest=True adds the
+    the tail of the build log (last 200 lines). with_manifest=True adds the
     mtjson target which produces an .mt.json manifest alongside the firmware.
 
     `userprefs` (optional): dict of `USERPREFS_<KEY>: value` baked into this
@@ -1251,12 +1257,23 @@ def build(
     `telemetry_timeline(field="free_heap")` can read alongside the normal
     ~60 s LocalStats packets. Pair with `/leakhunt` for classification.
     """
-    return flash.build(
+    started = flash.build_start(
         env,
         with_manifest=with_manifest,
         userprefs_overrides=userprefs,
         build_flags=build_flags,
     )
+    final = await jobs.wait(started["job_id"], tail_lines=200)
+    return {
+        "job_id": final["job_id"],
+        "status": final["status"],
+        "exit_code": final["exit_code"],
+        "artifacts": final["artifacts"],
+        "duration_s": final["duration_s"],
+        "log_tail": final["log_tail"],
+        "worker_error": final["worker_error"],
+        "build_flags": dict(build_flags) if build_flags else None,
+    }
 
 
 @firmware_tool()

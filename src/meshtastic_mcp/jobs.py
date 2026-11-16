@@ -16,6 +16,10 @@ restart, which `poll()` says out loud when an id is unknown.
 
 from __future__ import annotations
 
+import asyncio
+import os
+import signal
+import subprocess
 import threading
 import time
 import uuid
@@ -29,6 +33,33 @@ _active: dict[str, dict[str, Any]] = {}
 LOCK = threading.Lock()
 """Guards every mutation of a job's state dict — worker bodies included."""
 
+_ctx = threading.local()
+
+
+def cancellable_job_running() -> bool:
+    """True on a worker thread whose job was started with `cancellable=True`."""
+    state = getattr(_ctx, "state", None)
+    return bool(state and state.get("cancellable"))
+
+
+def register_process(proc: subprocess.Popen[str]) -> None:
+    """Let `cancel` terminate `proc`. A job thread's subprocess calls this right after spawn."""
+    state = getattr(_ctx, "state", None)
+    if state is None:
+        return
+    with LOCK:
+        state["proc"] = proc
+        requested = state.get("cancel_requested", False)
+    if requested:
+        _terminate(proc)
+
+
+def _terminate(proc: subprocess.Popen[str]) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+
 
 def data_dir(kind: str) -> Path:
     """Log/output directory for jobs of `kind` ("builds", "flashes", "grinds")."""
@@ -41,12 +72,17 @@ def start(
     kind: str,
     label: str,
     worker_body: Callable[[dict[str, Any], Path], None],
+    *,
+    cancellable: bool = False,
 ) -> dict[str, Any]:
     """Launch `worker_body(state, log_path)` in a daemon thread, tracked by job_id.
 
     `kind` names the log subdir; `label` is the human-readable subject of the
     job (a pio env, a grind pattern). `worker_body` owns the actual work and
     updates `state` under `LOCK`.
+
+    `cancellable=True` marks a job that is safe to interrupt (a build); `cancel` refuses the rest
+    (a flash must not stop mid-write).
     """
     job_id = uuid.uuid4().hex[:12]
     log_path = data_dir(kind) / f"{job_id}.log"
@@ -61,11 +97,13 @@ def start(
         "exit_code": None,
         "artifacts": [],
         "log_path": str(log_path),
+        "cancellable": cancellable,
     }
     with LOCK:
         _active[job_id] = state
 
     def _run() -> None:
+        _ctx.state = state
         try:
             worker_body(state, log_path)
         except Exception as exc:
@@ -74,6 +112,13 @@ def start(
                 state["status"] = "failed"
                 state["finished_at"] = time.time()
                 state["error"] = str(exc)
+        finally:
+            _ctx.state = None
+            with LOCK:
+                state["proc"] = None
+                if state.get("cancel_requested") and state["status"] == "failed":
+                    state["status"] = "cancelled"
+                state["settled"] = True
 
     threading.Thread(target=_run, daemon=True, name=f"{kind}-{job_id}").start()
     return {"job_id": job_id, "status": "running", "log_path": str(log_path)}
@@ -108,6 +153,49 @@ def poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
             "log_tail": log_tail,
             "log_path": state["log_path"],
         }
+
+
+def cancel(job_id: str) -> dict[str, Any]:
+    """Ask a cancellable running job to stop. Non-cancellable jobs keep running and say so."""
+    with LOCK:
+        state = _active.get(job_id)
+        if state is None:
+            return {"error": f"Unknown job_id {job_id!r} (only this session's jobs are tracked)."}
+        status = state["status"]
+        if status != "running":
+            return {"job_id": job_id, "status": status, "cancelled": False}
+        if not state.get("cancellable"):
+            return {
+                "job_id": job_id,
+                "status": status,
+                "cancelled": False,
+                "reason": f"a {state['kind']} job cannot be interrupted safely; wait for it",
+            }
+        state["cancel_requested"] = True
+        proc = state.get("proc")
+    if proc is not None:
+        _terminate(proc)
+    return {"job_id": job_id, "status": "running", "cancelled": True}
+
+
+async def wait(job_id: str, poll_s: float = 0.5, tail_lines: int = 50) -> dict[str, Any]:
+    """Await a job's terminal status and return `poll`'s view of it.
+
+    If the awaiting task is cancelled, a cancellable job is cancelled too; any other job keeps
+    running and stays pollable by `job_id`.
+    """
+    try:
+        while True:
+            with LOCK:
+                state = _active.get(job_id)
+                settled = state is None or state.get("settled", False)
+            if settled:
+                break
+            await asyncio.sleep(poll_s)
+    except asyncio.CancelledError:
+        cancel(job_id)
+        raise
+    return poll(job_id, tail_lines=tail_lines)
 
 
 def state_of(job_id: str) -> dict[str, Any] | None:
