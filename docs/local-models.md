@@ -24,8 +24,8 @@ a plain install is unaffected.
 
 ## Tools
 
-All register only with a reachable backend, return the model used, and degrade to `{"error": …}`
-on transport failure rather than throwing.
+All register only with a reachable backend and return the model used. A backend failure is a
+tool error (`isError`) carrying the message.
 
 - **`summarize_window(start, end, focus, lane)`** — distills a recorder window
   (`logs+packets+events`) into a terse bullet summary. The window JSON goes to the local GPU; the

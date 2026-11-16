@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 
@@ -19,22 +21,17 @@ def server():
 
 
 def _registered_tools(app) -> dict[str, object]:
-    return {
-        tool.name: tool
-        for key, tool in app.local_provider._components.items()
-        if key.startswith("tool:")
-    }
+    return {tool.name: tool for tool in asyncio.run(app.list_tools())}
 
 
 def _component_uris(app, kind: str) -> set[str]:
-    # Keys are "{kind}:{identifier}@{version}" (version may be empty → trailing "@").
-    # Strip only the final "@version" delimiter so identifiers containing "@" stay intact.
-    prefix = f"{kind}:"
-    return {
-        entry[len(prefix) :].rsplit("@", 1)[0] if "@" in entry else entry
-        for entry in (str(k) for k in app.local_provider._components)
-        if entry.startswith(prefix)
-    }
+    if kind == "resource":
+        return {str(r.uri) for r in asyncio.run(app.list_resources())}
+    if kind == "template":
+        return {t.uri_template for t in asyncio.run(app.list_resource_templates())}
+    if kind == "prompt":
+        return {p.name for p in asyncio.run(app.list_prompts())}
+    raise ValueError(kind)
 
 
 def test_android_docs_tools_registered_and_readonly(server) -> None:
@@ -47,7 +44,7 @@ def test_android_docs_tools_registered_and_readonly(server) -> None:
     for name in ("android_docs_search", "android_docs_fetch"):
         assert name in tools, f"{name} not registered"
         ann = tools[name].annotations
-        assert ann is not None and ann.readOnlyHint and ann.openWorldHint
+        assert ann is not None and ann.read_only_hint and ann.open_world_hint
 
 
 def test_android_driving_tools_registered(server) -> None:
@@ -71,9 +68,9 @@ def test_android_driving_tools_registered(server) -> None:
     for name in expected_read_only | expected_destructive:
         assert name in tools, f"{name} not registered"
     for name in expected_read_only:
-        assert tools[name].annotations.readOnlyHint, f"{name} should be read-only"
+        assert tools[name].annotations.read_only_hint, f"{name} should be read-only"
     for name in expected_destructive:
-        assert tools[name].annotations.destructiveHint, f"{name} should be destructive"
+        assert tools[name].annotations.destructive_hint, f"{name} should be destructive"
 
 
 @pytest.mark.parametrize("bad", ["../escape", "/abs/path", "a/b", "..", ".", "", "x\x00y"])

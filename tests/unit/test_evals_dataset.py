@@ -9,6 +9,7 @@ agents against a tool that no longer exists).
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import pathlib
 
@@ -23,11 +24,7 @@ def known_tools():
 
     # Union of registered tools + all capability-gated tools so the guard is
     # valid regardless of this host's active capabilities.
-    registered = {
-        tool.name
-        for key, tool in server.app.local_provider._components.items()
-        if str(key).startswith("tool:")
-    }
+    registered = {tool.name for tool in asyncio.run(server.app.list_tools())}
     return registered | set(server._FIRMWARE_TOOLS) | set(server._ANDROID_TOOLS)
 
 

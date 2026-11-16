@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import urllib.error
 from typing import Any
@@ -650,18 +651,17 @@ TOOLS = {
 def test_server_registers_discord_tools_when_token_present() -> None:
     from meshtastic_mcp import server
 
-    tools = {
-        tool.name: tool
-        for key, tool in server.app.local_provider._components.items()
-        if key.startswith("tool:")
-    }
+    tools = {tool.name: tool for tool in asyncio.run(server.app.list_tools())}
     if not server.CAPS.discord:
         assert not (TOOLS & set(tools))
         pytest.skip("discord capability inactive — tools not registered")
     for n in TOOLS:
         ann = tools[n].annotations
         assert (
-            ann is not None and ann.readOnlyHint and ann.openWorldHint and not ann.destructiveHint
+            ann is not None
+            and ann.read_only_hint
+            and ann.open_world_hint
+            and not ann.destructive_hint
         )
     assert "trust" in (tools["discord_search"].description or "")
 

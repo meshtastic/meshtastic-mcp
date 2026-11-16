@@ -13,6 +13,8 @@ Runs in core-only mode (the portable unit tier), so it only asserts over
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 
@@ -31,11 +33,7 @@ def server():
 
 
 def _tools(server):
-    return {
-        tool.name: tool
-        for key, tool in server.app.local_provider._components.items()
-        if str(key).startswith("tool:")
-    }
+    return {tool.name: tool for tool in asyncio.run(server.app.list_tools())}
 
 
 def test_every_registered_tool_is_annotated(server):
@@ -53,8 +51,8 @@ def test_destructive_core_tools_carry_destructive_hint(server):
     for name in ("reboot", "factory_reset", "set_config", "set_owner"):
         assert name in tools, f"{name} expected to be registered (core)"
         ann = tools[name].annotations
-        assert ann.destructiveHint is True, f"{name} must be destructiveHint=True"
-        assert ann.readOnlyHint is False, f"{name} must not be readOnlyHint"
+        assert ann.destructive_hint is True, f"{name} must be destructiveHint=True"
+        assert ann.read_only_hint is False, f"{name} must not be readOnlyHint"
 
 
 def test_read_only_core_tools_carry_read_only_hint(server):
@@ -62,8 +60,8 @@ def test_read_only_core_tools_carry_read_only_hint(server):
     for name in ("list_devices", "device_info", "list_nodes"):
         assert name in tools, f"{name} expected to be registered (core)"
         ann = tools[name].annotations
-        assert ann.readOnlyHint is True, f"{name} must be readOnlyHint=True"
-        assert ann.destructiveHint is False, f"{name} must not be destructiveHint"
+        assert ann.read_only_hint is True, f"{name} must be readOnlyHint=True"
+        assert ann.destructive_hint is False, f"{name} must not be destructiveHint"
 
 
 def test_annotation_sets_have_no_contradiction(server):
@@ -85,13 +83,15 @@ def test_applied_annotations_match_classification_maps(server):
     # the fail-open (annotations present but wrong) and map/registry drift.
     for name, tool in _tools(server).items():
         ann = tool.annotations
-        assert ann.readOnlyHint == (name in server._READ_ONLY), f"{name}: readOnlyHint mismatch"
-        assert ann.destructiveHint == (name in server._DESTRUCTIVE), (
+        assert ann.read_only_hint == (name in server._READ_ONLY), f"{name}: readOnlyHint mismatch"
+        assert ann.destructive_hint == (name in server._DESTRUCTIVE), (
             f"{name}: destructiveHint mismatch"
         )
-        assert ann.openWorldHint == (name in server._OPEN_WORLD), f"{name}: openWorldHint mismatch"
+        assert ann.open_world_hint == (name in server._OPEN_WORLD), (
+            f"{name}: openWorldHint mismatch"
+        )
         expected_idempotent = (name in server._READ_ONLY) or (name in server._IDEMPOTENT_WRITES)
-        assert ann.idempotentHint == expected_idempotent, (
+        assert ann.idempotent_hint == expected_idempotent, (
             f"{name}: idempotentHint mismatch (expected {expected_idempotent})"
         )
 
@@ -111,8 +111,8 @@ def test_set_config_is_idempotent(server):
     tools = _tools(server)
     assert "set_config" in tools
     ann = tools["set_config"].annotations
-    assert ann.idempotentHint is True, "set_config should be idempotentHint=True"
-    assert ann.destructiveHint is True, "set_config must remain destructiveHint=True"
+    assert ann.idempotent_hint is True, "set_config should be idempotentHint=True"
+    assert ann.destructive_hint is True, "set_config must remain destructiveHint=True"
 
 
 def test_logs_and_packets_window_are_open_world(server):
@@ -145,5 +145,5 @@ def test_destructive_hint_survives_to_the_wire(server):
             return {t.name: t.annotations for t in await c.list_tools()}
 
     ann = asyncio.run(go())
-    assert ann["reboot"].destructiveHint is True
-    assert ann["list_devices"].readOnlyHint is True
+    assert ann["reboot"].destructive_hint is True
+    assert ann["list_devices"].read_only_hint is True
