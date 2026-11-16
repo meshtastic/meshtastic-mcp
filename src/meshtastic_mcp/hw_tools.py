@@ -30,6 +30,14 @@ class ToolError(RuntimeError):
     pass
 
 
+class ConfirmRequired(ToolError):
+    """A destructive call was made without `confirm=True`; raised before any side effect."""
+
+    def __init__(self, what: str) -> None:
+        super().__init__(f"{what} is destructive and requires confirm=True.")
+        self.what = what
+
+
 def _run(
     binary: Path,
     args: Sequence[str],
@@ -62,7 +70,7 @@ def _run(
 
 def _require_confirm(confirm: bool, what: str) -> None:
     if not confirm:
-        raise ToolError(f"{what} is destructive and requires confirm=True.")
+        raise ConfirmRequired(what)
 
 
 # ---------- esptool --------------------------------------------------------

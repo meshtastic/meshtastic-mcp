@@ -198,6 +198,38 @@ async def wait(job_id: str, poll_s: float = 0.5, tail_lines: int = 50) -> dict[s
     return poll(job_id, tail_lines=tail_lines)
 
 
+async def run_sync(
+    kind: str,
+    label: str,
+    fn: Callable[[], dict[str, Any]],
+    *,
+    cancellable: bool = False,
+) -> dict[str, Any]:
+    """Run a blocking function as a tracked job and return its result with the `job_id`.
+
+    The job stays pollable by `job_id` if the awaiting task is cancelled. A function that raises
+    makes the job `failed`, and this raises `RuntimeError` with its message.
+    """
+
+    def _body(state: dict[str, Any], _log_path: Path) -> None:
+        result = fn()
+        with LOCK:
+            state["result"] = result
+            state["exit_code"] = 0
+            state["finished_at"] = time.time()
+            state["status"] = "done"
+
+    started = start(kind, label, _body, cancellable=cancellable)
+    job_id = started["job_id"]
+    final = await wait(job_id)
+    if final.get("status") != "done":
+        raise RuntimeError(
+            final.get("worker_error") or f"{kind} job {job_id} {final.get('status')}"
+        )
+    state = state_of(job_id) or {}
+    return {**state["result"], "job_id": job_id}
+
+
 def state_of(job_id: str) -> dict[str, Any] | None:
     """The raw mutable state dict for `job_id` (read/update under `LOCK`)."""
     with LOCK:

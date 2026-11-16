@@ -177,7 +177,11 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   `confirm.gate(ctx, ...)` before taking any lock or starting any job: without `confirm=True` a
   client that declared elicitation asks the human, and one that did not gets the `confirm=True`
   refusal. `MESHTASTIC_MCP_CONFIRM=human` also asks for tools gated `irreversible=True`
-  (`factory_reset` so far), because an agent can pass `confirm=True` for itself.
+  (`factory_reset`, `erase_and_flash`, `vanity_apply`, `atak_fleet_down` with `delete_clones`, and
+  the destructive esptool/nrfutil/picotool subcommands), because an agent can pass `confirm=True`
+  for itself. The `hw_tools` calls probe with `confirm=False` and ask only when they refuse, so a
+  harmless subcommand never prompts. `pio_flash`, `erase_and_flash` and `update_flash` run their
+  blocking function as a `flashes` job awaited by `jobs.run_sync`.
 - **Prompt injection / lethal trifecta:** `logs_window` and `packets_window` return
   user-authored content from remote mesh nodes (untrusted). `android_ui_dump`,
   `android_screenshot`, and `android_read_logcat` carry the same risk one hop removed —

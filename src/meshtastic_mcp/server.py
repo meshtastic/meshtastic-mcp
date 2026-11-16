@@ -17,7 +17,7 @@ import os
 import tempfile
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC
 from pathlib import Path
 from typing import Any, cast
@@ -1286,8 +1286,36 @@ def clean(env: str) -> dict[str, Any]:
     return flash.clean(env)
 
 
-@firmware_tool()
-def pio_flash(
+async def _confirmed_hw_call(
+    ctx: Context, call: Callable[[bool], dict[str, Any]], confirm: bool
+) -> dict[str, Any]:
+    """Run a `hw_tools` call, asking the human only when it turns out to be destructive.
+
+    `hw_tools` refuses a destructive call before any side effect, so a probe with `confirm=False`
+    is safe: a harmless subcommand just runs, and a destructive one raises `ConfirmRequired`. In
+    `human` policy the probe always uses `confirm=False`, so every destructive call asks.
+    """
+    human = confirm_mod.policy() == confirm_mod.HUMAN
+    try:
+        return call(False if human else confirm)
+    except hw_tools.ConfirmRequired as exc:
+        pending = await confirm_mod.gate(ctx, f"run {exc.what}", confirm, irreversible=True)
+        if pending is not None:
+            return cast(dict[str, Any], pending)
+        return call(True)
+
+
+async def _run_job(kind: str, label: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """Run a blocking flash function as a tracked job, surfacing its failure as a tool error."""
+    try:
+        return await jobs.run_sync(kind, label, fn)
+    except RuntimeError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+@firmware_tool(**tasks_mod.task_kwargs())
+async def pio_flash(
+    ctx: Context,
     env: str,
     port: str,
     confirm: bool = False,
@@ -1296,7 +1324,10 @@ def pio_flash(
 ) -> dict[str, Any]:
     """Flash firmware via `pio run -e <env> -t upload --upload-port <port>`.
 
-    Works for any architecture (ESP32/nRF52/RP2040/STM32). Requires confirm=True.
+    Works for any architecture (ESP32/nRF52/RP2040/STM32). Requires confirm=True, or the user's
+    answer when the client can ask. Runs as a background task for clients that support them
+    (`[tasks]` extra); the job is also pollable with `flash_poll(job_id)`, and a flash cannot be
+    cancelled mid-write.
     For first-time flashing a blank ESP32 board (erase + bootloader + app + fs),
     prefer `erase_and_flash`. For ESP32 OTA updates, prefer `update_flash`.
 
@@ -1308,17 +1339,25 @@ def pio_flash(
     to actually land in the uploaded firmware — without it, the implicit
     rebuild relinks without the env var and silently drops them.
     """
-    return flash.flash(
+    pending = await confirm_mod.gate(ctx, f"flash {env} onto {port}", confirm)
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+    return await _run_job(
+        "flashes",
         env,
-        port,
-        confirm=confirm,
-        userprefs_overrides=userprefs,
-        build_flags=build_flags,
+        lambda: flash.flash(
+            env,
+            port,
+            confirm=True,
+            userprefs_overrides=userprefs,
+            build_flags=build_flags,
+        ),
     )
 
 
 @firmware_tool()
-def flash_start(
+async def flash_start(
+    ctx: Context,
     env: str,
     port: str,
     confirm: bool = False,
@@ -1335,10 +1374,13 @@ def flash_start(
     Returns:
         {job_id: str, status: "running", log_path: str}
     """
+    pending = await confirm_mod.gate(ctx, f"flash {env} onto {port}", confirm)
+    if pending is not None:
+        return cast(dict[str, Any], pending)
     return flash.flash_start(
         env,
         port,
-        confirm=confirm,
+        confirm=True,
         userprefs_overrides=userprefs,
         build_flags=build_flags,
     )
@@ -1354,8 +1396,9 @@ def flash_poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
     return flash.flash_poll(job_id, tail_lines=tail_lines)
 
 
-@firmware_tool()
-def erase_and_flash(
+@firmware_tool(**tasks_mod.task_kwargs())
+async def erase_and_flash(
+    ctx: Context,
     env: str,
     port: str,
     confirm: bool = False,
@@ -1365,20 +1408,33 @@ def erase_and_flash(
     """ESP32-only: full erase + factory flash via bin/device-install.sh.
 
     Wipes the entire flash and writes bootloader, app, OTA, and LittleFS
-    partitions from the factory.bin. Requires confirm=True. Runs `build` first
+    partitions from the factory.bin. Requires confirm=True, or the user's answer when the client
+    can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`). Runs as a background task for clients
+    that support them; the job is also pollable with `flash_poll(job_id)`, and cannot be cancelled
+    mid-write. Runs `build` first
     if no factory.bin is present (set skip_build=True to require a prior build).
 
     `userprefs` (optional): dict of `USERPREFS_<KEY>: value` baked into the
     factory.bin via userPrefs.jsonc injection. When provided, forces a rebuild
     (skip_build=True is incompatible). File is restored after upload.
     """
-    return flash.erase_and_flash(
-        env, port, confirm=confirm, skip_build=skip_build, userprefs_overrides=userprefs
+    pending = await confirm_mod.gate(
+        ctx, f"erase the whole flash of {port} and flash {env}", confirm, irreversible=True
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+    return await _run_job(
+        "flashes",
+        env,
+        lambda: flash.erase_and_flash(
+            env, port, confirm=True, skip_build=skip_build, userprefs_overrides=userprefs
+        ),
     )
 
 
-@firmware_tool()
-def update_flash(
+@firmware_tool(**tasks_mod.task_kwargs())
+async def update_flash(
+    ctx: Context,
     env: str,
     port: str,
     confirm: bool = False,
@@ -1389,13 +1445,22 @@ def update_flash(
 
     Updates only the application partition, preserving device config and node
     database. Faster than erase_and_flash but won't recover a broken bootloader.
-    Requires confirm=True. Builds first if needed.
+    Requires confirm=True, or the user's answer when the client can ask. Runs as a background
+    task for clients that support them; the job is also pollable with `flash_poll(job_id)`, and
+    cannot be cancelled mid-write. Builds first if needed.
 
     `userprefs` (optional): dict of `USERPREFS_<KEY>: value` baked into the
     firmware.bin via userPrefs.jsonc injection. When provided, forces a rebuild.
     """
-    return flash.update_flash(
-        env, port, confirm=confirm, skip_build=skip_build, userprefs_overrides=userprefs
+    pending = await confirm_mod.gate(ctx, f"OTA-update {port} with {env}", confirm)
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+    return await _run_job(
+        "flashes",
+        env,
+        lambda: flash.update_flash(
+            env, port, confirm=True, skip_build=skip_build, userprefs_overrides=userprefs
+        ),
     )
 
 
@@ -1962,7 +2027,8 @@ def send_text(
 
 
 @app.tool()
-def inject_frame(
+async def inject_frame(
+    ctx: Context,
     mode: str = "text",
     body: str | None = None,
     portnum: int | None = None,
@@ -2008,6 +2074,11 @@ def inject_frame(
 
     Returns: {ok, target, channel, channel_hash, injected, frames:[{from,to,id,portnum,bytes,...}]}
     """
+    pending = await confirm_mod.gate(
+        ctx, f"inject a forged {mode} frame into {port or 'the default port'}", confirm
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
     return inject_mod.inject_frame(
         mode=mode,
         body=body,
@@ -2027,7 +2098,7 @@ def inject_frame(
         public_key_b64=public_key_b64,
         fuzz_count=fuzz_count,
         fuzz_seed=fuzz_seed,
-        confirm=confirm,
+        confirm=True,
         port=port,
     )
 
@@ -2209,7 +2280,8 @@ def pa_measure(
 
 
 @app.tool()
-def pa_sweep(
+async def pa_sweep(
+    ctx: Context,
     powers: list[int],
     band: str | None = None,
     port: str | None = None,
@@ -2267,6 +2339,13 @@ def pa_sweep(
          max_measured_at_configured_dbm, offset_at_min_db, monotonic},
          silent_steps_dbm, config_restored, restore_errors, caveat}
     """
+    pending = await confirm_mod.gate(
+        ctx,
+        f"sweep TX power {powers} dBm on {port or 'the default port'} (keys real TX onto the mesh)",
+        confirm,
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
     return pa_sweep_mod.sweep(
         powers,
         band=band,
@@ -2280,18 +2359,27 @@ def pa_sweep(
         reboot_between_steps=reboot_between_steps,
         override_duty_cycle=override_duty_cycle,
         restore_config=restore_config,
-        confirm=confirm,
+        confirm=True,
     )
 
 
 @app.tool()
-def shutdown(port: str | None = None, confirm: bool = False, seconds: int = 10) -> dict[str, Any]:
+async def shutdown(
+    ctx: Context, port: str | None = None, confirm: bool = False, seconds: int = 10
+) -> dict[str, Any]:
     """Shut down the connected node in `seconds` seconds. Requires confirm=True.
+
+    Without confirm=True a client that can ask the user will prompt them instead.
 
     Returns:
         {ok: true, shutting_down_in_s: int}
     """
-    return admin.shutdown(port=port, confirm=confirm, seconds=seconds)
+    pending = await confirm_mod.gate(
+        ctx, f"shut down the node on {port or 'the default port'}", confirm
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+    return admin.shutdown(port=port, confirm=True, seconds=seconds)
 
 
 @app.tool()
@@ -2674,7 +2762,8 @@ def uhubctl_list() -> list[dict[str, Any]]:
 
 
 @app.tool()
-def uhubctl_power(
+async def uhubctl_power(
+    ctx: Context,
     action: str,
     location: str | None = None,
     port: int | None = None,
@@ -2698,16 +2787,19 @@ def uhubctl_power(
     action_lower = action.lower()
     if action_lower not in {"on", "off"}:
         raise ValueError(f"action must be 'on' or 'off', got {action!r}")
-    if action_lower == "off" and not confirm:
-        raise uhubctl_mod.UhubctlError("uhubctl_power action='off' requires confirm=True")
     loc, p = _resolve_uhubctl_target(location, port, role)
+    if action_lower == "off":
+        pending = await confirm_mod.gate(ctx, f"cut power to the USB hub port {loc}:{p}", confirm)
+        if pending is not None:
+            return cast(dict[str, Any], pending)
     if action_lower == "on":
         return uhubctl_mod.power_on(loc, p)
     return uhubctl_mod.power_off(loc, p)
 
 
 @app.tool()
-def uhubctl_cycle(
+async def uhubctl_cycle(
+    ctx: Context,
     location: str | None = None,
     port: int | None = None,
     role: str | None = None,
@@ -2722,11 +2814,12 @@ def uhubctl_cycle(
     """
     from . import uhubctl as uhubctl_mod
 
-    if not confirm:
-        raise uhubctl_mod.UhubctlError("uhubctl_cycle requires confirm=True")
     if delay_s < 0 or delay_s > 60:
         raise ValueError(f"delay_s must be 0..60, got {delay_s}")
     loc, p = _resolve_uhubctl_target(location, port, role)
+    pending = await confirm_mod.gate(ctx, f"power-cycle the USB hub port {loc}:{p}", confirm)
+    if pending is not None:
+        return cast(dict[str, Any], pending)
     return uhubctl_mod.cycle(loc, p, delay_s=delay_s)
 
 
@@ -2759,17 +2852,22 @@ def esptool_chip_info(port: str) -> dict[str, Any]:
 
 
 @app.tool()
-def esptool_erase_flash(port: str, confirm: bool = False) -> dict[str, Any]:
+async def esptool_erase_flash(ctx: Context, port: str, confirm: bool = False) -> dict[str, Any]:
     """Full-chip erase via `esptool erase_flash`. Leaves the device unbootable.
 
     Prefer `erase_and_flash` which also writes firmware. Use this only for
-    recovery when a device is in a weird state. Requires confirm=True.
+    recovery when a device is in a weird state. Requires confirm=True, or the user's answer when
+    the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
     """
-    return hw_tools.esptool_erase_flash(port, confirm=confirm)
+    return await _confirmed_hw_call(
+        ctx, lambda c: hw_tools.esptool_erase_flash(port, confirm=c), confirm
+    )
 
 
 @app.tool()
-def esptool_raw(args: list[str], port: str | None = None, confirm: bool = False) -> dict[str, Any]:
+async def esptool_raw(
+    ctx: Context, args: list[str], port: str | None = None, confirm: bool = False
+) -> dict[str, Any]:
     """Pass-through to `esptool`. Destructive subcommands (write_flash,
     erase_flash, erase_region, merge_bin) require confirm=True.
 
@@ -2780,29 +2878,35 @@ def esptool_raw(args: list[str], port: str | None = None, confirm: bool = False)
     must come from a trusted source — do not allow untrusted content (e.g.
     mesh packet payloads) to flow into argument lists.
     """
-    return hw_tools.esptool_raw(args, port=port, confirm=confirm)
+    return await _confirmed_hw_call(
+        ctx, lambda c: hw_tools.esptool_raw(args, port=port, confirm=c), confirm
+    )
 
 
 @app.tool()
-def nrfutil_dfu(port: str, package_path: str, confirm: bool = False) -> dict[str, Any]:
+async def nrfutil_dfu(
+    ctx: Context, port: str, package_path: str, confirm: bool = False
+) -> dict[str, Any]:
     """DFU-flash a .zip package to an nRF52840 via `nrfutil dfu serial`.
 
     Prefer `pio_flash` for flashing firmware built from this repo — pio handles
     the DFU invocation automatically. Use this tool when flashing a pre-built
     release zip or a custom bootloader. Requires confirm=True.
     """
-    return hw_tools.nrfutil_dfu(port, package_path, confirm=confirm)
+    return await _confirmed_hw_call(
+        ctx, lambda c: hw_tools.nrfutil_dfu(port, package_path, confirm=c), confirm
+    )
 
 
 @app.tool()
-def nrfutil_raw(args: list[str], confirm: bool = False) -> dict[str, Any]:
+async def nrfutil_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
     """Pass-through to `nrfutil`. dfu/settings subcommands require confirm=True.
 
     Security: `args` is passed directly to the nrfutil binary. All arguments
     must come from a trusted source — do not allow untrusted content to flow
     into argument lists.
     """
-    return hw_tools.nrfutil_raw(args, confirm=confirm)
+    return await _confirmed_hw_call(ctx, lambda c: hw_tools.nrfutil_raw(args, confirm=c), confirm)
 
 
 @app.tool()
@@ -2814,24 +2918,26 @@ def picotool_info(port: str | None = None) -> dict[str, Any]:
 
 
 @app.tool()
-def picotool_load(uf2_path: str, confirm: bool = False) -> dict[str, Any]:
+async def picotool_load(ctx: Context, uf2_path: str, confirm: bool = False) -> dict[str, Any]:
     """Load a UF2 to a Pico in BOOTSEL mode via `picotool load -x -t uf2`.
 
     Prefer `pio_flash` for flashing firmware built from this repo.
-    Requires confirm=True.
+    Requires confirm=True, or the user's answer when the client can ask.
     """
-    return hw_tools.picotool_load(uf2_path, confirm=confirm)
+    return await _confirmed_hw_call(
+        ctx, lambda c: hw_tools.picotool_load(uf2_path, confirm=c), confirm
+    )
 
 
 @app.tool()
-def picotool_raw(args: list[str], confirm: bool = False) -> dict[str, Any]:
+async def picotool_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
     """Pass-through to `picotool`. load/reboot/save/erase require confirm=True.
 
     Security: `args` is passed directly to the picotool binary. All arguments
     must come from a trusted source — do not allow untrusted content to flow
     into argument lists.
     """
-    return hw_tools.picotool_raw(args, confirm=confirm)
+    return await _confirmed_hw_call(ctx, lambda c: hw_tools.picotool_raw(args, confirm=c), confirm)
 
 
 # ---------- Persistent device-log capture (recorder) ----------------------
@@ -3762,7 +3868,9 @@ def atak_fleet_status() -> dict[str, Any]:
 
 
 @android_tool()
-def atak_fleet_down(delete_clones: bool = False, confirm: bool = False) -> dict[str, Any]:
+async def atak_fleet_down(
+    ctx: Context, delete_clones: bool = False, confirm: bool = False
+) -> dict[str, Any]:
     """Stop the ATAK emulator fleet.
 
     `delete_clones=True` also deletes the cloned AVDs and their provisioned
@@ -3772,11 +3880,15 @@ def atak_fleet_down(delete_clones: bool = False, confirm: bool = False) -> dict[
     global _ATAK_FLEET
     from .emulator import atak
 
-    if delete_clones and not confirm:
-        raise ToolError(
-            "delete_clones=True irreversibly removes the cloned AVDs + "
-            "provisioned snapshots; pass confirm=True to proceed."
+    if delete_clones:
+        pending = await confirm_mod.gate(
+            ctx,
+            "delete the cloned ATAK AVDs and their provisioned snapshots",
+            confirm,
+            irreversible=True,
         )
+        if pending is not None:
+            return cast(dict[str, Any], pending)
     with _ATAK_LOCK:
         if _ATAK_UP["phase"] == "bringing_up":
             raise ToolError("fleet is still bringing up; wait for atak_fleet_status phase=ready")
@@ -3894,7 +4006,8 @@ def _parse_iso_epoch(s: str) -> int:
 
 
 @firmware_tool()
-def push_fake_nodedb(
+async def push_fake_nodedb(
+    ctx: Context,
     size: int,
     target: str = "portduino",
     port: str | None = None,
@@ -3920,6 +4033,13 @@ def push_fake_nodedb(
 
     Override the JSONL via `custom_seed_jsonl` to push a hand-edited scenario.
     """
+    if target == "hardware":
+        pending = await confirm_mod.gate(
+            ctx, f"write a fake {size}-node NodeDB to {port or 'the device'} and reboot it", confirm
+        )
+        if pending is not None:
+            return cast(dict[str, Any], pending)
+        confirm = True
     return fixtures.push_fake_nodedb(
         size=size,
         target=target,  # type: ignore[arg-type]
@@ -4001,7 +4121,8 @@ def vanity_grind_stop(job_id: str) -> dict[str, Any]:
 
 
 @app.tool()
-def vanity_apply(
+async def vanity_apply(
+    ctx: Context,
     private_key: str,
     port: str | None = None,
     confirm: bool = False,
@@ -4021,10 +4142,18 @@ def vanity_apply(
     with `verify` we reconnect and confirm it came back on the expected number,
     which is also the empirical check that this build has PKI keygen at all.
     """
+    pending = await confirm_mod.gate(
+        ctx,
+        f"replace the identity (NodeNum and keys) of the node on {port or 'the default port'}",
+        confirm,
+        irreversible=True,
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
     return vanity.apply_key(
         private_key=private_key,
         port=port,
-        confirm=confirm,
+        confirm=True,
         verify=verify,
         verify_timeout_s=verify_timeout_s,
     )
