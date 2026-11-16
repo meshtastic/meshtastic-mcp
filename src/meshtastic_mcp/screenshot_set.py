@@ -228,11 +228,10 @@ class Plan:
     sim_seed: int = 1337
     sim_days: int = 1
     settle_s: float = 3.0
-    # Only the capture's last hours are streamed (the node DB covers the rest), and
-    # slowly: Meshtastic-Apple resets the connection under a few hundred packets/s.
-    stream_hours: float = 2.0
-    stream_rate: float = 20.0
-    connect_wait_s: float = 90.0
+    # How much of the capture's end is streamed (the node DB covers the rest), and how fast.
+    stream_hours: float = 24.0
+    stream_rate: float = 120.0
+    connect_wait_s: float = 150.0
     clean_status_bar: bool = True
     reset_apps: bool = False
     shots: list[dict[str, Any]] = field(default_factory=list)
@@ -307,6 +306,7 @@ def run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
                     start=anchor - int(plan.stream_hours * 3600),
                     rate=plan.stream_rate,
                     loop=False,
+                    hold=True,
                     mdns=False,
                     observer_num=observer_num,
                     clock_anchor=anchor,
@@ -317,24 +317,27 @@ def run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
             _log(log_path, f"{platform}: replay {status['id']} on port {port}")
             driver.connect(port)
 
-        # Wait for each app to receive the whole capture; the sessions then hold quiet.
+        # Wait until each app's current connection has the whole window. An app that
+        # hangs up (Meshtastic-Apple sometimes does, right after connecting) reconnects
+        # and is played the window again; the sessions then hold quiet.
         deadline = time.time() + plan.connect_wait_s
         while time.time() < deadline:
             states = [manager.status(sid) for sid in sessions]
-            if all(s.get("packets_sent", 0) >= s.get("packets_total", 1) for s in states):
+            if all(s.get("connected") and s.get("pass_complete") for s in states):
                 break
-            if any(s.get("ended") and not s.get("connected") for s in states):
-                break  # an app hung up; a non-loop session will not take it back
             time.sleep(1.0)
         for sid, platform in zip(sessions, drivers, strict=True):
             s = manager.status(sid)
             _log(
                 log_path,
                 f"{platform}: connected={s.get('connected')} "
-                f"sent {s.get('packets_sent')}/{s.get('packets_total')}",
+                f"window received={s.get('pass_complete')} sent {s.get('packets_sent')}",
             )
-            if not s.get("connected"):
-                raise RuntimeError(f"{platform} dropped the replay connection: {s.get('error')}")
+            if not (s.get("connected") and s.get("pass_complete")):
+                raise RuntimeError(
+                    f"{platform} never held a replay connection through the whole window: "
+                    f"{s.get('error')}"
+                )
         time.sleep(plan.settle_s * 2)  # let both apps finish writing what they received
 
         if plan.clean_status_bar:
