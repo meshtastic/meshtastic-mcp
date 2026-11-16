@@ -363,7 +363,9 @@ class ReplaySession:
         # than in synthetic noise: the median of every DeviceMetrics sample in the
         # replay window. Computed once — the window never changes.
         self._channel_utilization, self._air_util_tx = _representative_radio_metrics(window)
-        self._clock_shift, self._last_rx = _anchored_clock(window, params.clock_anchor)
+        self._clock_shift, self._last_rx = _anchored_clock(
+            capture.window(None, params.end), window, params.clock_anchor
+        )
         # Guards the observer LocalStats counters. `_send_db_phase` runs on the
         # reader thread and can re-enter on a second want_config_id while the
         # stream thread is already emitting periodic stats + counting duplicates.
@@ -614,7 +616,14 @@ class ReplaySession:
                     self._send_config_phase(send, nonce)
             elif tr.HasField("packet"):
                 self._handle_client_packet(tr.packet, send)
-            # heartbeats / other ToRadio: drain and ignore
+            elif tr.HasField("heartbeat") and tr.heartbeat.nonce != 1:
+                # Firmware answers a keepalive with its queue status; Meshtastic-Apple
+                # marks a quiet link dead when no reply comes within 5 s.
+                fr = mesh_pb2.FromRadio()
+                fr.queueStatus.free = 16
+                fr.queueStatus.maxlen = 16
+                send(fr)
+            # other ToRadio: drain and ignore
 
     # -- handshake phases --
     def _send_config_phase(self, send: Any, nonce: int) -> None:
@@ -705,7 +714,9 @@ class ReplaySession:
             fr = mesh_pb2.FromRadio()
             heard = now
             if self._clock_shift is not None:
-                heard = self._last_rx.get(n.num & 0xFFFFFFFF, self.window[0][0]) + self._clock_shift
+                heard = (
+                    self._last_rx.get(n.num & 0xFFFFFFFF, self.capture.span[0]) + self._clock_shift
+                )
             fr.node_info.CopyFrom(node_to_nodeinfo(n, last_heard=heard))
             send(fr)
             if self.params.node_delay > 0:
@@ -1229,14 +1240,18 @@ class ReplaySession:
 
 
 def _anchored_clock(
-    window: list[tuple[int, bytes, str]], anchor: int | None
+    history: list[tuple[int, bytes, str]],
+    window: list[tuple[int, bytes, str]],
+    anchor: int | None,
 ) -> tuple[int | None, dict[int, int]]:
-    """The shift that moves the window's last packet to `anchor`, and each sender's last rx_time."""
+    """The shift that moves the window's last packet to `anchor`, and each sender's
+    last rx_time up to the window's end, read from `history` so nodes quiet during a
+    short window still keep their own last-heard time."""
     if anchor is None or not window:
         return None, {}
     last: dict[int, int] = {}
     mp = mesh_pb2.MeshPacket()
-    for rxt, raw, _ in window:
+    for rxt, raw, _ in history:
         try:
             mp.ParseFromString(raw)
         except Exception:

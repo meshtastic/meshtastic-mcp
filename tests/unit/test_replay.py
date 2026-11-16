@@ -2233,8 +2233,45 @@ def test_clock_anchor_gives_sessions_identical_node_db_times():
 def test_clock_anchor_moves_the_last_packet_to_the_anchor():
     cap = sim.generate(nodes=5, days=1, seed=6, start=1_700_000_000)
     window = cap.window(None, None)
-    shift, last = replay_engine._anchored_clock(window, 1_800_000_000)
+    shift, last = replay_engine._anchored_clock(window, window, 1_800_000_000)
     assert shift is not None
     assert window[-1][0] + shift == 1_800_000_000
     assert max(last.values()) == window[-1][0]
-    assert replay_engine._anchored_clock(window, None) == (None, {})
+    assert replay_engine._anchored_clock(window, window, None) == (None, {})
+
+
+def test_clock_anchor_keeps_last_heard_for_nodes_quiet_in_a_short_window():
+    """Streaming only the last hour must not stamp every quiet node with one shared time."""
+    cap = sim.generate(nodes=30, days=1, seed=8, start=1_700_000_000)
+    end = cap.span[1]
+    sess = ReplaySession(
+        "short",
+        cap,
+        ReplayParams(port=0, node_delay=0, start=end - 3600, clock_anchor=1_800_000_000),
+    )
+    frames: list[mesh_pb2.FromRadio] = []
+    sess._send_db_phase(frames.append, 1)
+    heard = [
+        f.node_info.last_heard
+        for f in frames
+        if f.WhichOneof("payload_variant") == "node_info"
+        and f.node_info.num != sess.params.observer_num
+    ]
+    assert len(set(heard)) > len(heard) // 2
+
+
+def test_heartbeat_gets_a_queue_status_reply():
+    """Firmware answers a heartbeat with queueStatus; Meshtastic-Apple drops a link that doesn't."""
+    cap = sim.generate(nodes=3, days=1, seed=9, start=1_700_000_000)
+    sess = ReplaySession(
+        "hb", cap, ReplayParams(host="127.0.0.1", port=0, local_metrics_interval=0)
+    )
+    sess.start()
+    try:
+        client = socket.create_connection(("127.0.0.1", sess.params.port), timeout=5)
+        _send_toradio(client, heartbeat=mesh_pb2.Heartbeat())
+        fr = _read_frame(client)
+        assert fr.WhichOneof("payload_variant") == "queueStatus"
+        client.close()
+    finally:
+        sess.stop()
