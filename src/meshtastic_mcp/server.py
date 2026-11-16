@@ -22,7 +22,7 @@ from datetime import UTC
 from pathlib import Path
 from typing import Any, cast
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.transforms import GetToolNext, Transform
 from fastmcp.tools import Tool
@@ -52,6 +52,7 @@ from . import (
 from . import (
     config_snapshot as config_snapshot_mod,
 )
+from . import confirm as confirm_mod
 from . import discord as discord_mod
 from . import (
     doctor as doctor_mod,
@@ -2032,13 +2033,22 @@ def inject_frame(
 
 
 @app.tool()
-def reboot(port: str | None = None, confirm: bool = False, seconds: int = 10) -> dict[str, Any]:
+async def reboot(
+    ctx: Context, port: str | None = None, confirm: bool = False, seconds: int = 10
+) -> dict[str, Any]:
     """Reboot the connected node in `seconds` seconds. Requires confirm=True.
+
+    Without confirm=True a client that can ask the user will prompt them instead.
 
     Returns:
         {ok: true, rebooting_in_s: int}
     """
-    return admin.reboot(port=port, confirm=confirm, seconds=seconds)
+    pending = await confirm_mod.gate(
+        ctx, f"reboot the node on {port or 'the default port'}", confirm
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+    return admin.reboot(port=port, confirm=True, seconds=seconds)
 
 
 # ---------- RF compliance oracle (RTL-SDR) ---------------------------------
@@ -2285,17 +2295,28 @@ def shutdown(port: str | None = None, confirm: bool = False, seconds: int = 10) 
 
 
 @app.tool()
-def factory_reset(
-    port: str | None = None, confirm: bool = False, full: bool = False
+async def factory_reset(
+    ctx: Context, port: str | None = None, confirm: bool = False, full: bool = False
 ) -> dict[str, Any]:
     """Factory-reset the connected node. Requires confirm=True.
 
     `full=True` also wipes device identity/keys (not just config).
+    Without confirm=True a client that can ask the user will prompt them instead; with
+    `MESHTASTIC_MCP_CONFIRM=human` the user is asked even when confirm=True.
 
     Returns:
         {ok: true}
     """
-    return admin.factory_reset(port=port, confirm=confirm, full=full)
+    scope = "wipe its identity and keys" if full else "reset its config to defaults"
+    pending = await confirm_mod.gate(
+        ctx,
+        f"factory-reset the node on {port or 'the default port'} and {scope}",
+        confirm,
+        irreversible=True,
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+    return admin.factory_reset(port=port, confirm=True, full=full)
 
 
 @app.tool()

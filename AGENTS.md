@@ -173,7 +173,11 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   running.
 - **Destructive tools stay `confirm`-gated** (`reboot`, `factory_reset`, `erase_and_flash`,
   `uhubctl_*`) **and `destructiveHint`-annotated** (see the annotation maps in `server.py`).
-  Don't bypass the gate. New tools get the right read/destructive/open-world hint.
+  Don't bypass the gate. New tools get the right read/destructive/open-world hint. A tool calls
+  `confirm.gate(ctx, ...)` before taking any lock or starting any job: without `confirm=True` a
+  client that declared elicitation asks the human, and one that did not gets the `confirm=True`
+  refusal. `MESHTASTIC_MCP_CONFIRM=human` also asks for tools gated `irreversible=True`
+  (`factory_reset` so far), because an agent can pass `confirm=True` for itself.
 - **Prompt injection / lethal trifecta:** `logs_window` and `packets_window` return
   user-authored content from remote mesh nodes (untrusted). `android_ui_dump`,
   `android_screenshot`, and `android_read_logcat` carry the same risk one hop removed —
