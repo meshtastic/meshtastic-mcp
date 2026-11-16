@@ -169,11 +169,18 @@ def nrfutil_dfu(port: str, package_path: str, confirm: bool = False) -> dict[str
     if not pkg.is_file():
         raise ToolError(f"Package not found: {pkg}")
     binary = config.nrfutil_bin()
-    return _run(
-        binary,
-        ["dfu", "serial", "--package", str(pkg), "--port", port, "-b", "115200"],
-        timeout=_TIMEOUT_LONG,
-    )
+    args = ["dfu", "serial", "--package", str(pkg), "--port", port, "-b", "115200"]
+    adafruit = "adafruit" in binary.name
+    if adafruit:
+        # The nRF52 bootloader leaves DFU ~30 s after a separate touch, so touch in the same
+        # command; single bank matches PlatformIO's upload for these boards.
+        args += ["--singlebank", "-t", "1200"]
+    res = _run(binary, args, timeout=_TIMEOUT_LONG)
+    # adafruit-nrfutil prints "Failed to upgrade target" and still exits 0; only a run that
+    # printed "Device programmed." wrote the image.
+    if adafruit and res["exit_code"] == 0 and "Device programmed." not in res["stdout"]:
+        res["exit_code"] = 1
+    return res
 
 
 def nrfutil_raw(args: list[str], confirm: bool = False) -> dict[str, Any]:

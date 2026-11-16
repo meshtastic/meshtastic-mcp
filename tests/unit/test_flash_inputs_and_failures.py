@@ -170,3 +170,50 @@ def test_a_failing_hardware_tool_is_a_tool_error(server, monkeypatch) -> None:
     )
     result = _call(server, "esptool_raw", {"args": ["flash_id"]})
     assert result.is_error is True and "no serial port" in result.content[0].text
+
+
+# ---- nrfutil_dfu: adafruit-nrfutil exits 0 on failure ------------------------------
+
+
+@pytest.fixture
+def adafruit(monkeypatch, tmp_path):
+    pkg = tmp_path / "firmware.zip"
+    pkg.write_bytes(b"zip")
+    runs: list[list[str]] = []
+    out = {"stdout": ""}
+    monkeypatch.setattr(hw_tools.config, "nrfutil_bin", lambda: tmp_path / "adafruit-nrfutil")
+
+    def fake_run(binary, args, **_kw):
+        runs.append(list(args))
+        return {"exit_code": 0, "stdout": out["stdout"], "stderr": "", "stdout_tail": out["stdout"]}
+
+    monkeypatch.setattr(hw_tools, "_run", fake_run)
+    return pkg, runs, out
+
+
+def test_adafruit_dfu_touches_and_uses_single_bank_in_one_command(adafruit) -> None:
+    pkg, runs, out = adafruit
+    out["stdout"] = "Upgrading target...\nDevice programmed.\n"
+    res = hw_tools.nrfutil_dfu("/dev/x", str(pkg), confirm=True)
+    assert res["exit_code"] == 0
+    assert runs[0][-3:] == ["--singlebank", "-t", "1200"]
+
+
+def test_adafruit_dfu_that_never_programmed_is_a_failure(adafruit) -> None:
+    pkg, _, out = adafruit
+    out["stdout"] = "Failed to upgrade target. Error is: No data received on serial port.\n"
+    assert hw_tools.nrfutil_dfu("/dev/x", str(pkg), confirm=True)["exit_code"] == 1
+
+
+def test_nordic_nrfutil_keeps_its_own_arguments(monkeypatch, tmp_path) -> None:
+    pkg = tmp_path / "firmware.zip"
+    pkg.write_bytes(b"zip")
+    runs: list[list[str]] = []
+    monkeypatch.setattr(hw_tools.config, "nrfutil_bin", lambda: tmp_path / "nrfutil")
+    monkeypatch.setattr(
+        hw_tools,
+        "_run",
+        lambda b, args, **_kw: runs.append(list(args)) or {"exit_code": 0, "stdout": ""},
+    )
+    assert hw_tools.nrfutil_dfu("/dev/x", str(pkg), confirm=True)["exit_code"] == 0
+    assert "--singlebank" not in runs[0] and "-t" not in runs[0]
