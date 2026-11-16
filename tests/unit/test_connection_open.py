@@ -52,7 +52,7 @@ def fake_serial(monkeypatch):
 
 def test_a_wedged_open_fails_the_call_within_the_deadline(fake_serial) -> None:
     t0 = time.monotonic()
-    with pytest.raises(conn.ConnectionError, match="(?i)power-cycle"):
+    with pytest.raises(conn.ConnectionError, match=r"(?i)power-cycle"):
         with conn.connect(PORT, timeout_s=0.5):
             pass
     assert time.monotonic() - t0 < 3
