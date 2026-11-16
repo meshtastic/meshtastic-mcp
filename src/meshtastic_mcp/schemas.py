@@ -10,7 +10,15 @@ stays `Any`.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+import sys
+from typing import Any
+
+# pydantic builds the output schemas from these, and before Python 3.12 it accepts only the
+# typing_extensions TypedDict.
+if sys.version_info >= (3, 12):
+    from typing import TypedDict
+else:
+    from typing_extensions import TypedDict
 
 
 class DeviceEntry(TypedDict, total=False):
