@@ -347,6 +347,42 @@ def open_url(url: str, *, udid: str | None = None) -> None:
     simctl("openurl", udid or "booted", url)
 
 
+def tap_label(label: str, *, udid: str | None = None, timeout: float = 10.0) -> bool:
+    """Tap the last accessibility element whose label is exactly `label`. Needs idb."""
+    deadline = time.time() + timeout
+    while True:
+        hits = [e for e in ui_dump(udid=udid) if (e.get("AXLabel") or "").strip() == label]
+        frame = hits[-1].get("frame") if hits else None
+        if frame:
+            tap(
+                int(frame["x"] + frame["width"] / 2),
+                int(frame["y"] + frame["height"] / 2),
+                udid=udid,
+            )
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+OPEN_IN_APP_PROMPT = "Open in “Meshtastic”?"
+
+
+def dismiss_open_sheet(*, udid: str | None = None, timeout: float = 3.0) -> bool:
+    """Confirm iOS's "Open in "Meshtastic"?" sheet if `openurl` raised one.
+
+    iOS shows it for some `simctl openurl` calls and not others, so this waits briefly
+    and reports whether there was one. Needs idb.
+    """
+    deadline = time.time() + timeout
+    while True:
+        if any((e.get("AXLabel") or "") == OPEN_IN_APP_PROMPT for e in ui_dump(udid=udid)):
+            return tap_label("Open", udid=udid, timeout=2.0)
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
 def connect_link(port: int = DEFAULT_TCP_PORT) -> str:
     """The app's connect link for a host-side TCP node, e.g. one `replay_start` serves.
 

@@ -512,12 +512,15 @@ def ios_open_url(
 ) -> dict[str, Any]:
     """Open a URL in the iOS Simulator, as if the user tapped it.
 
+    iOS sometimes asks "Open in "Meshtastic"?" first; with idb installed this
+    confirms it (`confirmed_open_sheet`).
+
     Pass `port` instead of `url` to open the app's connect link for a host-side TCP
     node, `meshtastic://meshtastic/connections?address=t127.0.0.1:<port>`. With a
     `replay_start` node on that port, the app shows "Connect to this device?"; confirm
     it (`ios_tap`, or by hand) and the app streams the same simulated mesh the Android
     emulator gets at `10.0.2.2:<port>`. Needs a Meshtastic-Apple build with connect
-    links (v2.7.28 or later).
+    links (v2.7.28 or later). `screenshot_set_start` does all of this for both apps.
     """
     from .emulator import apple_sim
 
@@ -525,7 +528,87 @@ def ios_open_url(
         raise ValueError("pass exactly one of `url` or `port`")
     target = url if url is not None else apple_sim.connect_link(port or 0)
     apple_sim.open_url(target, udid=udid)
-    return {"url": target}
+    sheet = apple_sim.dismiss_open_sheet(udid=udid) if apple_sim.has_idb() else None
+    return {"url": target, "confirmed_open_sheet": sheet}
+
+
+def app_plane_tool(*args: Any, **kwargs: Any):
+    """Like `@app.tool()` but registers when the android or apple capability is active."""
+
+    def deco(fn):
+        if CAPS.android or CAPS.apple:
+            return app.tool(*args, **kwargs)(fn)
+        return fn
+
+    return deco
+
+
+@app_plane_tool()
+def screenshot_set_start(
+    screens: list[str | dict[str, Any]],
+    platforms: list[str] | None = None,
+    appearances: list[str] | None = None,
+    out_dir: str | None = None,
+    android_serial: str | None = None,
+    ios_udid: str | None = None,
+    sim_nodes: int = 60,
+    sim_seed: int = 1337,
+    settle_s: float = 3.0,
+    clean_status_bar: bool = True,
+) -> dict[str, Any]:
+    """Capture matching Android and iOS screenshots of the apps on one simulated mesh.
+
+    Serves each app its own replay node from the same seed, so both show the same
+    nodes and channels, connects them through their connect links, then opens each
+    screen by deep link and screenshots both, in each appearance. Returns a `job_id`
+    at once; poll `screenshot_set_poll`. PNGs land in
+    `<out_dir>/<screen>/<platform>-<appearance>.png`.
+
+    `screens`: `nodes`, `map`, `messages`, `connections`, `settings`,
+    `settings/<page>` (about, bluetooth, device, display, lora, mqtt, network,
+    position, power, security, serial, telemetry, user), `node:<num>`,
+    `channel:<index>`, or `{"name", "android", "ios"}` with explicit deep-link paths.
+    `platforms` defaults to both, `appearances` to `["light", "dark"]`.
+
+    Needs a running Android emulator with Meshtastic-Android, and a booted iOS
+    Simulator with Meshtastic-Apple 2.7.28 or later past onboarding, plus idb.
+    Connecting switches each app to the replay node. A platform that can't be driven
+    is skipped and named in the log. Relative times ("2 min ago") can still differ
+    between the apps.
+    """
+    from . import jobs
+    from . import screenshot_set as ss
+
+    if out_dir:
+        target = _capture_dir(out_dir)
+    else:
+        target = jobs.data_dir("screenshot_set") / time.strftime("%Y%m%d-%H%M%S")
+    plan = ss.make_plan(
+        screens,
+        platforms or list(ss.PLATFORMS),
+        appearances or list(ss.APPEARANCES),
+        target,
+        android_serial=android_serial,
+        ios_udid=ios_udid,
+        sim_nodes=sim_nodes,
+        sim_seed=sim_seed,
+        settle_s=settle_s,
+        clean_status_bar=clean_status_bar,
+    )
+
+    def _body(state: dict[str, Any], log_path: Path) -> None:
+        ss.run(plan, state, log_path)
+
+    started = jobs.start("screenshot_set", ", ".join(n for n, _ in plan.screens), _body)
+    return {**started, "out_dir": str(target)}
+
+
+@app_plane_tool()
+def screenshot_set_poll(job_id: str) -> dict[str, Any]:
+    """Status, log tail and the PNGs captured so far for a `screenshot_set_start` job."""
+    from . import jobs
+
+    return jobs.poll(job_id)
 
 
 @apple_tool()
@@ -4120,6 +4203,7 @@ _READ_ONLY = {
     "android_read_logcat",  # see _OPEN_WORLD note: may echo remote-node content
     "ios_list_simulators",
     "ios_ui_dump",
+    "screenshot_set_poll",  # reads job state; never mutates
     "triage_bundle",
     "list_devices",
     "list_boards",
@@ -4217,6 +4301,8 @@ _DESTRUCTIVE = {
     "ios_open_url",  # opens a URL in the running app (a connect link starts a connection)
     "ios_tap",  # drives simulator input
     "ios_type_text",
+    # Starts replay nodes, switches both apps onto them, drives navigation, writes PNGs.
+    "screenshot_set_start",
     "reboot",
     "shutdown",
     "factory_reset",
