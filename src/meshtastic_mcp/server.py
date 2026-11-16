@@ -19,7 +19,7 @@ import threading
 import time
 from datetime import UTC
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastmcp import FastMCP
 from fastmcp.tools import FunctionTool
@@ -66,6 +66,15 @@ from .replay import engine as replay_engine
 from .replay import fuzz as replay_fuzz
 from .replay import get_manager as get_replay_manager
 from .replay import sim as replay_sim
+from .schemas import (
+    DeviceEntry,
+    DeviceInfo,
+    DoctorReport,
+    EventsWindow,
+    LogsWindow,
+    NodeEntry,
+    PacketsWindow,
+)
 
 log = logging.getLogger(__name__)
 
@@ -366,7 +375,7 @@ _log_capabilities()
 
 
 @app.tool()
-def doctor() -> dict[str, Any]:
+def doctor() -> DoctorReport:
     """Probe external dependencies and report how to acquire any that are missing.
 
     Returns a structured environment report: active capability groups, per-dependency
@@ -375,7 +384,7 @@ def doctor() -> dict[str, Any]:
     first when an android/apple/firmware tool fails with a missing-prerequisite error,
     or to self-provision the environment before a hardware-free e2e run.
     """
-    return doctor_mod.run().to_dict()
+    return cast(DoctorReport, doctor_mod.run().to_dict())
 
 
 @android_tool()
@@ -1109,7 +1118,7 @@ def discord_member(query: str, limit: int = 10) -> dict[str, Any]:
 def list_devices(
     include_unknown: bool = False,
     format: str = "json",
-) -> list[dict[str, Any]] | str:
+) -> list[DeviceEntry] | str:
     """List USB/serial ports, flagging those likely to be Meshtastic devices.
 
     With include_unknown=True, returns every serial port the OS knows about
@@ -1124,7 +1133,7 @@ def list_devices(
         [{port, vid, pid, description, manufacturer, likely_meshtastic, ...}]
     """
     result = devices.list_devices(include_unknown=include_unknown)
-    return _to_markdown_table(result) if format == "table" else result
+    return _to_markdown_table(result) if format == "table" else cast(list[DeviceEntry], result)
 
 
 @firmware_tool()
@@ -1600,13 +1609,13 @@ def serial_close(session_id: str) -> dict[str, Any]:
 
 
 @app.tool()
-def device_info(port: str | None = None, timeout_s: float = 8.0) -> dict[str, Any]:
+def device_info(port: str | None = None, timeout_s: float = 8.0) -> DeviceInfo:
     """Connect via meshtastic.SerialInterface and return a summary of the node.
 
     If `port` is omitted and exactly one likely-Meshtastic device is connected,
     it's auto-selected; otherwise the tool errors with the candidate list.
     """
-    return info.device_info(port=port, timeout_s=timeout_s)
+    return cast(DeviceInfo, info.device_info(port=port, timeout_s=timeout_s))
 
 
 @app.tool()
@@ -1614,7 +1623,7 @@ def list_nodes(
     port: str | None = None,
     timeout_s: float = 8.0,
     format: str = "json",
-) -> list[dict[str, Any]] | str:
+) -> list[NodeEntry] | str:
     """Return the device's current node database (local node + all known peers).
 
     format: "json" (default) or "table" (Markdown). Use "table" when there
@@ -1640,7 +1649,7 @@ def list_nodes(
             for n in result
         ]
         return _to_markdown_table(flat)
-    return result
+    return cast(list[NodeEntry], result)
 
 
 # ---------- Device interaction: writes ------------------------------------
@@ -2794,7 +2803,7 @@ def logs_window(
     tag: str | None = None,
     port: str | None = None,
     max_lines: int = 200,
-) -> dict[str, Any]:
+) -> LogsWindow:
     """Recent firmware log lines from the persistent recorder.
 
     Filters by time window, regex over the line, level (single or
@@ -2808,14 +2817,17 @@ def logs_window(
     meshtastic Python lib drops record.level before fan-out. For those,
     `level` filter won't match; use `grep` instead.
     """
-    return log_query.logs_window(
-        start=start,
-        end=end,
-        grep=grep,
-        level=level,
-        tag=tag,
-        port=port,
-        max_lines=max_lines,
+    return cast(
+        LogsWindow,
+        log_query.logs_window(
+            start=start,
+            end=end,
+            grep=grep,
+            level=level,
+            tag=tag,
+            port=port,
+            max_lines=max_lines,
+        ),
     )
 
 
@@ -2858,20 +2870,23 @@ def packets_window(
     from_node: str | None = None,
     to_node: str | None = None,
     max: int = 200,
-) -> dict[str, Any]:
+) -> PacketsWindow:
     """Recent mesh packets recorded by the recorder.
 
     Each row is a summary (portnum, from/to, hop_limit, RSSI/SNR, payload
     size + first 64 bytes hex) — full payload bytes are not stored.
     `portnum` accepts a pipe-separated set like "TEXT_MESSAGE_APP|POSITION_APP".
     """
-    return log_query.packets_window(
-        start=start,
-        end=end,
-        portnum=portnum,
-        from_node=from_node,
-        to_node=to_node,
-        max=max,
+    return cast(
+        PacketsWindow,
+        log_query.packets_window(
+            start=start,
+            end=end,
+            portnum=portnum,
+            from_node=from_node,
+            to_node=to_node,
+            max=max,
+        ),
     )
 
 
@@ -2881,14 +2896,14 @@ def events_window(
     end: str = "now",
     kind: str | None = None,
     max: int = 200,
-) -> dict[str, Any]:
+) -> EventsWindow:
     """Return recorder events: connection lifecycle, node updates, and `mark_event` markers.
 
     `kind` ∈ recorder_start, recorder_pause, recorder_resume,
     connection_established, connection_lost, node_updated, mark.
     Pipe-separated sets ("connection_lost|connection_established") work.
     """
-    return log_query.events_window(start=start, end=end, kind=kind, max=max)
+    return cast(EventsWindow, log_query.events_window(start=start, end=end, kind=kind, max=max))
 
 
 @app.tool()
