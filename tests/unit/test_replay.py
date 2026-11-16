@@ -2193,7 +2193,7 @@ def test_a_preempted_connection_leaves_its_successor_connected():
     sess = ReplaySession("own", cap, ReplayParams(host="127.0.0.1", port=0))
     successor = object()
 
-    def serve(_client):
+    def serve(_client, _cancel):
         sess._client = successor  # a newer connection took over while this one was busy
         sess.state.connected = True
         raise OSError("severed")
@@ -2202,6 +2202,40 @@ def test_a_preempted_connection_leaves_its_successor_connected():
     sess._run_client(socket.socket(), ("127.0.0.1", 1))
     assert sess._client is successor
     assert sess.state.connected is True
+
+
+def test_preemption_cuts_short_a_slow_node_db_download():
+    """A client paced by a long node_delay hands over at once, and its error stays its own."""
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession(
+        "slow-db", cap, ReplayParams(host="127.0.0.1", port=port, node_delay=30, hold=True)
+    )
+    sess.start()
+    try:
+        slow = socket.create_connection(("127.0.0.1", port), timeout=5)
+        _send_toradio(slow, want_config_id=replay_engine.NONCE_DB)
+        slow.settimeout(5)
+        _read_frame(slow)  # the download has started and is now pacing
+        t0 = time.time()
+        fresh = socket.create_connection(("127.0.0.1", port), timeout=5)
+        fresh.settimeout(5)
+        _send_toradio(fresh, want_config_id=69420)
+        kinds = set()
+        while time.time() - t0 < 5 and "config_complete_id" not in kinds:
+            kinds.add(_read_frame(fresh).WhichOneof("payload_variant"))
+        assert "config_complete_id" in kinds
+        assert time.time() - t0 < 5
+        time.sleep(0.2)
+        assert sess.state.connected is True
+        assert sess.state.error is None
+        fresh.close()
+        slow.close()
+    finally:
+        sess.stop()
 
 
 def test_an_empty_window_completes_its_pass():

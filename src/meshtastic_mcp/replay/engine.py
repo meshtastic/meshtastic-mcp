@@ -383,6 +383,10 @@ class ReplaySession:
         )
         self._srv: socket.socket | None = None
         self._client: socket.socket | None = None  # currently-connected client, if any
+        # Ownership of the connection state changes hands only under this lock; the
+        # event ends the owner's waits early when a newer client preempts it.
+        self._owner_lock = threading.Lock()
+        self._owner_cancel: threading.Event | None = None
         self._advertiser: _mdns.Advertiser | None = None  # mDNS/Bonjour, if enabled
         self._ch_index = {name: i for i, name in enumerate(capture.channels)}
         # live-injection queue: (MeshPacket, channel_name, fuzz) drained per client
@@ -476,6 +480,7 @@ class ReplaySession:
         # idly-connected client's `_read_toradio()`. shutdown() reliably interrupts
         # a blocking recv() from another thread (unlike close(), which risks an FD-
         # reuse race); best-effort since the client may have already disconnected.
+        self._cancel_owner()
         if self._client is not None:
             with contextlib.suppress(OSError):
                 self._client.shutdown(socket.SHUT_RDWR)
@@ -511,6 +516,7 @@ class ReplaySession:
                 # sends want_config on a second, so serving clients in turn hangs it.
                 if serving is not None and serving[1].is_alive():
                     self._log_event("client_preempted", client=self.state.client_addr)
+                    self._cancel_owner()
                     self._sever(serving[0])
                     serving[1].join(timeout=10.0)
                 t = threading.Thread(
@@ -541,35 +547,49 @@ class ReplaySession:
             self._log.close()
             self.state.ended = True
 
+    def _cancel_owner(self) -> None:
+        with self._owner_lock:
+            if self._owner_cancel is not None:
+                self._owner_cancel.set()
+
     def _run_client(self, client: socket.socket, addr: tuple[str, int]) -> None:
-        self.state.client_addr = f"{addr[0]}:{addr[1]}"
-        self.state.connected = True
-        self._client = client
-        self.state.error = None  # clear any prior disconnect's error on a fresh connect
-        self._log_event("client_connected", client=self.state.client_addr)
+        cancel = threading.Event()
+        with self._owner_lock:
+            if self._owner_cancel is not None:
+                self._owner_cancel.set()
+            self._owner_cancel = cancel
+            self._client = client
+            self.state.client_addr = f"{addr[0]}:{addr[1]}"
+            self.state.connected = True
+            self.state.error = None  # clear any prior disconnect's error on a fresh connect
+        self._log_event("client_connected", client=f"{addr[0]}:{addr[1]}")
         packets_before = self.state.packets_sent
+        error: str | None = None
         try:
-            self._serve_client(client)
+            self._serve_client(client, cancel)
         except (OSError, ConnectionError) as exc:
-            self.state.error = str(exc)
+            error = str(exc)
         finally:
             with contextlib.suppress(OSError):
                 client.close()
-            # A preempted connection that outlived its join must not clear its successor's state.
-            if self._client is client:
-                self.state.connected = False
-                self.state.pass_complete = False
-                self._client = None
+            # A preempted connection must not touch its successor's state.
+            with self._owner_lock:
+                if self._client is client:
+                    self.state.error = error
+                    self.state.connected = False
+                    self.state.pass_complete = False
+                    self._client = None
+                    self._owner_cancel = None
             self._log_event(
                 "client_disconnected",
                 client=f"{addr[0]}:{addr[1]}",
-                error=self.state.error,
+                error=error,
                 packets_sent_this_connection=self.state.packets_sent - packets_before,
                 packets_sent_total=self.state.packets_sent,
                 fuzz=self.fuzzer.status() if self.fuzzer is not None else None,
             )
 
-    def _serve_client(self, client: socket.socket) -> None:
+    def _serve_client(self, client: socket.socket, cancel: threading.Event | None = None) -> None:
         send_lock = threading.Lock()
         streaming = [False]
 
@@ -611,7 +631,7 @@ class ReplaySession:
             if tr.HasField("want_config_id"):
                 nonce = tr.want_config_id
                 if nonce == NONCE_DB:
-                    self._send_db_phase(send, nonce)
+                    self._send_db_phase(send, nonce, cancel)
                     if not streaming[0]:
                         streaming[0] = True
                         threading.Thread(
@@ -712,12 +732,16 @@ class ReplaySession:
         fr.config_complete_id = nonce
         send(fr)
 
-    def _send_db_phase(self, send: Any, nonce: int) -> None:
+    def _send_db_phase(self, send: Any, nonce: int, cancel: threading.Event | None = None) -> None:
+        def pause() -> None:
+            delay = self.params.node_delay
+            if delay > 0 and (cancel or self.state.stop).wait(delay):
+                raise ConnectionError("preempted by a newer client")
+
         now = int(time.time())
         send(self._observer_nodeinfo())
         self._send_observer_stats(send)
-        if self.params.node_delay > 0:
-            time.sleep(self.params.node_delay)
+        pause()
         for n in self.capture.nodes:
             fr = mesh_pb2.FromRadio()
             heard = now
@@ -727,8 +751,7 @@ class ReplaySession:
                 )
             fr.node_info.CopyFrom(node_to_nodeinfo(n, last_heard=heard))
             send(fr)
-            if self.params.node_delay > 0:
-                time.sleep(self.params.node_delay)
+            pause()
         fr = mesh_pb2.FromRadio()
         fr.config_complete_id = nonce
         send(fr)
