@@ -14,6 +14,7 @@ can't accidentally `--write-flash` from freeform args.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from collections.abc import Sequence
@@ -169,8 +170,11 @@ def nrfutil_dfu(port: str, package_path: str, confirm: bool = False) -> dict[str
     if not pkg.is_file():
         raise ToolError(f"Package not found: {pkg}")
     binary = config.nrfutil_bin()
-    args = ["dfu", "serial", "--package", str(pkg), "--port", port, "-b", "115200"]
     adafruit = "adafruit" in binary.name
+    # The bootloader re-enumerates under a different /dev/serial/by-id name on the same kernel
+    # node, so a by-id path stops existing between the touch and the transfer.
+    device = os.path.realpath(port) if adafruit else port
+    args = ["dfu", "serial", "--package", str(pkg), "--port", device, "-b", "115200"]
     if adafruit:
         # The nRF52 bootloader leaves DFU ~30 s after a separate touch, so touch in the same
         # command; single bank matches PlatformIO's upload for these boards.

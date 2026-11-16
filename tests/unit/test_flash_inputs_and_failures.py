@@ -217,3 +217,15 @@ def test_nordic_nrfutil_keeps_its_own_arguments(monkeypatch, tmp_path) -> None:
     )
     assert hw_tools.nrfutil_dfu("/dev/x", str(pkg), confirm=True)["exit_code"] == 0
     assert "--singlebank" not in runs[0] and "-t" not in runs[0]
+
+
+def test_adafruit_dfu_resolves_a_by_id_link_to_its_device(adafruit, tmp_path) -> None:
+    pkg, runs, out = adafruit
+    out["stdout"] = "Device programmed.\n"
+    device = tmp_path / "ttyACM0"
+    device.write_text("")
+    link = tmp_path / "usb-RAKwireless_WisCore_RAK4631_Board-if00"
+    link.symlink_to(device)
+    hw_tools.nrfutil_dfu(str(link), str(pkg), confirm=True)
+    port_arg = runs[0][runs[0].index("--port") + 1]
+    assert port_arg == str(device)
