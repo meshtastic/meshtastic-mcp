@@ -302,6 +302,11 @@ class ReplayParams:
     # the device it's connected to populates and updates. chutil tracks the live
     # replay load. Seconds; 0 = off. Default 300 (5 min).
     local_metrics_interval: float = 300.0
+    # Epoch the capture's last packet is stamped as. None stamps every packet and
+    # node-DB entry with the wall clock as it is sent. Set, the window keeps its own
+    # spacing and ends at this instant, so sessions sharing an anchor give their apps
+    # identical last-heard and message times whenever each one connects.
+    clock_anchor: int | None = None
 
 
 @dataclass
@@ -358,6 +363,7 @@ class ReplaySession:
         # than in synthetic noise: the median of every DeviceMetrics sample in the
         # replay window. Computed once — the window never changes.
         self._channel_utilization, self._air_util_tx = _representative_radio_metrics(window)
+        self._clock_shift, self._last_rx = _anchored_clock(window, params.clock_anchor)
         # Guards the observer LocalStats counters. `_send_db_phase` runs on the
         # reader thread and can re-enter on a second want_config_id while the
         # stream thread is already emitting periodic stats + counting duplicates.
@@ -697,7 +703,10 @@ class ReplaySession:
             time.sleep(self.params.node_delay)
         for n in self.capture.nodes:
             fr = mesh_pb2.FromRadio()
-            fr.node_info.CopyFrom(node_to_nodeinfo(n, last_heard=now))
+            heard = now
+            if self._clock_shift is not None:
+                heard = self._last_rx.get(n.num & 0xFFFFFFFF, self.window[0][0]) + self._clock_shift
+            fr.node_info.CopyFrom(node_to_nodeinfo(n, last_heard=heard))
             send(fr)
             if self.params.node_delay > 0:
                 time.sleep(self.params.node_delay)
@@ -1163,7 +1172,9 @@ class ReplaySession:
                     mp.ParseFromString(raw)
                 except Exception:
                     continue
-                mp.rx_time = int(time.time())  # time-travel: stamp as now
+                # time-travel: stamp as now, or as the capture's own time moved to the anchor
+                shift = self._clock_shift
+                mp.rx_time = int(time.time()) if shift is None else rxt + shift
                 mp.channel = self._ch_index.get(ch_name, 0)
                 outs = self.fuzzer.on_packet(mp, ch_name) if self.fuzzer else [mp]
                 if self.fuzzer is not None:
@@ -1215,6 +1226,23 @@ class ReplaySession:
                     return
                 self.state.ended = True
                 return
+
+
+def _anchored_clock(
+    window: list[tuple[int, bytes, str]], anchor: int | None
+) -> tuple[int | None, dict[int, int]]:
+    """The shift that moves the window's last packet to `anchor`, and each sender's last rx_time."""
+    if anchor is None or not window:
+        return None, {}
+    last: dict[int, int] = {}
+    mp = mesh_pb2.MeshPacket()
+    for rxt, raw, _ in window:
+        try:
+            mp.ParseFromString(raw)
+        except Exception:
+            continue
+        last[getattr(mp, "from")] = rxt
+    return anchor - window[-1][0], last
 
 
 # ── Manager (process-global) ─────────────────────────────────────────────────

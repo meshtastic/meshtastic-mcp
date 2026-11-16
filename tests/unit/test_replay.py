@@ -2201,3 +2201,40 @@ def test_local_telemetry_comes_from_the_sessions_own_node():
     fr = sess._local_telemetry_fr(telemetry_pb2.Telemetry())
     assert getattr(fr.packet, "from") == custom
     assert fr.packet.to == custom
+
+
+def test_clock_anchor_gives_sessions_identical_node_db_times():
+    """Two sessions sharing an anchor send the same last_heard per node, whenever each runs."""
+    cap = sim.generate(nodes=8, days=1, seed=5, start=1_700_000_000)
+    anchor = 1_800_000_000
+
+    def node_db(params: ReplayParams) -> dict[int, int]:
+        sess = ReplaySession("anchored", cap, params)
+        frames: list[mesh_pb2.FromRadio] = []
+        sess._send_db_phase(frames.append, 1)
+        return {
+            f.node_info.num: f.node_info.last_heard
+            for f in frames
+            if f.WhichOneof("payload_variant") == "node_info"
+            and f.node_info.num != params.observer_num
+        }
+
+    first = node_db(ReplayParams(port=0, node_delay=0, clock_anchor=anchor))
+    time.sleep(1.1)
+    second = node_db(ReplayParams(port=0, node_delay=0, clock_anchor=anchor))
+    assert first == second
+    assert max(first.values()) == anchor
+    assert len(set(first.values())) > 1  # capture spacing kept, not one shared instant
+
+    unanchored = node_db(ReplayParams(port=0, node_delay=0))
+    assert len(set(unanchored.values())) == 1
+
+
+def test_clock_anchor_moves_the_last_packet_to_the_anchor():
+    cap = sim.generate(nodes=5, days=1, seed=6, start=1_700_000_000)
+    window = cap.window(None, None)
+    shift, last = replay_engine._anchored_clock(window, 1_800_000_000)
+    assert shift is not None
+    assert window[-1][0] + shift == 1_800_000_000
+    assert max(last.values()) == window[-1][0]
+    assert replay_engine._anchored_clock(window, None) == (None, {})

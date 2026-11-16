@@ -3245,6 +3245,7 @@ def replay_start(
     fuzz_seed: int = 0,
     mdns: bool | None = None,
     local_metrics_interval: float = 300.0,
+    clock_anchor: int | None = None,
 ) -> dict[str, Any]:
     """Start a simulated Meshtastic TCP device that streams a capture to an app.
 
@@ -3319,6 +3320,10 @@ def replay_start(
     TXT record); leave unset to use the process-wide default (env
     `MESHTASTIC_REPLAY_OBSERVER_NUM`) — pass a distinct value per call to run
     more than one concurrent session without them presenting the same identity.
+    `clock_anchor` (epoch seconds) stamps the window's last packet at that instant
+    and keeps the capture's own spacing, instead of stamping everything "now" as it
+    is sent; sessions given the same anchor show their apps the same last-heard
+    and message times.
 
     `fuzz` turns the stream hostile (fault injection + bad actors): a preset name
     (`light`, `parser`, `adversary`, `chaos`) or a dict of overrides (optionally
@@ -3385,6 +3390,7 @@ def replay_start(
         firmware_version=firmware_version,
         observer_lat=observer_lat,
         observer_lon=observer_lon,
+        clock_anchor=clock_anchor,
         observer_num=observer_num if observer_num is not None else replay_engine.OBSERVER_NUM,
         fuzz=replay_fuzz.from_spec(fuzz, seed=fuzz_seed),
         mdns=mdns,
