@@ -72,6 +72,9 @@ NO_DEVICE_SELECTED = "n"
 # with intent extras (the onboarding-skip affordance below). Stable across the
 # applicationId variants in KNOWN_PACKAGES (they share one app module).
 MAIN_ACTIVITY = "org.meshtastic.app.MainActivity"
+# Debug builds' shell-only activity alias; current apps honor the automation extras
+# (skip_onboarding, skip_connect_confirm) only when launched through it.
+AUTOMATION_LAUNCHER = "org.meshtastic.app.AutomationLauncher"
 
 # Debug-build intent extra that skips the first-run intro flow on a fresh install
 # (Meshtastic-Android#6044): `am start -n <pkg>/<activity> --ez skip_onboarding true`
@@ -418,6 +421,23 @@ def launch_app(
     pkg = package or resolve_package(serial=serial)
     if not pkg:
         raise EmulatorError("no Meshtastic app installed to launch (see resolve_package)")
+    if skip_onboarding and activity == MAIN_ACTIVITY:
+        # Apps that gate the extra on the alias ignore it on MainActivity; older apps
+        # have no alias, and `am start` then fails, so fall back to MainActivity.
+        alias = adb(
+            "shell",
+            "am",
+            "start",
+            "-n",
+            f"{pkg}/{AUTOMATION_LAUNCHER}",
+            "--ez",
+            EXTRA_SKIP_ONBOARDING,
+            "true",
+            serial=serial,
+            check=False,
+        )
+        if alias.returncode == 0 and "Error" not in (alias.stdout or "") + (alias.stderr or ""):
+            return
     args = ["shell", "am", "start", "-n", f"{pkg}/{activity}"]
     if skip_onboarding:
         args += ["--ez", EXTRA_SKIP_ONBOARDING, "true"]

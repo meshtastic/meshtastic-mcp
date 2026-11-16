@@ -137,12 +137,25 @@ def test_launch_app_with_skip_onboarding_adds_extra(monkeypatch) -> None:
     )
     monkeypatch.setattr(avd, "adb", lambda *a, **k: calls.append(a) or _cp(""))
     avd.launch_app(skip_onboarding=True)
+    # The app honors the extra only through its debug automation alias.
     assert len(calls) == 1
     args = calls[0]
     assert args[0:4] == ("shell", "am", "start", "-n")
-    assert args[4] == f"com.geeksville.mesh.fdroid.debug/{avd.MAIN_ACTIVITY}"
-    assert "--ez" in args
+    assert args[4] == f"com.geeksville.mesh.fdroid.debug/{avd.AUTOMATION_LAUNCHER}"
     assert args[-2:] == (avd.EXTRA_SKIP_ONBOARDING, "true")
+
+
+def test_launch_app_falls_back_to_main_activity_without_the_alias(monkeypatch) -> None:
+    calls = []
+    missing = "Error type 3\nError: Activity class {x/y} does not exist."
+    monkeypatch.setattr(avd, "resolve_package", lambda serial=None: "com.geeksville.mesh")
+    monkeypatch.setattr(
+        avd, "adb", lambda *a, **k: calls.append(a) or _cp(missing if len(calls) == 1 else "")
+    )
+    avd.launch_app(skip_onboarding=True)
+    assert len(calls) == 2
+    assert calls[1][4] == f"com.geeksville.mesh/{avd.MAIN_ACTIVITY}"
+    assert calls[1][-2:] == (avd.EXTRA_SKIP_ONBOARDING, "true")
 
 
 def test_launch_app_without_skip_omits_extra(monkeypatch) -> None:
