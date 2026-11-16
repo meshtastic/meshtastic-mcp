@@ -32,6 +32,17 @@ class ToolError(RuntimeError):
     pass
 
 
+def _destructive_word(args: Sequence[str], destructive: set[str]) -> str | None:
+    """The first non-flag argument that names a destructive subcommand, wherever it sits.
+
+    Flags take values (`--port /dev/x`, `-b 921600`), so the first non-flag argument is not
+    always the subcommand; checking every one means a value cannot hide `erase_flash` from the
+    gate. A value that happens to equal a subcommand name asks for confirmation it did not need.
+    """
+    wanted = {s.replace("-", "_") for s in destructive}
+    return next((a for a in args if not a.startswith("-") and a.replace("-", "_") in wanted), None)
+
+
 class ConfirmRequired(ToolError):
     """A destructive call was made without `confirm=True`; raised before any side effect."""
 
@@ -144,11 +155,8 @@ def esptool_raw(args: list[str], port: str | None = None, confirm: bool = False)
     if not args:
         raise ToolError("args must not be empty")
     connection.reject_if_tcp(port, "esptool_raw")
-    # Find the first non-flag arg (the subcommand).
-    subcommand = next((a for a in args if not a.startswith("-")), None)
-    if subcommand and subcommand.replace("-", "_") in {
-        s.replace("-", "_") for s in ESPTOOL_DESTRUCTIVE
-    }:
+    subcommand = _destructive_word(args, ESPTOOL_DESTRUCTIVE)
+    if subcommand:
         _require_confirm(confirm, f"esptool {subcommand}")
 
     binary = config.esptool_bin()
@@ -233,8 +241,8 @@ def nrfutil_dfu(port: str, package_path: str, confirm: bool = False) -> dict[str
 def nrfutil_raw(args: list[str], confirm: bool = False) -> dict[str, Any]:
     if not args:
         raise ToolError("args must not be empty")
-    subcommand = next((a for a in args if not a.startswith("-")), None)
-    if subcommand in NRFUTIL_DESTRUCTIVE:
+    subcommand = _destructive_word(args, NRFUTIL_DESTRUCTIVE)
+    if subcommand:
         _require_confirm(confirm, f"nrfutil {subcommand}")
     binary = config.nrfutil_bin()
     return _run(binary, args, timeout=_TIMEOUT_LONG)
@@ -300,8 +308,8 @@ def picotool_load(uf2_path: str, confirm: bool = False) -> dict[str, Any]:
 def picotool_raw(args: list[str], confirm: bool = False) -> dict[str, Any]:
     if not args:
         raise ToolError("args must not be empty")
-    subcommand = next((a for a in args if not a.startswith("-")), None)
-    if subcommand in PICOTOOL_DESTRUCTIVE:
+    subcommand = _destructive_word(args, PICOTOOL_DESTRUCTIVE)
+    if subcommand:
         _require_confirm(confirm, f"picotool {subcommand}")
     binary = config.picotool_bin()
     return _run(binary, args, timeout=_TIMEOUT_LONG)

@@ -173,16 +173,20 @@ def cancel(job_id: str) -> dict[str, Any]:
             }
         state["cancel_requested"] = True
         proc = state.get("proc")
-    if proc is not None:
-        _terminate(proc)
+        # Signal under the lock and only a live process: once it has exited and been reaped,
+        # its pid (the process group id) can belong to something else.
+        if proc is not None and proc.poll() is None:
+            _terminate(proc)
     return {"job_id": job_id, "status": "running", "cancelled": True}
 
 
-async def wait(job_id: str, poll_s: float = 0.5, tail_lines: int = 50) -> dict[str, Any]:
+async def wait(
+    job_id: str, poll_s: float = 0.5, tail_lines: int = 50, *, cancel_job: bool = True
+) -> dict[str, Any]:
     """Await a job's terminal status and return `poll`'s view of it.
 
-    If the awaiting task is cancelled, a cancellable job is cancelled too; any other job keeps
-    running and stays pollable by `job_id`.
+    If the awaiting task is cancelled and `cancel_job` is set, a cancellable job is cancelled too;
+    otherwise the job keeps running and stays pollable by `job_id`.
     """
     try:
         while True:
@@ -193,7 +197,8 @@ async def wait(job_id: str, poll_s: float = 0.5, tail_lines: int = 50) -> dict[s
                 break
             await asyncio.sleep(poll_s)
     except asyncio.CancelledError:
-        cancel(job_id)
+        if cancel_job:
+            cancel(job_id)
         raise
     return poll(job_id, tail_lines=tail_lines)
 
@@ -211,22 +216,28 @@ async def run_sync(
     makes the job `failed`, and this raises `RuntimeError` with its message.
     """
 
-    def _body(state: dict[str, Any], _log_path: Path) -> None:
+    def _body(state: dict[str, Any], log_path: Path) -> None:
         result = fn()
+        code = result.get("exit_code")
+        failed = code not in (0, None) or bool(result.get("upload_port_mismatch"))
+        # The function's own output, so a poll by job_id shows what the awaiting call saw.
+        streams = [str(result.get(k) or "") for k in ("stdout_tail", "stderr_tail")]
+        log_path.write_text("\n".join(s for s in streams if s), encoding="utf-8")
         with LOCK:
             state["result"] = result
-            state["exit_code"] = 0
+            state["exit_code"] = code if code is not None else (1 if failed else 0)
             state["finished_at"] = time.time()
-            state["status"] = "done"
+            state["status"] = "failed" if failed else "done"
 
     started = start(kind, label, _body, cancellable=cancellable)
     job_id = started["job_id"]
     final = await wait(job_id)
-    if final.get("status") != "done":
+    state = state_of(job_id) or {}
+    if "result" not in state:
         raise RuntimeError(
             final.get("worker_error") or f"{kind} job {job_id} {final.get('status')}"
         )
-    state = state_of(job_id) or {}
+    # A failed result comes back as-is with its job_id; the caller decides it is an error.
     return {**state["result"], "job_id": job_id}
 
 

@@ -230,14 +230,19 @@ def _stage_install_inputs(factory: Path) -> None:
     if not mcu:
         raise FlashError(f"{meta.name} names no mcu, so the OTA image cannot be chosen.")
     ota = factory.parent / f"mt-{mcu}-ota.bin"
-    if ota.is_file():
-        return
     source = config.firmware_root() / ota.name
     if not source.is_file():
+        if ota.is_file():
+            return
         raise FlashError(
             f"{ota.name} is in neither {factory.parent} nor the firmware root; "
             "the unified OTA image is required to erase and flash."
         )
+    # The firmware root holds the current image; replace a staged copy that no longer matches.
+    if ota.is_file():
+        here, there = ota.stat(), source.stat()
+        if here.st_size == there.st_size and here.st_mtime == there.st_mtime:
+            return
     shutil.copy2(source, ota)
 
 

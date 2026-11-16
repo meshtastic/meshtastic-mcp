@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -88,6 +89,18 @@ def _flash_log_path() -> Path | None:
     return Path(raw)
 
 
+def _kill_group(proc: subprocess.Popen[str]) -> None:
+    """Kill a process started with `start_new_session=True` and every child it spawned.
+
+    pio hands the build to scons and the compilers; killing only the leader leaves them writing
+    the shared `.pio/build`.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+
+
 def _run_capturing(
     argv: Sequence[str],
     *,
@@ -138,7 +151,7 @@ def _run_capturing(
         try:
             out, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_group(proc)
             proc.communicate()
             raise
         return (proc.returncode, out or "", err or "", time.monotonic() - t0)
@@ -238,7 +251,10 @@ def _run_capturing(
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        if interruptible:
+            _kill_group(proc)
+        else:
+            proc.kill()
         proc.wait()
         # Drain readers before re-raising so we don't leave threads behind.
         t_out.join(timeout=2)
