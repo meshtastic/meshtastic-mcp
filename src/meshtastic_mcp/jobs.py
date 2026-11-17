@@ -242,14 +242,9 @@ def poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
     if state is None:
         return {"error": f"Unknown job_id {job_id!r}; jobs end when the server restarts."}
 
-    log_path = Path(state["log_path"])
-    log_tail: list[str] = []
-    if log_path.exists():
-        log_tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-tail_lines:]
-
     with LOCK:
         elapsed = round((state["finished_at"] or time.time()) - state["started_at"], 1)
-        return {
+        result: dict[str, Any] = {
             "job_id": job_id,
             "kind": state["kind"],
             "label": state["label"],
@@ -257,13 +252,21 @@ def poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
             "elapsed_s": elapsed,
             "exit_code": state.get("exit_code"),
             "duration_s": state.get("duration_s"),
-            "artifacts": state.get("artifacts", []),
+            "artifacts": list(state.get("artifacts", [])),
             # Deliberately NOT "error": a bare {"error": ...} is this module's
             # "unknown job_id" reply, and callers branch on that key's presence.
             "worker_error": state.get("error"),
-            "log_tail": log_tail,
             "log_path": state["log_path"],
         }
+
+    # The log is read after the status: a job writes its log before it leaves "running", so a
+    # final status always comes with the whole log.
+    log_path = Path(result["log_path"])
+    log_tail: list[str] = []
+    if log_path.exists():
+        log_tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-tail_lines:]
+    result["log_tail"] = log_tail
+    return result
 
 
 def cancel(job_id: str) -> dict[str, Any]:
