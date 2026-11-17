@@ -39,6 +39,7 @@ from meshtastic.protobuf import (
     channel_pb2,
     config_pb2,
     mesh_pb2,
+    module_config_pb2,
     portnums_pb2,
     telemetry_pb2,
 )
@@ -46,7 +47,6 @@ from meshtastic.protobuf import (
 from ..recorder.recorder import _default_dir as _recorder_default_dir
 from ..recorder.rotating import _RotatingJsonl
 from . import mdns as _mdns
-from .build import mesh_beacon_module_config
 from .capture import Capture, node_to_nodeinfo
 from .fuzz import FuzzConfig, Fuzzer
 
@@ -396,7 +396,11 @@ class ReplaySession:
         self._owner_lock = threading.Lock()
         self._owner_cancel: threading.Event | None = None
         self._advertiser: _mdns.Advertiser | None = None  # mDNS/Bonjour, if enabled
-        self._ch_index = {name: i for i, name in enumerate(capture.channels)}
+        # The config phase advertises only the first MAX_CHANNELS; traffic on a later
+        # capture channel is dropped, since no slot carries it.
+        self._channels = capture.channels[:MAX_CHANNELS]
+        self._ch_index = {name: i for i, name in enumerate(self._channels)}
+        self._unadvertised = set(capture.channels[MAX_CHANNELS:]) - set(self._ch_index)
         # live-injection queue: (MeshPacket, channel_name, fuzz) drained per client
         self._inject_q: queue.Queue[tuple[mesh_pb2.MeshPacket, str, bool]] = queue.Queue()
         # live-injection queue for top-level FromRadio messages (FileInfo, MyInfo, Config,
@@ -410,6 +414,9 @@ class ReplaySession:
         # re-adds a node the next time it's heard, the replay keeps them gone for the rest of
         # the session: left out of the node DB on reconnect, their packets dropped.
         self._removed_nodes: set[int] = set()
+        # Held across a sender's removed check and its write, and around a removal, so no
+        # packet from a node goes out once its removal is recorded.
+        self._removal_lock = threading.Lock()
         self.fuzzer: Fuzzer | None = (
             Fuzzer(params.fuzz, capture.nodes, self._ch_index) if params.fuzz else None
         )
@@ -682,13 +689,12 @@ class ReplaySession:
         sends `config_complete_id` after the DB, if any, so each request closes
         with one completion for its own nonce.
         """
-        n_nodes = len(self.capture.nodes)
         fr = mesh_pb2.FromRadio()
         mi = fr.my_info
         mi.my_node_num = self.params.observer_num
         mi.reboot_count = 1
         mi.min_app_version = 30200
-        mi.nodedb_count = n_nodes
+        mi.nodedb_count = self._live_node_count()
         mi.device_id = struct.pack("<I", self.params.observer_num) * 4  # stable 16-byte id
         mi.pio_env = "replay"
         with contextlib.suppress(ValueError, KeyError):
@@ -707,7 +713,7 @@ class ReplaySession:
         send(self._observer_nodeinfo())
 
         specs = self.capture.channel_specs
-        for idx, name in enumerate(self.capture.channels[:MAX_CHANNELS]):
+        for idx, name in enumerate(self._channels):
             fr = mesh_pb2.FromRadio()
             fr.channel.index = idx
             if specs is not None and idx < len(specs):
@@ -729,7 +735,7 @@ class ReplaySession:
                 fr.channel.settings.psk = bytes([(0x10 + idx) & 0xFF] * 16)
                 fr.channel.settings.name = name
             send(fr)
-        for idx in range(len(self.capture.channels[:MAX_CHANNELS]), MAX_CHANNELS):
+        for idx in range(len(self._channels), MAX_CHANNELS):
             fr = mesh_pb2.FromRadio()
             fr.channel.index = idx
             fr.channel.role = channel_pb2.Channel.Role.DISABLED
@@ -756,7 +762,9 @@ class ReplaySession:
         send(fr)
         if self.params.beacon_listen:
             fr = mesh_pb2.FromRadio()
-            fr.moduleConfig.MergeFromString(mesh_beacon_module_config(listen=True))
+            fr.moduleConfig.mesh_beacon.flags = (
+                module_config_pb2.ModuleConfig.MeshBeaconConfig.FLAG_LISTEN_ENABLED
+            )
             send(fr)
 
     def _send_node_db(self, send: Any, cancel: threading.Event | None = None) -> None:
@@ -815,11 +823,34 @@ class ReplaySession:
             stats.num_rx_dupe = self.state.stats_dupes
             stats.num_tx_relay = 0
             # Self-inclusive census, like a real device's own LocalStats.
-            stats.num_online_nodes = len(self.capture.nodes) + 1
-            stats.num_total_nodes = len(self.capture.nodes) + 1
+            stats.num_online_nodes = self._live_node_count() + 1
+            stats.num_total_nodes = stats.num_online_nodes
             stats.noise_floor = random.randint(-105, -92)
             send(self._local_telemetry_fr(telemetry))
             self.state.stats_sent = next_tx
+
+    def _live_node_count(self) -> int:
+        """Capture nodes still in the node DB: every one the client has not removed."""
+        return sum(1 for n in self.capture.nodes if n.num & 0xFFFFFFFF not in self._removed_nodes)
+
+    def _slot(self, ch_name: str) -> int | None:
+        """The advertised slot for a channel name, or None for a channel past the limit.
+
+        A name the capture never listed keeps the primary slot.
+        """
+        if ch_name in self._unadvertised:
+            return None
+        return self._ch_index.get(ch_name, 0)
+
+    def _send_unless_removed(self, send: Any, mp: mesh_pb2.MeshPacket) -> bool:
+        """Send `mp` unless its sender was removed; True when it went out."""
+        fr = mesh_pb2.FromRadio()
+        fr.packet.CopyFrom(mp)
+        with self._removal_lock:
+            if getattr(mp, "from") in self._removed_nodes:
+                return False
+            send(fr)
+        return True
 
     def _handle_client_packet(self, pkt: mesh_pb2.MeshPacket, send: Any) -> None:
         """Answer admin round-trips and traceroute requests from the connected client.
@@ -850,7 +881,8 @@ class ReplaySession:
         variant = req.WhichOneof("payload_variant")
         if variant == "remove_by_nodenum":
             num = req.remove_by_nodenum & 0xFFFFFFFF
-            self._removed_nodes.add(num)
+            with self._removal_lock:
+                self._removed_nodes.add(num)
             self._log_event("node_removed", node=f"!{num:08x}")
             return
         if variant != "get_owner_request":
@@ -1152,18 +1184,18 @@ class ReplaySession:
                 mp, ch_name, fuzz = self._inject_q.get(timeout=0.5)
             except queue.Empty:
                 continue
+            slot = self._slot(ch_name)
+            if slot is None:
+                continue
             mp.rx_time = int(time.time())
-            mp.channel = self._ch_index.get(ch_name, 0)
+            mp.channel = slot
             outs = (
                 self.fuzzer.on_packet(mp, ch_name) if (fuzz and self.fuzzer is not None) else [mp]
             )
             for out_mp in outs:
-                if getattr(out_mp, "from") in self._removed_nodes:
-                    continue
-                fr = mesh_pb2.FromRadio()
-                fr.packet.CopyFrom(out_mp)
                 try:
-                    send(fr)
+                    if not self._send_unless_removed(send, out_mp):
+                        continue
                 except (OSError, ConnectionError):
                     self._inject_q.put((mp, ch_name, fuzz))  # leave it for the live connection
                     return
@@ -1206,7 +1238,7 @@ class ReplaySession:
         if announce:
             from collections import Counter
 
-            busiest = Counter(ch for _, _, ch in pkts).most_common(1)
+            busiest = Counter(ch for _, _, ch in pkts if ch in self._ch_index).most_common(1)
             ann_idx = self._ch_index.get(busiest[0][0], 0) if busiest else 0
             try:
                 send(self._announcer_nodeinfo())
@@ -1262,20 +1294,20 @@ class ReplaySession:
                     mp.ParseFromString(raw)
                 except Exception:
                     continue
+                slot = self._slot(ch_name)
+                if slot is None:
+                    continue
                 # time-travel: stamp as now, or as the capture's own time moved to the anchor
                 shift = self._clock_shift
                 mp.rx_time = int(time.time()) if shift is None else rxt + shift
-                mp.channel = self._ch_index.get(ch_name, 0)
+                mp.channel = slot
                 outs = self.fuzzer.on_packet(mp, ch_name) if self.fuzzer else [mp]
                 if self.fuzzer is not None:
                     outs = outs + self.fuzzer.on_tick(time.time())
                 for out_mp in outs:
-                    if getattr(out_mp, "from") in self._removed_nodes:
-                        continue
-                    fr = mesh_pb2.FromRadio()
-                    fr.packet.CopyFrom(out_mp)
                     try:
-                        send(fr)
+                        if not self._send_unless_removed(send, out_mp):
+                            continue
                     except (OSError, ConnectionError):
                         self._sever(client)
                         return

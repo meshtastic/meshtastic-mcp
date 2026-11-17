@@ -558,6 +558,7 @@ def _build_replay_session(args):
         firmware_version=args.firmware_version,
         mdns=False if args.no_mdns else None,
         local_metrics_interval=args.local_metrics_interval,
+        beacon_listen=getattr(args, "beacon_listen", False),
     )
     if args.fuzz:
         from meshtastic_mcp.replay import fuzz as replay_fuzz
@@ -804,6 +805,11 @@ def main(argv=None) -> None:
     )
     rpl.add_argument("--node-delay", type=float, default=0.005, help="node-DB pacing seconds")
     rpl.add_argument("--no-mdns", action="store_true", help="don't advertise via mDNS/Bonjour")
+    rpl.add_argument(
+        "--beacon-listen",
+        action="store_true",
+        help="advertise the mesh beacon module listening, so the app keeps MESH_BEACON_APP packets",
+    )
     rpl.add_argument(
         "--local-metrics-interval",
         type=float,

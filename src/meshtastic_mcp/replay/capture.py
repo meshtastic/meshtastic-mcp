@@ -253,11 +253,12 @@ def from_sqlite(
                 "WHERE channel IS NOT NULL AND channel != '' "
                 "GROUP BY channel ORDER BY c DESC"
             ).fetchall()
+            # All of them: the engine advertises the first MAX_CHANNELS and drops the rest.
             names = [r[0] for r in rows if r[0] not in _NON_CHANNEL_TOPICS]
             if "LongFast" in names:
                 names.remove("LongFast")
                 names = ["LongFast", *names]
-            cap.channels = names[:8] or ["LongFast"]
+            cap.channels = names or ["LongFast"]
 
         # Nodes: most-recently-active first (like a real device's node DB).
         sql = (
@@ -321,7 +322,8 @@ def from_events(
     Each event: ``{kind, args, from, to?, channel?, delay?}`` — ``kind`` and
     ``args`` are the same as ``replay_inject`` / :mod:`build` (waypoint, position,
     text, nodeinfo, raw); ``delay`` is seconds after the previous event (default
-    1). Nodes referenced by NodeInfo events populate the node DB. Mirrors
+    1). Nodes referenced by NodeInfo events populate the node DB, and a NodeInfo
+    event's ``is_favorite`` arg pins that node on the connected device. Mirrors
     :func:`from_sqlite` as a capture source, so a scenario can be replayed,
     windowed, fuzzed, or paced like any other.
     """
@@ -355,6 +357,7 @@ def from_events(
                 a.get("short_name"),
                 a.get("hw_model"),
                 a.get("role"),
+                is_favorite=bool(a.get("is_favorite", False)),
             )
         elif frm not in seen:
             seen[frm] = NodeRow(frm, f"!{frm:08x}")
@@ -453,24 +456,26 @@ def node_to_nodeinfo(n: NodeRow, *, last_heard: int) -> mesh_pb2.NodeInfo:
     return ni
 
 
-def _node_snr(num: int) -> float:
-    """A per-node SNR (dB), stable per node and skewed toward weak links.
+# Signal-quality model shared with the sim, skewed toward low-quality (orange to red)
+# links so the map shows mostly marginal signal with a strong minority for contrast.
+# (lo, hi) dB bands and draw weights: excellent, good, weak, poor.
+SNR_TIERS = ((5.0, 11.0), (-2.0, 5.0), (-10.0, -2.0), (-20.0, -10.0))
+SNR_WEIGHTS = (1, 2, 3, 8)  # ~7% excellent, 14% good, 21% weak, 57% poor (<-10 dB)
 
-    Derived deterministically from the node number (no RNG, so it never perturbs
-    the simulation stream), mapped through the same low-skewed tier weights the
-    sim uses elsewhere: most nodes read as marginal signal, a minority strong.
-    Replaces a flat 6.0 that painted every node green on the map.
+
+def _node_snr(num: int) -> float:
+    """A per-node SNR (dB) from the `SNR_TIERS` model, stable per node.
+
+    Derived from the node number with no RNG, so it never perturbs the
+    simulation stream.
     """
     h = (num * 2654435761) & 0xFFFFFFFF  # Knuth multiplicative hash
-    tier_sel = (h & 0xFFFF) / 0xFFFF  # 0..1 picks the quality tier
+    pick = (h & 0xFFFF) / 0x10000 * sum(SNR_WEIGHTS)  # [0, total) picks the tier
     within = ((h >> 16) & 0xFFFF) / 0xFFFF  # 0..1 position within the tier
-    # Cumulative weights 1,2,3,8 (=14): excellent, good, weak, poor — matches sim.
-    if tier_sel < 1 / 14:
-        lo, hi = 5.0, 11.0
-    elif tier_sel < 3 / 14:
-        lo, hi = -2.0, 5.0
-    elif tier_sel < 6 / 14:
-        lo, hi = -10.0, -2.0
-    else:
-        lo, hi = -20.0, -10.0
+    lo, hi = SNR_TIERS[-1]
+    for band, weight in zip(SNR_TIERS, SNR_WEIGHTS, strict=True):
+        if pick < weight:
+            lo, hi = band
+            break
+        pick -= weight
     return round(lo + within * (hi - lo), 2)

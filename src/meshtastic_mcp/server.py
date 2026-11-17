@@ -3752,6 +3752,7 @@ def replay_start(
     local_metrics_interval: float = 300.0,
     clock_anchor: int | None = None,
     hold: bool = False,
+    beacon_listen: bool = False,
 ) -> dict[str, Any]:
     """Start a simulated Meshtastic TCP device that streams a capture to an app.
 
@@ -3831,6 +3832,8 @@ def replay_start(
     is sent; sessions given the same anchor show their apps the same last-heard
     and message times. `hold` plays the window once per connection, then stays
     connected and quiet, and takes a client back after it hangs up, as a radio does.
+    `beacon_listen` advertises the mesh beacon module listening, so the app keeps the
+    `MESH_BEACON_APP` packets it would otherwise drop.
 
     `fuzz` turns the stream hostile (fault injection + bad actors): a preset name
     (`light`, `parser`, `adversary`, `chaos`) or a dict of overrides (optionally
@@ -3899,6 +3902,7 @@ def replay_start(
         observer_lon=observer_lon,
         clock_anchor=clock_anchor,
         hold=hold,
+        beacon_listen=beacon_listen,
         observer_num=observer_num if observer_num is not None else replay_engine.OBSERVER_NUM,
         fuzz=replay_fuzz.from_spec(fuzz, seed=fuzz_seed),
         mdns=mdns,

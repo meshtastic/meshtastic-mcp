@@ -26,6 +26,8 @@ import itertools
 import math
 import random
 import time
+import zlib
+from typing import Any
 
 from meshtastic.protobuf import (
     admin_pb2,
@@ -38,7 +40,7 @@ from meshtastic.protobuf import (
 )
 
 from .build import MESH_BEACON_APP, beacon_payload
-from .capture import Capture, NodeRow
+from .capture import SNR_TIERS, SNR_WEIGHTS, Capture, NodeRow
 
 BROADCAST = 0xFFFFFFFF
 
@@ -113,6 +115,8 @@ PROFILE: dict = {
     # Traceroute request->response pairs per hour. The app pops a modal for each
     # response addressed to the observer, so UI-driving sessions set this to 0.
     "traceroute_pairs_per_hour": 12,
+    # (min, max) relays a traceroute draws; sparse corridors yield fewer.
+    "traceroute_hops": (0, 3),
     # NeighborInfo is off by default in real firmware — only infra + a sliver
     # of enthusiasts emit it (BM: 0.04% of traffic).
     "neighborinfo_interval": 21600,
@@ -191,6 +195,8 @@ PROFILE: dict = {
     "emoji_short_fraction": 0.5,
     "pki_fraction": 0.33,
     "key_verified_fraction": 0.05,
+    # Fraction of nodes the connected device has pinned as favorites (NodeInfo.is_favorite).
+    "favorite_fraction": 0.0,
     # Observer / RF gateway model (see replay/observer.py): when enabled, the
     # generated "all traffic that exists" stream is filtered + duplicated into
     # what a single gateway at the venue would have heard — RF loss with
@@ -1220,6 +1226,27 @@ def _build_nodes(
     return node_rows, meta
 
 
+def _is_favorite(num: int, fraction: float) -> bool:
+    """Whether the connected device pins `num`, from a hash of the node number.
+
+    Draws no RNG, so turning favorites on leaves every name, key and packet unchanged.
+    """
+    return zlib.crc32(num.to_bytes(4, "little")) / 2**32 < fraction
+
+
+def _beacon_presets(P: dict) -> list[str]:
+    """The profile's `beacon_presets` as ModemPreset names; raises on an unknown one."""
+    presets = P.get("beacon_presets") or ["LONG_FAST"]
+    if not isinstance(presets, (list, tuple)):
+        raise ValueError(f"beacon_presets must be a list of ModemPreset names, got {presets!r}")
+    known = config_pb2.Config.LoRaConfig.ModemPreset.keys()
+    names = [str(p).strip().upper() for p in presets]
+    bad = [p for p, name in zip(presets, names, strict=True) if name not in known]
+    if bad:
+        raise ValueError(f"unknown beacon_presets {bad}: expected ModemPreset names {known}")
+    return names
+
+
 def generate(
     *,
     nodes: int = 800,
@@ -1238,6 +1265,7 @@ def generate(
     dicts (venue/observer/climate/pos_interval) deep-merge over the defaults.
     """
     P = _resolve_profile(profile)
+    beacon_presets = _beacon_presets(P)
     rng = random.Random(seed)
     chans = channels or list(P["channels"])
     ch_index = {c: i for i, c in enumerate(chans)}
@@ -1416,7 +1444,7 @@ def generate(
         # the route traces a believable geographic path on the map instead of
         # zig-zagging through random nodes. `traceroute_hops` (min, max) caps the
         # relay count; sparse corridors naturally yield shorter routes.
-        hop_min, hop_max = P.get("traceroute_hops", (0, 3))
+        hop_min, hop_max = P["traceroute_hops"]
         want = tr_rng.randint(int(hop_min), int(hop_max))
         relays = _path_relays(tr_rng, na, nb, meta, want, routers, t)
         relay_nums = [r["num"] for r in relays]
@@ -1540,7 +1568,7 @@ def generate(
                 m["num"],
                 BROADCAST,
                 MESH_BEACON_APP,
-                _pl_beacon(rng, chans, P.get("beacon_presets") or ["LONG_FAST"]),
+                _pl_beacon(rng, chans, beacon_presets),
                 ch="LongFast",
                 hop=3,
             )
@@ -1670,6 +1698,11 @@ def generate(
     if bot_packets:
         node_rows = node_rows + bot_rows
         packets = sorted(packets + bot_packets, key=lambda p: p[0])
+
+    favorite_fraction = float(P["favorite_fraction"])
+    if favorite_fraction > 0:
+        for nr in node_rows:
+            nr.is_favorite = _is_favorite(nr.num, favorite_fraction)
 
     cap = Capture(
         nodes=node_rows,
@@ -1989,7 +2022,15 @@ _RELAY_CORRIDOR_FRAC = 0.3
 _RELAY_CORRIDOR_MIN_DEG = 0.02
 
 
-def _path_relays(rng, na, nb, meta, want, routers, t):
+def _path_relays(
+    rng: random.Random,
+    na: dict[str, Any],
+    nb: dict[str, Any],
+    meta: list[dict[str, Any]],
+    want: int,
+    routers: list[dict[str, Any]],
+    t: int,
+) -> list[dict[str, Any]]:
     """Relays along the na->nb line, evenly spaced and ordered by progress.
 
     Bins the source->destination segment into `want` slices and takes the best
@@ -2015,7 +2056,7 @@ def _path_relays(rng, na, nb, meta, want, routers, t):
         return pool[:want]
     corridor = max(_RELAY_CORRIDOR_FRAC * math.sqrt(seg2), _RELAY_CORRIDOR_MIN_DEG)
     router_nums = {r["num"] for r in routers}
-    best: dict[int, tuple[float, float, dict]] = {}
+    best: dict[int, tuple[float, float, dict[str, Any]]] = {}
     for m in meta:
         if m["num"] in endpoints:
             continue
@@ -2034,16 +2075,9 @@ def _path_relays(rng, na, nb, meta, want, routers, t):
     return [c[2] for c in sorted(best.values(), key=lambda c: c[1])]
 
 
-# Signal-quality model, deliberately skewed toward low-quality (orange→red)
-# links so the map shows mostly marginal signal with a strong minority for
-# contrast. (lo, hi) dB tier bands + draw weights: excellent, good, weak, poor.
-_SNR_TIERS = ((5.0, 11.0), (-2.0, 5.0), (-10.0, -2.0), (-20.0, -10.0))
-_SNR_WEIGHTS = (1, 2, 3, 8)  # ~7% excellent, 14% good, 21% weak, 57% poor (<-10 dB)
-
-
 def _weak_snr(rng):
     """One SNR value (dB) from the low-skewed tier model — mostly weak/poor."""
-    lo, hi = rng.choices(_SNR_TIERS, weights=_SNR_WEIGHTS)[0]
+    lo, hi = rng.choices(SNR_TIERS, weights=SNR_WEIGHTS)[0]
     return rng.uniform(lo, hi)
 
 
