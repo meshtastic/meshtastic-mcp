@@ -32,6 +32,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import jobs
+
 INFO_FILE = "INFO_UF2.TXT"
 CURRENT_FILE = "CURRENT.UF2"
 FACTORY_ERASE_UF2_RELPATH = Path("tools") / "meshtastic_factory_erase.uf2"
@@ -628,14 +630,17 @@ def backup_current_uf2(
     }
 
 
-def _copy_to_drive(src: Path, dest: Path) -> tuple[int, str | None]:
+def _copy_to_drive(src: Path, dest: Path, size: int) -> tuple[int, str | None]:
     written = 0
     try:
         with src.open("rb") as fin, dest.open("wb") as fout:
             while chunk := fin.read(64 * 1024):
                 fout.write(chunk)
                 written += len(chunk)
+                jobs.report(f"copying {src.name}: {written} of {size} bytes", written, size)
             fout.flush()
+            # The page cache takes the copy at once; the drive receives it during the fsync.
+            jobs.report(f"syncing {src.name} to the drive", written, size)
             os.fsync(fout.fileno())
     except OSError as exc:
         return written, str(exc)
@@ -670,7 +675,7 @@ def _write_and_wait(
     clock: Callable[[], float],
 ) -> dict[str, Any]:
     dest = mount / src.name
-    written, err = _copy_to_drive(src, dest)
+    written, err = _copy_to_drive(src, dest, size)
     if err is not None and written < size:
         return {
             "ok": False,
