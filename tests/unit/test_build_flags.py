@@ -45,7 +45,7 @@ class TestBuildFlagsEnv:
         assert set(flags) == {"-DDEBUG_HEAP=1", "-DFOO=x", "-DBAR"}
 
 
-@pytest.mark.firmware
+@pytest.mark.usefixtures("fake_firmware_root")
 class TestBuildPropagatesFlags:
     def test_extra_env_passed_to_pio_run(self) -> None:
         # Mock pio.run so we don't actually invoke pio. Capture extra_env.
