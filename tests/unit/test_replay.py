@@ -2405,7 +2405,14 @@ def test_clock_anchor_gives_sessions_identical_node_db_times():
     time.sleep(1.1)
     second = node_db(ReplayParams(port=0, node_delay=0, clock_anchor=anchor))
     assert first == second
-    assert max(first.values()) == anchor
+    # The window's last packet lands on the anchor, and its sender may be outside the node DB.
+    window = cap.window(None, None)
+    newest_db_rx = max(
+        rxt
+        for rxt, raw, _ in window
+        if getattr(mesh_pb2.MeshPacket.FromString(raw), "from") in first
+    )
+    assert max(first.values()) == anchor - (window[-1][0] - newest_db_rx)
     assert len(set(first.values())) > 1  # capture spacing kept, not one shared instant
 
     unanchored = node_db(ReplayParams(port=0, node_delay=0))
