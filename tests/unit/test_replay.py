@@ -18,6 +18,7 @@ import sqlite3
 import struct
 import time
 from collections import Counter
+from collections.abc import Callable
 
 import pytest
 from meshtastic.protobuf import channel_pb2, mesh_pb2, portnums_pb2, telemetry_pb2
@@ -123,6 +124,20 @@ def _send_toradio(sock: socket.socket, **kw) -> None:
     sock.sendall(bytes([0x94, 0xC3]) + struct.pack(">H", len(payload)) + payload)
 
 
+def _wait_until(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:
+    """Poll `predicate` until it holds or `timeout` passes.
+
+    The session bumps its counters after `send` returns, so a client can read a frame
+    before the counter that frame advances.
+    """
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
 def test_session_handshake_and_stream():
     cap = sim.generate(nodes=40, days=1, seed=11, start=1_700_000_000)
     params = ReplayParams(host="127.0.0.1", port=0, rate=500, node_delay=0)
@@ -172,7 +187,9 @@ def test_session_handshake_and_stream():
         assert node_infos >= len(cap.nodes)
         assert variants["channel"] == replay_engine.MAX_CHANNELS
         assert packets >= 1
-        assert sess.state.packets_sent >= packets
+        assert _wait_until(lambda: sess.state.packets_sent >= packets), (
+            f"packets_sent={sess.state.packets_sent} after the client read {packets}"
+        )
     finally:
         sess.stop()
 
@@ -424,7 +441,9 @@ def test_observer_local_stats_precede_bulk_database():
         assert all(count == 1 for count in streamed_packet_ids.values())
         assert initial["num_online_nodes"] == len(cap.nodes) + 1
         assert initial["num_total_nodes"] == len(cap.nodes) + 1
-        assert sess.state.stats_sent >= 2
+        assert _wait_until(lambda: sess.state.stats_sent >= 2), (
+            f"stats_sent={sess.state.stats_sent} after the client read 2 LocalStats"
+        )
         assert updated["num_packets_rx"] - updated["num_rx_dupe"] <= sess.state.packets_sent
     finally:
         client.close()
