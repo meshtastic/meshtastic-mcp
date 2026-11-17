@@ -27,7 +27,7 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   calls; see `docs/confirmations.md`), `jobs.py` (the one job registry) and `tasks.py` (MCP
   background tasks when the `[tasks]` extra is installed; see `docs/background-jobs.md`),
   `toolsets.py` (`MESHTASTIC_MCP_TOOLSETS` / `MESHTASTIC_MCP_READ_ONLY`, a `Transform` that hides
-  tools; see `docs/toolsets.md`), `schemas.py` (TypedDict output schemas for the most-used tools)
+  tools; see `docs/toolsets.md`), `schemas.py` (the TypedDict output schemas)
   and `serve.py` (`meshtastic-mcp serve`, HTTP with a bearer token; see `docs/serve.md`). Tool
   hints come from the `_READ_ONLY` / `_DESTRUCTIVE` / `_OPEN_WORLD` maps through
   `_AnnotationTransform` in `server.py`.
@@ -221,9 +221,17 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   (uhubctl_cycle) and retry`, `... pass the board's port`).
 - **`async` tools keep blocking work off the event loop.** A gated tool is `async` so it can ask
   the human; everything after the gate (serial, subprocess, sleeps) runs in `_off_loop`.
-- **Output schemas hold for every return.** A tool annotated with a `schemas.py` TypedDict
-  advertises it as `outputSchema`, and clients validate against it, so a field whose type varies
-  stays `Any`.
+- **Output schemas hold for every return.** A tool's return shape is a TypedDict in `schemas.py`,
+  which it advertises as `outputSchema`, and clients validate against it: a key only some return
+  paths carry is `NotRequired`, and a field whose type varies stays `Any`.
+  `tests/unit/test_output_schemas.py` runs each shape's return paths through a validating client.
+- **Tool docstrings are a description and an `Args:` section.** fastmcp makes the text before the
+  first section the tool description and each `Args:` entry that parameter's inputSchema
+  `description`. It drops `Returns:`, `Example:` and anything after a section, and a line ending in
+  a colon above an indented block becomes an admonition it drops too. Claude Code shows the model
+  the description and the inputSchema, never the outputSchema, so a tool whose result is not
+  obvious names its fields in one description line (``Returns `{ok, packet_id, destination}`.``).
+  `tests/unit/test_tool_docs.py` checks every tool, gated or not.
 - **Every new tool gets a toolset.** A tool outside `core` goes into `toolsets._GROUPS` or
   `_PREFIXES`; `_GROUPS["firmware"]` must equal `_FIRMWARE_TOOLS` (a test checks it). `core` is
   the portable device set, the tools that need only the base install and a radio, and

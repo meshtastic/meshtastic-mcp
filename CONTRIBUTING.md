@@ -31,7 +31,10 @@ The firmware tier needs `MESHTASTIC_FIRMWARE_ROOT`; hardware tiers need real rad
 - **Tool annotations:** a new MCP tool goes in its group's module under `tools/` and gets
   `readOnlyHint`/`destructiveHint`/`openWorldHint` via the maps in `server.py` and a group in
   `toolsets.py`; destructive tools also take a `confirm` arg and call `confirm.gate` before any
-  side effect (see `docs/confirmations.md`).
+  side effect (see `docs/confirmations.md`). Its return shape goes in `schemas.py`. Its docstring
+  is a description and an `Args:` section, nothing else: fastmcp drops `Returns:` and any text
+  after a section, and Claude Code does not show the model an outputSchema, so the description
+  names the result fields in one line and each parameter's prose goes in its `Args:` entry.
 - **Commits:** Conventional Commits, signed off with DCO (`git commit -s`).
 - **License:** GPL-3.0-only. Every source file carries the SPDX header (CI enforces it):
   `SPDX-FileCopyrightText: Meshtastic contributors` + `SPDX-License-Identifier: GPL-3.0-only`.
