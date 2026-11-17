@@ -123,6 +123,14 @@ def test_logs_and_packets_window_are_open_world(server):
         )
 
 
+def test_nrf52_bootloader_tools_are_open_world(server):
+    # They reach a physical board through its bootloader drive, like the vendor flash tools.
+    nrf52 = {name: tool for name, tool in _tools(server).items() if name.startswith("nrf52_")}
+    assert nrf52
+    for name, tool in nrf52.items():
+        assert tool.annotations.open_world_hint is True, f"{name} must be openWorldHint=True"
+
+
 def test_title_overrides_produce_correct_titles(server):
     tools = _tools(server)
     for tool_name, expected_title in server._TITLE_OVERRIDES.items():

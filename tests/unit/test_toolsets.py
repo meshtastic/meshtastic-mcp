@@ -36,6 +36,7 @@ def test_classification_of_known_tools() -> None:
     assert toolsets.toolset_of("device_info") == "core"
     assert toolsets.toolset_of("build_start") == "firmware"
     assert toolsets.toolset_of("esptool_raw") == "hardware"
+    assert toolsets.toolset_of("nrf52_flash_uf2") == "hardware"
     assert toolsets.toolset_of("android_tap") == "android"
     assert toolsets.toolset_of("atak_fleet_up") == "android"
     assert toolsets.toolset_of("discord_search") == "discord"
@@ -68,6 +69,13 @@ def test_toolsets_filter_to_the_named_groups(server) -> None:
     assert names
     assert {toolsets.toolset_of(n) for n in names} == {"core"}
     assert "device_info" in names and "discord_search" not in names
+
+
+def test_the_nrf52_bootloader_tools_come_with_hardware_not_core(server) -> None:
+    nrf52 = {t.name for t in asyncio.run(server.app.list_tools()) if t.name.startswith("nrf52_")}
+    assert nrf52
+    assert not nrf52 & _listed(server, {toolsets.TOOLSETS_ENV: "core"})
+    assert nrf52 <= _listed(server, {toolsets.TOOLSETS_ENV: "hardware"})
 
 
 def test_read_only_hides_every_mutating_tool(server) -> None:

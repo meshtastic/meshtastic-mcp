@@ -3262,9 +3262,13 @@ def _uf2_drive(port: str | None) -> dict[str, Any]:
             return drives[0]
         if not drives:
             raise ToolError(
-                "no UF2 drive is mounted; put the board in UF2 mode with nrf52_enter_uf2"
+                "no UF2 drive is mounted; put the board in UF2 mode with nrf52_enter_uf2, and "
+                "mount its drive on a host that does not automount"
             )
-        raise ToolError(f"{len(drives)} UF2 drives are mounted; pass the board's port")
+        raise ToolError(
+            f"{len(drives)} UF2 drives are mounted; pass the board's port "
+            "(nrf52_bootloader_info with no port lists them)"
+        )
     # In UF2 mode the app's by-id link is gone, but its name still carries the USB serial the
     # drive reports.
     serial = None
@@ -3275,7 +3279,11 @@ def _uf2_drive(port: str | None) -> dict[str, Any]:
         port=None if serial else port, serial_number=serial, drives=drives
     )
     if not match.get("ok"):
-        raise ToolError(match.get("error") or f"no mounted UF2 drive belongs to {port}")
+        reason = match.get("error") or f"no mounted UF2 drive belongs to {port}"
+        raise ToolError(
+            f"{reason}. Check the board is in UF2 mode with its drive mounted, and pass the app "
+            "port it had before (its /dev/serial/by-id path still identifies it)"
+        )
     return cast(dict[str, Any], match["drive"])
 
 
@@ -3337,9 +3345,10 @@ async def nrf52_backup_firmware(port: str | None = None) -> dict[str, Any]:
     """
     drive = _uf2_drive(port)
     dest = config.mcp_data_dir() / "uf2-backups"
-    return cast(
-        dict[str, Any], await _off_loop(lambda: nrf52_bootloader.backup_current_uf2(drive, dest))
-    )
+    result = await _off_loop(lambda: nrf52_bootloader.backup_current_uf2(drive, dest))
+    if not result.get("ok"):
+        raise ToolError(f"backup of {drive.get('label')} failed: {result.get('error') or result}")
+    return cast(dict[str, Any], result)
 
 
 def _check_softdevice(drive: dict[str, Any], uf2_path: str) -> dict[str, Any]:
@@ -3406,7 +3415,8 @@ async def nrf52_factory_erase(
     if not ((drive.get("info") or {}).get("factory_erase") or {}).get("supported"):
         version = (drive.get("info") or {}).get("bootloader_version")
         raise ToolError(
-            f"bootloader {version} on {drive.get('label')} does not accept the factory-erase file"
+            f"bootloader {version} on {drive.get('label')} does not accept the factory-erase "
+            "file; reset or power-cycle the board back into its app and use factory_reset"
         )
     pending = await confirm_mod.gate(
         ctx,
@@ -3425,7 +3435,10 @@ async def nrf52_factory_erase(
 
     result = await _off_loop(_erase)
     if not result.get("ok"):
-        raise ToolError(f"factory erase did not complete: {result}")
+        raise ToolError(
+            f"factory erase of {drive.get('label')} did not complete: "
+            f"{result.get('error') or result}"
+        )
     return cast(dict[str, Any], result)
 
 
@@ -4912,6 +4925,12 @@ _OPEN_WORLD = {
     "picotool_info",
     "picotool_load",
     "picotool_raw",
+    # Reach the board's bootloader through its USB drive (or, for enter_uf2, its phone API).
+    "nrf52_enter_uf2",
+    "nrf52_bootloader_info",
+    "nrf52_backup_firmware",
+    "nrf52_flash_uf2",
+    "nrf52_factory_erase",
     "push_fake_nodedb",
     # Talk to the external ImmersionRC power meter over USB; pa_sweep also drives
     # the node's TX onto the mesh.
@@ -4977,6 +4996,11 @@ _TITLE_OVERRIDES: dict[str, str] = {
     "picotool_info": "Picotool Info",
     "picotool_load": "Picotool Load UF2",
     "picotool_raw": "Picotool Raw Pass-Through",
+    "nrf52_enter_uf2": "nRF52 Enter UF2 Mode",
+    "nrf52_bootloader_info": "nRF52 Bootloader Info",
+    "nrf52_backup_firmware": "nRF52 Back Up Firmware",
+    "nrf52_flash_uf2": "nRF52 Flash UF2",
+    "nrf52_factory_erase": "nRF52 Factory Erase",
     "uhubctl_list": "USB Hub List",
     "uhubctl_power": "USB Hub Port Power",
     "uhubctl_cycle": "USB Hub Port Cycle",

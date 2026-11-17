@@ -416,7 +416,7 @@ def grind_stop(job_id: str) -> dict[str, Any]:
     """Stop a running grind. Hits already written are kept and returned."""
     state = jobs.state_of(job_id)
     if state is None:
-        return {"error": f"Unknown job_id {job_id!r} (only this session's jobs are tracked)."}
+        return {"error": f"Unknown job_id {job_id!r}; jobs end when the server restarts."}
     with jobs.LOCK:
         pid = state.get("pid")
         running = state.get("status") == "running"
