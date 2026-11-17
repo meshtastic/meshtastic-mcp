@@ -89,10 +89,34 @@ def test_nrfutil_hashes_count_packets_without_a_total() -> None:
         "RAM:   [==        ]  15.2% (used 49820 bytes from 327680 bytes)",
         "Flash: [=====     ]  52.3% (used 1645317 bytes from 3145728 bytes)",
         "Compiling .pio/build/tbeam/src/main.cpp.o",
+        "[nanopb] No generation needed.",
+        "========== [SUCCESS] Took 32.98 seconds ==========",
     ],
 )
 def test_other_lines_are_messages_only(line) -> None:
     assert _read(line) == [(line, None, None)]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "-" * 60,
+        "{'name': 'firmware-rak4631-2.8.3.68f47ef-ota.zip', 'md5': '0f3a'}",
+        '[["env:rak4631", [["board", "wiscore_rak4631"]]]]',
+    ],
+)
+def test_separator_and_dump_lines_are_not_messages(line) -> None:
+    assert _read(line) == []
+
+
+def test_a_verified_esptool_image_counts_as_fully_written() -> None:
+    updates = _read(
+        "Flash will be erased from 0x00010000 to 0x00238fff...",
+        "Writing at 0x002325e7 [========= ]  99.0% 2237927/2265088 bytes",
+        "Hash of data verified.",
+    )
+    measured = [(done, total) for _m, done, total in updates if done is not None]
+    assert measured[-1] == (0x229000, 0x229000)
 
 
 def test_blank_lines_and_terminal_codes_are_dropped() -> None:

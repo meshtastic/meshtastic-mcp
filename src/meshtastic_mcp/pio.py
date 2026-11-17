@@ -106,6 +106,12 @@ _PICOTOOL = re.compile(
 )
 # adafruit-nrfutil prints a `#` per DFU packet, 40 to a line, and no total.
 _NRFUTIL_PACKETS = re.compile(r"#+")
+# Lines that say nothing to a person watching: separator rules, and the JSON and dict dumps
+# PlatformIO's config query and the firmware's manifest step print.
+_NOISE = re.compile(r"[-=*_]{3,}|\{.*\}|\[[\[{].*")
+# esptool verified the image it just wrote; the erase range rounds up to whole sectors, so the
+# bytes written never reach the range's size on their own.
+_ESPTOOL_VERIFIED = "Hash of data verified"
 
 
 class OutputProgress:
@@ -124,6 +130,7 @@ class OutputProgress:
         self._base = 0.0
         self._percent = 0.0
         self._packets = 0
+        self._writing: int | None = None  # start of the esptool range being written
 
     def feed(self, raw: str) -> None:
         line = _ANSI.sub("", raw).strip()
@@ -141,7 +148,11 @@ class OutputProgress:
         elif _NRFUTIL_PACKETS.fullmatch(line):
             self._packets += len(line)
             self._progress.update(f"DFU: {self._packets} packets sent", self._packets)
-        else:
+        elif _ESPTOOL_VERIFIED in line and self._writing is not None:
+            self._reached[self._writing] = float(self._ranges[self._writing])
+            total = float(sum(self._ranges.values()))
+            self._progress.update(line[:_MESSAGE_MAX], sum(self._reached.values()), total)
+        elif not _NOISE.fullmatch(line):
             if m := _ESPTOOL_RANGE.search(line):
                 start = int(m[1], 16)
                 self._ranges[start] = int(m[2], 16) - start + 1
@@ -153,6 +164,7 @@ class OutputProgress:
             if (start < address <= end) if written_up_to else (start <= address < end):
                 done = address - start if written_up_to else size * percent / 100
                 self._reached[start] = max(self._reached.get(start, 0.0), done)
+                self._writing = start
                 total = float(sum(self._ranges.values()))
                 self._progress.update(message, sum(self._reached.values()), total)
                 return
