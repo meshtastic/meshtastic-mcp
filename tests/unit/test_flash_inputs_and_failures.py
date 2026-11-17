@@ -46,12 +46,21 @@ def test_the_ota_image_is_staged_beside_the_factory_image(tree) -> None:
     assert (build / "mt-esp32s3-ota.bin").read_bytes() == b"ota"
 
 
-def test_an_ota_image_already_in_the_build_dir_is_left_alone(tree) -> None:
+def test_a_stale_staged_ota_image_is_replaced_from_the_firmware_root(tree) -> None:
     _, build = tree
     _write_meta(build)
-    (build / "mt-esp32s3-ota.bin").write_bytes(b"newer")
+    (build / "mt-esp32s3-ota.bin").write_bytes(b"stale")
     flash._stage_install_inputs(_factory(build))
-    assert (build / "mt-esp32s3-ota.bin").read_bytes() == b"newer"
+    assert (build / "mt-esp32s3-ota.bin").read_bytes() == b"ota"
+
+
+def test_a_staged_ota_image_is_used_when_the_root_has_none(tree) -> None:
+    root, build = tree
+    _write_meta(build)
+    (root / "mt-esp32s3-ota.bin").unlink()
+    (build / "mt-esp32s3-ota.bin").write_bytes(b"staged")
+    flash._stage_install_inputs(_factory(build))
+    assert (build / "mt-esp32s3-ota.bin").read_bytes() == b"staged"
 
 
 def test_a_missing_ota_image_is_a_clear_error(tree) -> None:

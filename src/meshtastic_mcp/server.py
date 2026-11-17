@@ -23,6 +23,7 @@ from datetime import UTC
 from pathlib import Path
 from typing import Any, cast
 
+import anyio
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.transforms import GetToolNext, Transform
@@ -1450,6 +1451,7 @@ def build_poll(build_id: str, tail_lines: int = 50) -> dict[str, Any]:
 
 @firmware_tool(**tasks_mod.task_kwargs())
 async def build(
+    ctx: Context,
     env: str,
     with_manifest: bool = True,
     userprefs: dict[str, Any] | None = None,
@@ -1484,7 +1486,9 @@ async def build(
         userprefs_overrides=userprefs,
         build_flags=build_flags,
     )
-    final = await jobs.wait(started["job_id"], tail_lines=200)
+    # Only an explicit task cancel stops the build; an inline call abandoned by a client timeout
+    # leaves it running, as the synchronous tool always did.
+    final = await jobs.wait(started["job_id"], tail_lines=200, cancel_job=ctx.is_background_task)
     if final["status"] != "done":
         raise ToolError(
             f"build of {env} {final['status']} with exit code {final['exit_code']}\n"
@@ -1522,13 +1526,22 @@ async def _confirmed_hw_call(
     """
     human = confirm_mod.policy() == confirm_mod.HUMAN
     try:
-        result = call(False if human else confirm)
+        result = await _off_loop(lambda: call(False if human else confirm))
     except hw_tools.ConfirmRequired as exc:
         pending = await confirm_mod.gate(ctx, f"run {exc.what}", confirm, irreversible=True)
         if pending is not None:
             return cast(dict[str, Any], pending)
-        result = call(True)
+        result = await _off_loop(lambda: call(True))
     return _raise_if_failed(result, "the command")
+
+
+async def _off_loop(fn: Callable[[], Any]) -> Any:
+    """Run blocking device work on a worker thread, as FastMCP does for sync tools.
+
+    A gated tool is `async` so it can ask the human, but the serial, subprocess and sleep work
+    after the gate would otherwise hold the event loop and stall every other request.
+    """
+    return await anyio.to_thread.run_sync(fn)
 
 
 def _output_tail(value: Any, limit: int = 1500) -> str:
@@ -1559,10 +1572,26 @@ def _raise_if_failed(result: dict[str, Any], what: str) -> dict[str, Any]:
     raise ToolError(f"{what} failed with exit code {code}{detail}\n{tail}".rstrip())
 
 
-async def _run_job(kind: str, label: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-    """Run a blocking flash function as a tracked job, surfacing its failure as a tool error."""
+async def _run_job(
+    ctx: Context, kind: str, label: str, fn: Callable[[], dict[str, Any]]
+) -> dict[str, Any]:
+    """Run a blocking flash function as a tracked job, surfacing its failure as a tool error.
+
+    The job id goes to the client as a log message before the wait: a flash cannot be cancelled,
+    so a caller whose task is cancelled needs the id to follow the write with `flash_poll`.
+    """
+
+    async def _announce(job_id: str) -> None:
+        try:
+            await ctx.info(
+                f"{kind} job {job_id} started for {label}; it keeps running if this call is "
+                f"cancelled, and flash_poll(job_id='{job_id}') follows it"
+            )
+        except Exception as exc:  # a client or task with no log channel still gets the result
+            log.debug("could not announce job %s: %s", job_id, exc)
+
     try:
-        result = await jobs.run_sync(kind, label, fn)
+        result = await jobs.run_sync(kind, label, fn, on_started=_announce)
     except RuntimeError as exc:
         raise ToolError(str(exc)) from exc
     return _raise_if_failed(result, f"flash of {label}")
@@ -1598,6 +1627,7 @@ async def pio_flash(
     if pending is not None:
         return cast(dict[str, Any], pending)
     return await _run_job(
+        ctx,
         "flashes",
         env,
         lambda: flash.flash(
@@ -1632,12 +1662,14 @@ async def flash_start(
     pending = await confirm_mod.gate(ctx, f"flash {env} onto {port}", confirm)
     if pending is not None:
         return cast(dict[str, Any], pending)
-    return flash.flash_start(
-        env,
-        port,
-        confirm=True,
-        userprefs_overrides=userprefs,
-        build_flags=build_flags,
+    return await _off_loop(
+        lambda: flash.flash_start(
+            env,
+            port,
+            confirm=True,
+            userprefs_overrides=userprefs,
+            build_flags=build_flags,
+        )
     )
 
 
@@ -1679,6 +1711,7 @@ async def erase_and_flash(
     if pending is not None:
         return cast(dict[str, Any], pending)
     return await _run_job(
+        ctx,
         "flashes",
         env,
         lambda: flash.erase_and_flash(
@@ -1711,6 +1744,7 @@ async def update_flash(
     if pending is not None:
         return cast(dict[str, Any], pending)
     return await _run_job(
+        ctx,
         "flashes",
         env,
         lambda: flash.update_flash(
@@ -2334,27 +2368,29 @@ async def inject_frame(
     )
     if pending is not None:
         return cast(dict[str, Any], pending)
-    return inject_mod.inject_frame(
-        mode=mode,
-        body=body,
-        portnum=portnum,
-        payload_hex=payload_hex,
-        ciphertext_hex=ciphertext_hex,
-        long_name=long_name,
-        short_name=short_name,
-        session_hex=session_hex,
-        from_node=from_node,
-        to=to,
-        channel_index=channel_index,
-        packet_id=packet_id,
-        want_response=want_response,
-        encrypt=encrypt,
-        pki=pki,
-        public_key_b64=public_key_b64,
-        fuzz_count=fuzz_count,
-        fuzz_seed=fuzz_seed,
-        confirm=True,
-        port=port,
+    return await _off_loop(
+        lambda: inject_mod.inject_frame(
+            mode=mode,
+            body=body,
+            portnum=portnum,
+            payload_hex=payload_hex,
+            ciphertext_hex=ciphertext_hex,
+            long_name=long_name,
+            short_name=short_name,
+            session_hex=session_hex,
+            from_node=from_node,
+            to=to,
+            channel_index=channel_index,
+            packet_id=packet_id,
+            want_response=want_response,
+            encrypt=encrypt,
+            pki=pki,
+            public_key_b64=public_key_b64,
+            fuzz_count=fuzz_count,
+            fuzz_seed=fuzz_seed,
+            confirm=True,
+            port=port,
+        )
     )
 
 
@@ -2374,7 +2410,10 @@ async def reboot(
     )
     if pending is not None:
         return cast(dict[str, Any], pending)
-    return admin.reboot(port=port, confirm=True, seconds=seconds)
+    return cast(
+        dict[str, Any],
+        await _off_loop(lambda: admin.reboot(port=port, confirm=True, seconds=seconds)),
+    )
 
 
 # ---------- RF compliance oracle (RTL-SDR) ---------------------------------
@@ -2601,20 +2640,22 @@ async def pa_sweep(
     )
     if pending is not None:
         return cast(dict[str, Any], pending)
-    return pa_sweep_mod.sweep(
-        powers,
-        band=band,
-        port=port,
-        meter_port=meter_port,
-        channel_index=channel_index,
-        attenuator_db=attenuator_db,
-        burst_repeat=burst_repeat,
-        tx_linger_s=tx_linger_s,
-        settle_s=settle_s,
-        reboot_between_steps=reboot_between_steps,
-        override_duty_cycle=override_duty_cycle,
-        restore_config=restore_config,
-        confirm=True,
+    return await _off_loop(
+        lambda: pa_sweep_mod.sweep(
+            powers,
+            band=band,
+            port=port,
+            meter_port=meter_port,
+            channel_index=channel_index,
+            attenuator_db=attenuator_db,
+            burst_repeat=burst_repeat,
+            tx_linger_s=tx_linger_s,
+            settle_s=settle_s,
+            reboot_between_steps=reboot_between_steps,
+            override_duty_cycle=override_duty_cycle,
+            restore_config=restore_config,
+            confirm=True,
+        )
     )
 
 
@@ -2634,7 +2675,10 @@ async def shutdown(
     )
     if pending is not None:
         return cast(dict[str, Any], pending)
-    return admin.shutdown(port=port, confirm=True, seconds=seconds)
+    return cast(
+        dict[str, Any],
+        await _off_loop(lambda: admin.shutdown(port=port, confirm=True, seconds=seconds)),
+    )
 
 
 @app.tool()
@@ -2659,7 +2703,10 @@ async def factory_reset(
     )
     if pending is not None:
         return cast(dict[str, Any], pending)
-    return admin.factory_reset(port=port, confirm=True, full=full)
+    return cast(
+        dict[str, Any],
+        await _off_loop(lambda: admin.factory_reset(port=port, confirm=True, full=full)),
+    )
 
 
 @app.tool()
@@ -3048,8 +3095,8 @@ async def uhubctl_power(
         if pending is not None:
             return cast(dict[str, Any], pending)
     if action_lower == "on":
-        return uhubctl_mod.power_on(loc, p)
-    return uhubctl_mod.power_off(loc, p)
+        return cast(dict[str, Any], await _off_loop(lambda: uhubctl_mod.power_on(loc, p)))
+    return cast(dict[str, Any], await _off_loop(lambda: uhubctl_mod.power_off(loc, p)))
 
 
 @app.tool()
@@ -3075,7 +3122,7 @@ async def uhubctl_cycle(
     pending = await confirm_mod.gate(ctx, f"power-cycle the USB hub port {loc}:{p}", confirm)
     if pending is not None:
         return cast(dict[str, Any], pending)
-    return uhubctl_mod.cycle(loc, p, delay_s=delay_s)
+    return cast(dict[str, Any], await _off_loop(lambda: uhubctl_mod.cycle(loc, p, delay_s=delay_s)))
 
 
 def _resolve_uhubctl_target(
@@ -4141,7 +4188,6 @@ async def atak_fleet_down(
     snapshots — irreversible (next `atak_fleet_up` re-provisions from scratch),
     so it requires `confirm=True`.
     """
-    global _ATAK_FLEET
     from .emulator import atak
 
     if delete_clones:
@@ -4153,6 +4199,11 @@ async def atak_fleet_down(
         )
         if pending is not None:
             return cast(dict[str, Any], pending)
+    return cast(dict[str, Any], await _off_loop(lambda: _atak_teardown(atak, delete_clones)))
+
+
+def _atak_teardown(atak: Any, delete_clones: bool) -> dict[str, Any]:
+    global _ATAK_FLEET
     with _ATAK_LOCK:
         if _ATAK_UP["phase"] == "bringing_up":
             raise ToolError("fleet is still bringing up; wait for atak_fleet_status phase=ready")
@@ -4304,15 +4355,17 @@ async def push_fake_nodedb(
         if pending is not None:
             return cast(dict[str, Any], pending)
         confirm = True
-    return fixtures.push_fake_nodedb(
-        size=size,
-        target=target,  # type: ignore[arg-type]
-        port=port,
-        portduino_config=portduino_config,
-        backup_existing=backup_existing,
-        confirm=confirm,
-        reboot_after=reboot_after,
-        custom_seed_jsonl=custom_seed_jsonl,
+    return await _off_loop(
+        lambda: fixtures.push_fake_nodedb(
+            size=size,
+            target=target,  # type: ignore[arg-type]
+            port=port,
+            portduino_config=portduino_config,
+            backup_existing=backup_existing,
+            confirm=confirm,
+            reboot_after=reboot_after,
+            custom_seed_jsonl=custom_seed_jsonl,
+        )
     )
 
 
@@ -4414,12 +4467,14 @@ async def vanity_apply(
     )
     if pending is not None:
         return cast(dict[str, Any], pending)
-    return vanity.apply_key(
-        private_key=private_key,
-        port=port,
-        confirm=True,
-        verify=verify,
-        verify_timeout_s=verify_timeout_s,
+    return await _off_loop(
+        lambda: vanity.apply_key(
+            private_key=private_key,
+            port=port,
+            confirm=True,
+            verify=verify,
+            verify_timeout_s=verify_timeout_s,
+        )
     )
 
 
