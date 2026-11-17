@@ -20,7 +20,7 @@ when their prerequisite is present:
 - ``ble_sniffer`` — off-device BLE capture of the phone-to-node link. Needs an nRF
   Sniffer for Bluetooth LE dongle attached.
 
-Tool registration in ``server.py`` consults these so a ``pip install meshtastic-mcp``
+The registration decorators in ``tools/_app.py`` consult these so a ``pip install meshtastic-mcp``
 with no firmware tree still exposes the full device/admin/recorder surface.
 """
 

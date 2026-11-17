@@ -211,7 +211,8 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   `cancellable=True` (builds) stop when the task is canceled, a flash keeps running. A blocking
   function a tool waits on goes through `jobs.run_sync`, whose `on_started` hook hands the
   `job_id` to the client before the wait (`_run_job` logs it), so a canceled caller can still
-  follow the job.
+  follow the job. While a tool waits, its job's `jobs.Progress` (fed by `pio.OutputProgress` from
+  the tool's output) reaches the client as progress notifications, or as a task's status message.
 - **Failures raise `ToolError`.** A tool that fails raises `fastmcp.exceptions.ToolError`, so the
   client sees `isError`; don't return `{"error": ...}` as a normal result (the `_poll` tools'
   unknown-`job_id` reply is the one exception, and callers branch on it). A flash or hardware
