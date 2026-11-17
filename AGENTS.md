@@ -46,9 +46,10 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   (light/dark, App Store status bar), `ios_open_url` (deep links, and the connect link to a
   `replay_start` node so iOS and the Android emulator show one simulated mesh),
   `ios_ui_dump`, `ios_tap` and `ios_type_text` (the last three need idb).
-  `screenshot_set_start`/`_poll` (`screenshot_set.py`, registered with either capability)
-  serves each app a replay node from one seed, connects both, and captures matching
-  Android and iOS screens by deep link in light and dark.
+  `screenshot_set_start`/`_poll` (`screenshot_set.py`, registered with either capability,
+  in the `apple` toolset) serves each app a replay node from one seed, connects both, and
+  captures matching Android and iOS screens by deep link in light and dark; see
+  `docs/screenshot-set.md`.
 - **local-model capability** (needs a reachable Ollama / OpenAI-compatible `llama-server`, or a
   `llama` binary to start one): `local_model.py` offload client + `llama_server.py`. Gates the
   offload tools (`summarize_window` / `vision_oracle` / `triage_window`) and backend bootstrap
@@ -213,7 +214,10 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   advertises it as `outputSchema`, and clients validate against it, so a field whose type varies
   stays `Any`.
 - **Every new tool gets a toolset.** A tool outside `core` goes into `toolsets._GROUPS` or
-  `_PREFIXES`; `_GROUPS["firmware"]` must equal `_FIRMWARE_TOOLS` (a test checks it).
+  `_PREFIXES`; `_GROUPS["firmware"]` must equal `_FIRMWARE_TOOLS` (a test checks it). `core` is
+  the portable device set, the tools that need only the base install and a radio, and
+  `tests/unit/test_toolsets.py` pins it to an allowlist read from every tool `server.py`
+  defines, so a tool that matches no group fails there until it gets one.
 - **Destructive tools stay `confirm`-gated** (`reboot`, `factory_reset`, the flash and `nrf52_*`
   tools, `uhubctl_*`; the full list is in `docs/confirmations.md`) **and
   `destructiveHint`-annotated** (see the annotation maps in `server.py`). Don't bypass the gate.

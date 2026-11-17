@@ -21,7 +21,8 @@ READ_ONLY_ENV = "MESHTASTIC_MCP_READ_ONLY"
 
 CORE = "core"
 
-# Tools outside `core`, by group. A tool in no group is core.
+# Tools outside `core`, by group. A tool in no group is core, and
+# tests/unit/test_toolsets.py pins that set to an allowlist.
 _GROUPS: dict[str, frozenset[str]] = {
     "firmware": frozenset(
         {
@@ -46,6 +47,7 @@ _GROUPS: dict[str, frozenset[str]] = {
     ),
     "hardware": frozenset(
         {
+            "capture_screen",
             "esptool_chip_info",
             "esptool_erase_flash",
             "esptool_raw",
@@ -83,10 +85,12 @@ _GROUPS: dict[str, frozenset[str]] = {
 }
 _PREFIXES: dict[str, tuple[str, ...]] = {
     "android": ("android_", "atak_"),
+    "apple": ("ios_", "screenshot_set_"),
     "discord": ("discord_",),
-    "hardware": ("nrf52_",),
+    "hardware": ("nrf52_", "serial_"),
     "replay": ("replay_", "cot_relay_"),
-    "rf": ("ble_sniff_", "vanity_", "pa_"),
+    "rf": ("ble_sniff_", "vanity_", "pa_", "rf_"),
+    "sdk": ("sdk_",),
 }
 
 

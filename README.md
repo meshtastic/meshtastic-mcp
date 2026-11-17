@@ -116,7 +116,7 @@ with no firmware checkout. Optional capabilities activate when their prerequisit
 | **core** | none | discovery, serial+TCP transport, `device_info`/`list_nodes`/admin/`send_text`/reboot, recorder + log/telemetry/packet/event queries, **replay** (simulated TCP device + synthetic mesh + fuzzer), input-events, uhubctl, `esptool`/`nrfutil`/`picotool`, the nRF52 bootloader's UF2 drive (`nrf52_*`) |
 | **firmware** | `MESHTASTIC_FIRMWARE_ROOT` + PlatformIO `pio` | build / clean / flash / OTA / board enum / userPrefs |
 | **android** | `android` CLI + `adb` | Android-emulator + native-node orchestration for hardware-free e2e |
-| **apple** | `xcrun` (+ `idb` for UI) | iOS Simulator / macOS-app orchestration for hardware-free e2e |
+| **apple** | `xcrun` (+ `idb` for UI) | iOS Simulator / macOS-app orchestration for hardware-free e2e (`ios_*`); `screenshot_set_*` registers with this or android and captures matching Android and iOS screens, see [docs/screenshot-set.md](docs/screenshot-set.md) |
 | **local-model** | a reachable Ollama or OpenAI-compatible `llama-server` (or a `llama` binary to start one) | offload tools that push token-heavy work onto a local GPU — summarize/triage recorder windows, e2e-failure first pass, and an offline **vision oracle**; see [docs/local-models.md](docs/local-models.md) |
 | **sdr** | `[sdr]` extra (bundles `pyrtlsdrlib`, a prebuilt librtlsdr) + an RTL-SDR dongle | RF-compliance oracle: `rf_scan` occupancy checks and `rf_confirm_tx` on-air verification, no second radio needed. *macOS/Homebrew note:* a system `librtlsdr` from Homebrew is the osmocom fork and lacks `rtlsdr_set_dithering`, so `import rtlsdr` fails — the bundled `pyrtlsdrlib` avoids this and is preferred by pyrtlsdr's loader. |
 | **tak** | the meshtastic-tak SDK, which is not on PyPI: install it with the command `doctor` prints, or `uv sync --group tak` in a checkout | real TAKPacketV2 zstd wire compression for the replay sim's TAK squad (`profile tak.wire="v2"`) and its CoT stream to ATAK |
@@ -243,8 +243,11 @@ shares one owner of the serial ports, the recorder and the jobs. See [docs/serve
 ## Trim the tool list
 
 `MESHTASTIC_MCP_TOOLSETS=core,firmware` exposes only the named groups, and
-`MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. See
-[docs/toolsets.md](docs/toolsets.md).
+`MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. The groups are `core` (the
+portable device set), `firmware`, `hardware`, `android`, `apple`, `discord`, `replay`, `rf`,
+`local-model` and `sdk`. A capability decides whether a tool registers and a toolset decides
+whether a session lists it, so the vendor flash tools and the `nrf52_*` tools register with the
+core capability but list under `hardware`. See [docs/toolsets.md](docs/toolsets.md).
 
 ## Hardware-free e2e (emulator + TCP)
 
