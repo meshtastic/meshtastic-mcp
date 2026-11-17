@@ -18,7 +18,11 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   counterpart to the webcam `capture_screen`; `drive_display_start`/`_poll` runs input
   steps against a live mirror and snapshots each; needs firmware with screen-mirror
   support), `uhubctl`, `hw_tools`,
-  `replay/cot_relay.py` (ATAK/iTAK CoT capture + N-way relay — `cot_relay_*`; pure stdlib, so core).
+  `replay/cot_relay.py` (ATAK/iTAK CoT capture + N-way relay — `cot_relay_*`; pure stdlib, so core),
+  `nrf52_bootloader.py` (the Meshtastic nRF52 bootloader's UF2 drive — `nrf52_*`: enter UF2 mode
+  via `enter_dfu_mode_request`, read `INFO_UF2.TXT`, back up `CURRENT.UF2`, flash a `.uf2` by
+  copy, and factory-erase through the bootloader when `INFO_UF2.TXT` has a `Factory-Erase:` line;
+  a drive is tied to its board by USB serial, so pass the board's app port).
 - **firmware capability** (needs `MESHTASTIC_FIRMWARE_ROOT` + `pio`): `flash`, `boards`,
   `userprefs`, `pio`, `fixtures`.
 - **android capability** (needs `android` + `adb`): `emulator/` native-node + AVD
