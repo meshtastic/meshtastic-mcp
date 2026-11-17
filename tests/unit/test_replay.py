@@ -1988,8 +1988,10 @@ def test_mcp_replay_start_wires_dupe_every(monkeypatch):
             captured = params
             return {"id": "test"}
 
-    monkeypatch.setattr(server, "_load_replay_capture", lambda *_args, **_kwargs: cap)
-    monkeypatch.setattr(server, "get_replay_manager", lambda: Manager())
+    monkeypatch.setattr(
+        "meshtastic_mcp.tools.replay._load_replay_capture", lambda *_args, **_kwargs: cap
+    )
+    monkeypatch.setattr("meshtastic_mcp.tools.replay.get_replay_manager", lambda: Manager())
 
     assert server.replay_start(dupe_every=23, mdns=False) == {"id": "test"}
     assert captured is not None

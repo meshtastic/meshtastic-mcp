@@ -72,13 +72,15 @@ def _is_tool_decorator(node: ast.expr) -> bool:
 
 
 def _defined_tools() -> set[str]:
-    """Every tool `server.py` defines, whether or not this host's capabilities register it."""
+    """Every tool `server.py` and `tools/` define, whether or not this host registers it."""
     spec = importlib.util.find_spec("meshtastic_mcp.server")
     assert spec is not None and spec.origin is not None
-    tree = ast.parse(Path(spec.origin).read_text(encoding="utf-8"))
+    server_py = Path(spec.origin)
+    sources = [server_py, *sorted((server_py.parent / "tools").glob("*.py"))]
     return {
         node.name
-        for node in tree.body
+        for source in sources
+        for node in ast.parse(source.read_text(encoding="utf-8")).body
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
         and any(_is_tool_decorator(d) for d in node.decorator_list)
     }
