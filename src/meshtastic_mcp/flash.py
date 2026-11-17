@@ -23,13 +23,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import serial
-
 from . import (
     boards,
     config,
     connection,
     devices,
+    hw_tools,
     jobs,
     pio,
     port_recovery,
@@ -614,49 +613,10 @@ def update_flash(
 def _do_1200bps_touch(
     port: str, settle_ms: int, touch_timeout_s: float = 3.0, drop_dtr: bool = False
 ) -> None:
-    """Open port at 1200 baud and close, bounded by a worker thread.
-
-    The Adafruit nRF52 core enters DFU on a DTR-low line state while the line
-    coding is 1200 baud. A plain close lowers DTR only when the tty has HUPCL
-    set, and meshtastic-python clears HUPCL on every POSIX open, so
-    `drop_dtr` lowers it explicitly, as PlatformIO's touch does.
-
-    Both the open and the close can block on a busy CDC device — we wrap the
-    whole thing in a worker so the caller returns in at most `touch_timeout_s`
-    regardless; a worker still blocked in the close has already sent the signal.
-    """
-    errors: list[BaseException] = []
-
-    def _inner() -> None:
-        try:
-            s = serial.Serial(port, 1200)
-        except serial.SerialException as exc:
-            if "No such file" in str(exc) or "could not open" in str(exc).lower():
-                raise
-            return  # other serial errors mid-open are expected during DFU entry
-        try:
-            if drop_dtr:
-                s.dtr = False
-            time.sleep(settle_ms / 1000.0)
-        finally:
-            try:
-                s.close()
-            except Exception:
-                pass
-
-    def _runner() -> None:
-        try:
-            _inner()
-        except BaseException as exc:  # re-raised on caller thread after join
-            errors.append(exc)
-
-    worker = threading.Thread(target=_runner, daemon=True)
-    worker.start()
-    worker.join(timeout=touch_timeout_s)
-    if worker.is_alive():
-        return  # signal already delivered; allow daemon worker to finish/exit
-    if errors:
-        raise errors[0]
+    """The 1200 baud touch; see `hw_tools.touch_1200`, which `nrfutil_dfu` shares."""
+    hw_tools.touch_1200(
+        port, settle_s=settle_ms / 1000.0, timeout_s=touch_timeout_s, drop_dtr=drop_dtr
+    )
 
 
 # Adafruit nRF52 bootloader VID/PID (BOTH RAK4631 and most Feather nRF52 boards).

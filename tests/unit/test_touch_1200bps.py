@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import pytest
+import serial
 
 from meshtastic_mcp import flash
 
@@ -39,7 +40,7 @@ def bench(monkeypatch):
         state["calls"] += 1
         return list(state["before"] if state["calls"] == 1 else state["after"])
 
-    monkeypatch.setattr(flash.serial, "Serial", FakeSerial)
+    monkeypatch.setattr(serial, "Serial", FakeSerial)
     monkeypatch.setattr(flash.devices, "list_devices", list_devices)
     monkeypatch.setattr(flash.time, "sleep", lambda *a, **k: None)
 
@@ -100,3 +101,30 @@ def test_a_port_that_comes_back_unchanged_is_not_a_bootloader(bench) -> None:
     res = touch("/dev/ttyACM2", [app], [app])
     assert res["ok"] is False
     assert res["new_port"] is None
+
+
+def test_a_board_that_resets_before_dtr_drops_is_a_successful_touch(monkeypatch) -> None:
+    # After a meshtastic session the line can already be DTR-low, so the board resets on the
+    # 1200 baud open and the DTR ioctl meets a device that is gone (seen on a RAK4631).
+    from meshtastic_mcp import hw_tools
+
+    closed: list[bool] = []
+
+    class VanishingSerial:
+        def __init__(self, port, baud):
+            pass
+
+        @property
+        def dtr(self):
+            return True
+
+        @dtr.setter
+        def dtr(self, value):
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(serial, "Serial", VanishingSerial)
+    hw_tools.touch_1200("/dev/ttyFAKE0", drop_dtr=True)
+    assert closed == [True]
