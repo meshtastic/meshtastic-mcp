@@ -161,8 +161,8 @@ bimodal (101 + curve + 0-spike); chutil correlates with hour-of-day traffic
   exactly the WS0 profile JSON schema.
 - `generate(profile=...)` accepts the JSON (file path or dict).
 - Presets: `replay_start(source="burningman")` / `source="defcon"` resolve to
-  `generate(profile=<preset dict>)` in `_load_replay_capture()` (server.py
-  ~line 1916) — preset tunables are reviewed constants in code (informed by
+  `generate(profile=<preset dict>)` in `_load_replay_capture()`
+  (`tools/replay.py`); preset tunables are reviewed constants in code (informed by
   the local profiles, not shipping them), with venue geo + channel lineups +
   scripted spikes
   (BM flood-emergency arc; DC con-hours envelope, ShortTurbo second plane,

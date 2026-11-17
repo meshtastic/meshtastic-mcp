@@ -31,6 +31,16 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   and `serve.py` (`meshtastic-mcp serve`, HTTP with a bearer token; see `docs/serve.md`). Tool
   hints come from the `_READ_ONLY` / `_DESTRUCTIVE` / `_OPEN_WORLD` maps through
   `_AnnotationTransform` in `server.py`.
+- **where tools live**: `tools/`, one module per toolset group in `toolsets.py` (`core.py`,
+  `firmware.py`, `hardware.py`, `android.py`, `apple.py`, `replay.py`, `rf.py`, `discord.py`,
+  `local_model.py`, `sdk.py`). `tools/_app.py` holds the `FastMCP` app, `CAPS` and the
+  capability decorators, and `tools/_shared.py` the helpers several modules use (`_off_loop`,
+  `_run_job`, `_raise_if_failed`, `_confirmed_hw_call`). `server.py` imports every tool module,
+  which registers its tools, then adds the transforms, starts the recorder and registers the
+  resources and prompts. A new tool goes in its group's module, its hints in the maps in
+  `server.py`; a new module also needs an import in `server.py`. `server.py` re-exports the tool
+  modules' names, but a re-export is a second binding: a test patches a helper in the module
+  whose tool calls it (`meshtastic_mcp.tools.hardware._uf2_drive`), not on `server`.
 - **firmware capability** (needs `MESHTASTIC_FIRMWARE_ROOT` + `pio`): `flash`, `boards`,
   `userprefs`, `pio`, `fixtures`.
 - **android capability** (needs `android` + `adb`): `emulator/` native-node + AVD
@@ -119,11 +129,11 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
-decorator (`_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled tools only when
-`CAPS.firmware` is active, and each other capability has its own decorator the same way. The
-power-meter tools, `vanity_preview`/`vanity_apply` and `ble_sniff_status` always register. Don't
-write tool counts down: the startup log names the tools each inactive capability leaves out,
-`doctor` names the missing prerequisite, and the client's tool list is the live set.
+decorator (in `tools/_app.py`; `_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled
+tools only when `CAPS.firmware` is active, and each other capability has its own decorator the
+same way. The power-meter tools, `vanity_preview`/`vanity_apply` and `ble_sniff_status` always
+register. Don't write tool counts down: the startup log names the tools each inactive capability
+leaves out, `doctor` names the missing prerequisite, and the client's tool list is the live set.
 
 **Provisioning:** `doctor.py` (the `doctor` MCP tool / `meshtastic-mcp doctor` CLI) probes every
 external dependency and emits the exact, platform-aware acquisition command for anything missing
@@ -216,7 +226,7 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
 - **Every new tool gets a toolset.** A tool outside `core` goes into `toolsets._GROUPS` or
   `_PREFIXES`; `_GROUPS["firmware"]` must equal `_FIRMWARE_TOOLS` (a test checks it). `core` is
   the portable device set, the tools that need only the base install and a radio, and
-  `tests/unit/test_toolsets.py` pins it to an allowlist read from every tool `server.py`
+  `tests/unit/test_toolsets.py` pins it to an allowlist read from every tool `tools/`
   defines, so a tool that matches no group fails there until it gets one.
 - **Destructive tools stay `confirm`-gated** (`reboot`, `factory_reset`, the flash and `nrf52_*`
   tools, `uhubctl_*`; the full list is in `docs/confirmations.md`) **and

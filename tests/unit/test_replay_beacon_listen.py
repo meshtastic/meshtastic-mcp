@@ -46,8 +46,8 @@ def test_replay_start_forwards_beacon_listen(monkeypatch):
             started.append(params)
             return {"id": "test"}
 
-    monkeypatch.setattr(server, "_load_replay_capture", lambda *_a, **_k: cap)
-    monkeypatch.setattr(server, "get_replay_manager", lambda: Manager())
+    monkeypatch.setattr("meshtastic_mcp.tools.replay._load_replay_capture", lambda *_a, **_k: cap)
+    monkeypatch.setattr("meshtastic_mcp.tools.replay.get_replay_manager", lambda: Manager())
 
     server.replay_start(beacon_listen=True, mdns=False)
     server.replay_start(mdns=False)

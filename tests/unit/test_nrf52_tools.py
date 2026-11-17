@@ -101,7 +101,7 @@ def test_an_image_for_the_other_softdevice_is_refused_before_asking(
     server, monkeypatch, tmp_path
 ) -> None:
     drive = _drive(tmp_path, INFO_OTAFIX)
-    monkeypatch.setattr(server, "_uf2_drive", lambda port: drive)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
     monkeypatch.setattr(nrf52_bootloader, "flash_uf2", lambda *a, **k: pytest.fail("flashed"))
     handler, seen = _accept()
     image = _uf2(tmp_path / "s140v7.uf2", 0x27000)
@@ -112,7 +112,7 @@ def test_an_image_for_the_other_softdevice_is_refused_before_asking(
 
 def test_a_matching_image_asks_then_flashes_as_a_job(server, monkeypatch, tmp_path) -> None:
     drive = _drive(tmp_path, INFO_OTAFIX)
-    monkeypatch.setattr(server, "_uf2_drive", lambda port: drive)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
     monkeypatch.setattr(
         nrf52_bootloader, "flash_uf2", lambda d, p, timeout_s: {"ok": True, "outcome": "detached"}
     )
@@ -125,7 +125,7 @@ def test_a_matching_image_asks_then_flashes_as_a_job(server, monkeypatch, tmp_pa
 
 def test_a_copy_the_bootloader_did_not_take_is_an_error(server, monkeypatch, tmp_path) -> None:
     drive = _drive(tmp_path, INFO_OTAFIX)
-    monkeypatch.setattr(server, "_uf2_drive", lambda port: drive)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
     monkeypatch.setattr(
         nrf52_bootloader,
         "flash_uf2",
@@ -138,7 +138,7 @@ def test_a_copy_the_bootloader_did_not_take_is_an_error(server, monkeypatch, tmp
 
 def test_factory_erase_refuses_a_bootloader_without_it(server, monkeypatch, tmp_path) -> None:
     drive = _drive(tmp_path, INFO_OLD)
-    monkeypatch.setattr(server, "_uf2_drive", lambda port: drive)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
     handler, seen = _accept()
     result = _call(_app(server, "nrf52_factory_erase"), "nrf52_factory_erase", {}, handler)
     assert result.is_error is True and "does not accept" in result.content[0].text
@@ -147,7 +147,7 @@ def test_factory_erase_refuses_a_bootloader_without_it(server, monkeypatch, tmp_
 
 def test_factory_erase_asks_then_writes_the_erase_file(server, monkeypatch, tmp_path) -> None:
     drive = _drive(tmp_path, INFO_OTAFIX)
-    monkeypatch.setattr(server, "_uf2_drive", lambda port: drive)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
     written: list[bytes] = []
 
     def fake_erase(d, path):
@@ -163,7 +163,7 @@ def test_factory_erase_asks_then_writes_the_erase_file(server, monkeypatch, tmp_
 
 def test_a_backup_with_no_current_uf2_is_a_tool_error(server, monkeypatch, tmp_path) -> None:
     drive = _drive(tmp_path, INFO_OTAFIX)
-    monkeypatch.setattr(server, "_uf2_drive", lambda port: drive)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
     result = _call(_app(server, "nrf52_backup_firmware"), "nrf52_backup_firmware", {})
     assert result.is_error is True and "CURRENT.UF2" in result.content[0].text
 
@@ -171,7 +171,7 @@ def test_a_backup_with_no_current_uf2_is_a_tool_error(server, monkeypatch, tmp_p
 def test_a_backup_copies_current_uf2_into_the_data_dir(server, monkeypatch, tmp_path) -> None:
     drive = _drive(tmp_path, INFO_OTAFIX)
     _uf2(tmp_path / "RAK4631" / "CURRENT.UF2", 0x26000)
-    monkeypatch.setattr(server, "_uf2_drive", lambda port: drive)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
     result = _call(_app(server, "nrf52_backup_firmware"), "nrf52_backup_firmware", {})
     assert result.is_error is False
     assert "uf2-backups" in result.structured_content["path"]

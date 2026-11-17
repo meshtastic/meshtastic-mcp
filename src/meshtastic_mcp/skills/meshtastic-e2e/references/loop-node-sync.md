@@ -38,7 +38,7 @@ from meshtastic_mcp import server
 android layout | grep -q 'E2E-NODE-1234' && echo PASS || echo FAIL
 ```
 > Check the exact `push_fake_nodedb` signature: `grep -n 'def push_fake_nodedb' \
-> src/meshtastic_mcp/server.py` in a meshtastic-mcp checkout, and the impl it calls.
+> src/meshtastic_mcp/tools/firmware.py` in a meshtastic-mcp checkout, and the impl it calls.
 
 ## Device backstop
 
