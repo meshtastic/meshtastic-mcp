@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "One weekly PR per ecosystem for non-major updates, so bumps never pile up as one PR per package rewriting the same lockfile. Majors stay separate PRs. A 3-day soak matches the org's KMP preset. Vulnerability fixes skip the schedule and the soak.",
+  "description": "One weekly PR per ecosystem for non-major updates, so bumps never pile up as one PR per package rewriting the same lockfile. Majors stay separate PRs. A 3-day soak matches the org's KMP preset, timestamp-optional as there, so digest and lockfile-maintenance updates, which carry no release timestamp, are not held forever. Vulnerability fixes skip the schedule and the soak.",
   "extends": [
     "config:recommended",
     ":semanticCommitTypeAll(build)",
@@ -11,6 +11,7 @@
   "rebaseWhen": "conflicted",
   "labels": ["dependencies"],
   "minimumReleaseAge": "3 days",
+  "minimumReleaseAgeBehaviour": "timestamp-optional",
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
     "labels": ["dependencies", "security"],
@@ -19,6 +20,7 @@
   },
   "lockFileMaintenance": {
     "enabled": true,
+    "minimumReleaseAge": null,
     "schedule": ["before 6am on monday"]
   },
   "packageRules": [
