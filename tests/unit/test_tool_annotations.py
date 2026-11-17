@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Meshtastic contributors
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Guard the post-registration tool-annotation pass.
+"""Guard the tool annotations.
 
-`server._apply_tool_annotations()` raises loudly if the private registry path
-ever changes. The guard here catches annotation-set drift (a tool whose
-applied hints disagree with the classification maps).
+`server._AnnotationTransform` applies the hints from the classification maps when tools are
+listed. The guard here catches annotation-set drift (a tool whose applied hints disagree with
+the maps).
 
 Runs in core-only mode (the portable unit tier), so it only asserts over
 *registered* tools — the firmware-gated tools aren't present here.
@@ -38,7 +38,7 @@ def _tools(server):
 
 def test_every_registered_tool_is_annotated(server):
     tools = _tools(server)
-    assert tools, "no tools registered — _apply_tool_annotations precondition broken"
+    assert tools, "no tools registered, so there is nothing to check"
     for name, tool in tools.items():
         assert tool.annotations is not None, (
             f"{name} has no annotations — the annotation pass may have failed open"

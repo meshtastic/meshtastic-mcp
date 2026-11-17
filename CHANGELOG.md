@@ -6,21 +6,38 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
-- **Replay demo fidelity knobs** — `NodeRow.is_favorite` reaches `NodeInfo.is_favorite`, so a
-  capture can pin nodes in the app. `ReplayParams.beacon_listen` sends
-  `ModuleConfig.mesh_beacon` with `FLAG_LISTEN_ENABLED` in the config phase (raw field 17 via
-  `build.mesh_beacon_module_config`; meshtastic-python predates it), so the app stores the
-  passive MESH_BEACON_APP packets it receives. The sim profile's `beacon_presets` sets the
-  ModemPresets a router beacon offers (default `["LONG_FAST"]`); every sim beacon now names one.
-- **Replay honours client node deletes** — an `AdminMessage.remove_by_nodenum` from the app
-  drops that node for the rest of the session: it is left out of the node DB on reconnect and
-  its streamed/injected packets are dropped. (Firmware re-adds a node the next time it is heard;
-  on a replay that brought deleted demo nodes straight back.)
-- **Sim traceroutes follow the map** — relays are picked along the source→destination line,
-  ordered by progress and preferring routers, capped by `traceroute_hops`, instead of a random
-  sample. Per-hop, neighbor and node-DB SNR now come from a weak-skewed tier model (mostly
-  marginal links, a strong minority, `towards`/`back` asymmetric) instead of a flat 6 dB / uniform
-  draw that painted every link the same colour.
+- **Progress notifications** - `build`, the flash tools and the esptool, nrfutil and picotool
+  tools report MCP progress while they wait: esptool bytes, UF2 bytes copied, nrfutil packets,
+  picotool percent, and the latest build line. A client running them as MCP background tasks
+  sees it as the task's status message.
+- **Replay favorites and beacon listen** - `NodeRow.is_favorite` reaches `NodeInfo.is_favorite`,
+  scripted captures take `is_favorite` on a nodeinfo event, and the sim profile's
+  `favorite_fraction` marks favorites. `beacon_listen` (on `replay_start`,
+  `screenshot_set_start` and `meshtastic-mcp replay --beacon-listen`) sends
+  `ModuleConfig.mesh_beacon` with the listen flag, so the app keeps the passive beacons it
+  receives. `beacon_presets` sets the presets a router beacon offers (default `["LONG_FAST"]`)
+  and rejects an unknown name.
+- **Replay honors client node deletes** - an `AdminMessage.remove_by_nodenum` drops that node
+  for the rest of the session: it stays out of the node DB and the LocalStats counts, and its
+  streamed and injected packets are dropped.
+- **Sim traceroutes follow the map** - relays are picked along the line from source to
+  destination, preferring routers and capped by `traceroute_hops`. Per-hop, neighbor and
+  node-DB SNR come from a weak-skewed tier model, so links no longer all show one color.
+- **`apple` and `sdk` toolsets** - `ios_*` and `screenshot_set_*` are `apple`, `sdk_*` is
+  `sdk`, the `rf_*` tools join `rf`, and `serial_*` and `capture_screen` join `hardware`. A test
+  pins `core` to an allowlist, so a new tool cannot land there by accident.
+
+### Changed
+- **Leaner tool list** - tool descriptions are 28% shorter, with the detail in new docs pages
+  (`docs/replay.md`, `docs/firmware-builds.md`, `docs/display-mirror.md`,
+  `docs/screenshot-set.md`, `docs/rf-oracle.md`). The whole list is about 13% smaller, and
+  `MESHTASTIC_MCP_TOOLSETS=core` about 24% smaller.
+- **Tools live in `tools/`** - each toolset's tools are in `src/meshtastic_mcp/tools/<group>.py`
+  and `server.py` assembles the app. Every name importable from `meshtastic_mcp.server` still
+  is. `tools/list` returns the same tools in a different order.
+- **Dependencies** - every locked package with an open security alert is upgraded, Pillow 13
+  and filelock 4 among them. Renovate is configured for one weekly PR per ecosystem, and CI's
+  build job builds the web UI and smoke-installs the wheel the way a release does.
 
 ### Fixed
 - **Replay answers want_config as firmware does** - 69420 (`SPECIAL_NONCE_ONLY_CONFIG`) gets
@@ -28,6 +45,17 @@ All notable changes are documented here. Format loosely follows
   NodeInfo and the node DB; any other nonce gets both. Every nonce but 69420 starts the packet
   stream. Android and Apple send 69420 then 69421. meshtastic-python sends one random nonce,
   which got config with no node DB or packet stream.
+- **Replay channels past the eighth** - traffic on a capture channel beyond the eight the config
+  advertises is dropped instead of going out on an unconfigured slot.
+- **Replay node removal race** - a removal and the final sender check and write share one lock,
+  so a removed node's packet cannot slip out.
+- **`jobs.poll` after a job ends** - the status is read before the log, so a final status always
+  comes with the whole log.
+- **`pa_sweep` restore failures** - a sweep that fails and cannot put back `tx_power` or the
+  duty-cycle override names the failed restore in its error.
+- **`replay_start` profile errors** - a bad `sim_profile` or `beacon_presets` is a `ToolError`.
+- **Install-script timeouts** - `erase_and_flash` and `update_flash` raise a `FlashError` when
+  the install script times out, instead of a raw `TimeoutExpired`.
 
 ## [0.3.0] - 2026-11-17
 
