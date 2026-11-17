@@ -55,6 +55,11 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   (`local_model_status` / `local_model_serve` / `local_model_serve_stop`).
 - **sdr capability** (needs the `[sdr]` extra + `librtlsdr` + an attached RTL-SDR): `sdr.py` +
   `rf_oracle.py` RF-compliance oracle (`rf_scan` / `rf_confirm_tx`).
+- **tak capability** (needs the meshtastic-tak SDK, which is not on PyPI: the `tak` dependency
+  group, `uv sync --group tak`; `doctor` prints the install for a released package):
+  `replay/tak.py` gives `replay_start` real TAKPacketV2 zstd wire compression
+  (`profile tak.wire="v2"`), and `replay/tak_server.py` streams the sim's TAK squad to ATAK as
+  CoT. No tool is gated on it.
 - **power-meter capability** (no extra — pure `pyserial`; needs an attached, powered-on ImmersionRC
   RF Power Meter v2, USB CDC VID `0x04D8`/PID `0x000A`): `power_meter.py` driver + `pa_sweep.py`
   PA-calibration bench (`pa_meter_status` / `pa_measure` / `pa_sweep`). Absolute TX-power
@@ -162,7 +167,11 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
 
 - **JDK/Python:** Python ≥ 3.11. Keep the core dependency-light (`fastmcp`, `mcp`,
   `pyserial`, `meshtastic`, `platformdirs`); heavy deps go in extras (`[test]`, `[ui]`,
-  `[tasks]`). Code that uses an extra imports it behind a guard, as `tasks.py` does.
+  `[tasks]`). Code that uses an extra imports it behind a guard, as `tasks.py` does. A dependency
+  that exists only on git goes in a `[dependency-groups]` group, never an extra: PyPI rejects a
+  package whose metadata names a URL, and `uv build` refuses one, as `tak` shows.
+- **Releases** follow `CONTRIBUTING.md` → Releasing: a CHANGELOG PR, then a tag on its merge
+  commit, which publishes to PyPI, the GitHub releases and the MCP Registry.
   `fastmcp` is the MCP server runtime (standalone FastMCP 4 on the `mcp` 2 SDK); `mcp` is kept as a direct
   dep for `mcp.types.ToolAnnotations` (not re-exported by fastmcp).
 - **The protos are ours, not the library's.** `meshtastic` releases trail `meshtastic/protobufs`
