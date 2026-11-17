@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +51,56 @@ def test_ui_dump_parses_json(monkeypatch) -> None:
     assert els[0]["text"] == "Nodes 2/2"
 
 
+_DIALOG_DUMP = (Path(__file__).parent / "data" / "android_layout_connect_dialog.json").read_text()
+
+
+def test_ui_dump_flattens_windows_with_the_dialog_reachable(monkeypatch) -> None:
+    """`android layout` nests elements under windows; a dialog's buttons sit in children."""
+    monkeypatch.setattr(avd, "android", lambda *a, **k: _cp(_DIALOG_DUMP))
+    els = avd.ui_dump()
+    connect = next(el for el in els if el.get("text") == "Connect")
+    assert connect["center"] == [754, 1431]
+    assert connect["bounds"] == [686, 1405, 823, 1458]
+    assert connect["window"] == "APPLICATION"
+    assert "children" not in connect
+    button = next(el for el in els if el.get("center") == [754, 1432])
+    assert button["interactions"] == ["clickable", "focusable"]
+    clock = next(el for el in els if el.get("resource_id") == "com.android.systemui:id/clock")
+    assert clock["content_desc"]
+
+
+def test_ui_dump_lists_the_top_window_first(monkeypatch) -> None:
+    dump = (
+        '[{"type": "APPLICATION", "layer": 0, "content": [{"text": "OK", "center": "[1,1]"}]},'
+        ' {"type": "DIALOG", "layer": 2, "content": [{"text": "OK", "center": "[9,9]"}]}]'
+    )
+    monkeypatch.setattr(avd, "android", lambda *a, **k: _cp(dump))
+    assert avd._find_center(lambda el: el.get("text") == "OK") == (9, 9)
+
+
+def test_ui_dump_retries_without_the_idle_wait(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake(*args: str, **_: object) -> subprocess.CompletedProcess:
+        calls.append(args)
+        if "--no-idle" not in args:
+            raise avd.EmulatorError("command timed out")
+        return _cp(_DIALOG_DUMP)
+
+    monkeypatch.setattr(avd, "android", fake)
+    assert avd.find_text("Connect to this device?")
+    assert calls[-1][-1] == "--no-idle"
+
+
+def test_tap_text_taps_a_dialog_button(monkeypatch) -> None:
+    monkeypatch.setattr(avd, "android", lambda *a, **k: _cp(_DIALOG_DUMP))
+    taps: list[tuple[int, int]] = []
+    monkeypatch.setattr(avd, "tap", lambda x, y, serial=None: taps.append((x, y)))
+    monkeypatch.setattr(avd.u2, "available", lambda: False)
+    assert avd.tap_text("Connect", timeout=1.0)
+    assert taps == [(754, 1431)]
+
+
 def test_find_text(monkeypatch) -> None:
     monkeypatch.setattr(avd, "android", lambda *a, **k: _cp('[{"text": "E2E-123"}]'))
     assert avd.find_text("E2E-123") is True
@@ -88,12 +139,25 @@ def test_launch_app_with_skip_onboarding_adds_extra(monkeypatch) -> None:
     )
     monkeypatch.setattr(avd, "adb", lambda *a, **k: calls.append(a) or _cp(""))
     avd.launch_app(skip_onboarding=True)
+    # The app honors the extra only through its debug automation alias.
     assert len(calls) == 1
     args = calls[0]
     assert args[0:4] == ("shell", "am", "start", "-n")
-    assert args[4] == f"com.geeksville.mesh.fdroid.debug/{avd.MAIN_ACTIVITY}"
-    assert "--ez" in args
+    assert args[4] == f"com.geeksville.mesh.fdroid.debug/{avd.AUTOMATION_LAUNCHER}"
     assert args[-2:] == (avd.EXTRA_SKIP_ONBOARDING, "true")
+
+
+def test_launch_app_falls_back_to_main_activity_without_the_alias(monkeypatch) -> None:
+    calls = []
+    missing = "Error type 3\nError: Activity class {x/y} does not exist."
+    monkeypatch.setattr(avd, "resolve_package", lambda serial=None: "com.geeksville.mesh")
+    monkeypatch.setattr(
+        avd, "adb", lambda *a, **k: calls.append(a) or _cp(missing if len(calls) == 1 else "")
+    )
+    avd.launch_app(skip_onboarding=True)
+    assert len(calls) == 2
+    assert calls[1][4] == f"com.geeksville.mesh/{avd.MAIN_ACTIVITY}"
+    assert calls[1][-2:] == (avd.EXTRA_SKIP_ONBOARDING, "true")
 
 
 def test_launch_app_without_skip_omits_extra(monkeypatch) -> None:

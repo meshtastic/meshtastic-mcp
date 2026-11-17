@@ -2145,3 +2145,242 @@ def test_firmware_version_defaults_per_edition():
     # An explicit override always wins, for any edition.
     assert firmware_version_for("DEFCON", "2.7.0.deadbee") == "2.7.0.deadbee"
     assert firmware_version_for("VANILLA", "2.9.9") == "2.9.9"
+
+
+def test_new_client_preempts_an_idle_one():
+    """A second connection takes over from the first, as firmware's APIServerPort does.
+
+    Meshtastic-Apple holds a heartbeat-only socket open and sends want_config on a
+    second one; served in turn, the second sat in the backlog and never got a reply.
+    """
+    cap = sim.generate(nodes=10, days=1, seed=9, start=1_700_000_000)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession(
+        "preempt",
+        cap,
+        ReplayParams(host="127.0.0.1", port=port, rate=300, node_delay=0, loop=False),
+    )
+    sess.start()
+    try:
+        idle = socket.create_connection(("127.0.0.1", port), timeout=5)
+        _send_toradio(idle, heartbeat=mesh_pb2.Heartbeat())
+        deadline = time.time() + 3
+        while time.time() < deadline and not sess.state.connected:
+            time.sleep(0.05)
+        active = socket.create_connection(("127.0.0.1", port), timeout=5)
+        active.settimeout(5)
+        _send_toradio(active, want_config_id=69420)
+        kinds = set()
+        t0 = time.time()
+        while time.time() - t0 < 5 and "config_complete_id" not in kinds:
+            kinds.add(_read_frame(active).WhichOneof("payload_variant"))
+        assert "config_complete_id" in kinds
+        idle.settimeout(5)
+        while chunk := idle.recv(4096):  # drain anything sent before the close
+            assert chunk
+        assert sess.state.ended is False, "a preempted client must not end a non-loop session"
+        active.close()
+        idle.close()
+    finally:
+        sess.stop()
+
+
+def test_a_preempted_connection_leaves_its_successor_connected():
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    sess = ReplaySession("own", cap, ReplayParams(host="127.0.0.1", port=0))
+    successor = object()
+
+    def serve(_client, _cancel):
+        sess._client = successor  # a newer connection took over while this one was busy
+        sess.state.connected = True
+        raise OSError("severed")
+
+    sess._serve_client = serve  # type: ignore[method-assign]
+    sess._run_client(socket.socket(), ("127.0.0.1", 1))
+    assert sess._client is successor
+    assert sess.state.connected is True
+
+
+def test_preemption_cuts_short_a_slow_node_db_download():
+    """A client paced by a long node_delay hands over at once, and its error stays its own."""
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    sess = ReplaySession(
+        "slow-db", cap, ReplayParams(host="127.0.0.1", port=port, node_delay=30, hold=True)
+    )
+    sess.start()
+    try:
+        slow = socket.create_connection(("127.0.0.1", port), timeout=5)
+        _send_toradio(slow, want_config_id=replay_engine.NONCE_DB)
+        slow.settimeout(5)
+        _read_frame(slow)  # the download has started and is now pacing
+        t0 = time.time()
+        fresh = socket.create_connection(("127.0.0.1", port), timeout=5)
+        fresh.settimeout(5)
+        _send_toradio(fresh, want_config_id=69420)
+        kinds = set()
+        while time.time() - t0 < 5 and "config_complete_id" not in kinds:
+            kinds.add(_read_frame(fresh).WhichOneof("payload_variant"))
+        assert "config_complete_id" in kinds
+        assert time.time() - t0 < 5
+        time.sleep(0.2)
+        assert sess.state.connected is True
+        assert sess.state.error is None
+        fresh.close()
+        slow.close()
+    finally:
+        sess.stop()
+
+
+def test_an_empty_window_completes_its_pass():
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    sess = ReplaySession("empty", cap, ReplayParams(host="127.0.0.1", port=0, hold=True))
+    sess.window = []
+    sess._stream(lambda fr: None, None)
+    assert sess.state.pass_complete is True
+    assert sess.state.ended is False
+
+
+def test_injected_items_survive_a_dead_connection():
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    sess = ReplaySession("requeue", cap, ReplayParams(host="127.0.0.1", port=0))
+
+    def dead(fr):
+        raise ConnectionError("closed")
+
+    sess.inject_fromradio([mesh_pb2.FromRadio()])
+    sess._inject_fromradio_loop(dead)
+    sess.inject([mesh_pb2.MeshPacket()])
+    sess._inject_loop(dead)
+    assert sess._inject_fr_q.qsize() == 1
+    assert sess._inject_q.qsize() == 1
+
+
+def test_local_telemetry_comes_from_the_sessions_own_node():
+    """A session with its own observer_num must not send telemetry as the default node.
+
+    Sent from the default number, an app saw a second, phantom "Meshtastic 4331" node.
+    """
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    custom = 0x1234ABCD
+    sess = ReplaySession(
+        "own-num", cap, ReplayParams(host="127.0.0.1", port=0, observer_num=custom)
+    )
+    fr = sess._local_telemetry_fr(telemetry_pb2.Telemetry())
+    assert getattr(fr.packet, "from") == custom
+    assert fr.packet.to == custom
+
+
+def test_clock_anchor_gives_sessions_identical_node_db_times():
+    """Two sessions sharing an anchor send the same last_heard per node, whenever each runs."""
+    cap = sim.generate(nodes=8, days=1, seed=5, start=1_700_000_000)
+    anchor = 1_800_000_000
+
+    def node_db(params: ReplayParams) -> dict[int, int]:
+        sess = ReplaySession("anchored", cap, params)
+        frames: list[mesh_pb2.FromRadio] = []
+        sess._send_db_phase(frames.append, 1)
+        return {
+            f.node_info.num: f.node_info.last_heard
+            for f in frames
+            if f.WhichOneof("payload_variant") == "node_info"
+            and f.node_info.num != params.observer_num
+        }
+
+    first = node_db(ReplayParams(port=0, node_delay=0, clock_anchor=anchor))
+    time.sleep(1.1)
+    second = node_db(ReplayParams(port=0, node_delay=0, clock_anchor=anchor))
+    assert first == second
+    assert max(first.values()) == anchor
+    assert len(set(first.values())) > 1  # capture spacing kept, not one shared instant
+
+    unanchored = node_db(ReplayParams(port=0, node_delay=0))
+    assert len(set(unanchored.values())) == 1
+
+
+def test_clock_anchor_moves_the_last_packet_to_the_anchor():
+    cap = sim.generate(nodes=5, days=1, seed=6, start=1_700_000_000)
+    window = cap.window(None, None)
+    shift, last = replay_engine._anchored_clock(window, window, 1_800_000_000)
+    assert shift is not None
+    assert window[-1][0] + shift == 1_800_000_000
+    assert max(last.values()) == window[-1][0]
+    assert replay_engine._anchored_clock(window, window, None) == (None, {})
+
+
+def test_clock_anchor_keeps_last_heard_for_nodes_quiet_in_a_short_window():
+    """Streaming only the last hour must not stamp every quiet node with one shared time."""
+    cap = sim.generate(nodes=30, days=1, seed=8, start=1_700_000_000)
+    end = cap.span[1]
+    sess = ReplaySession(
+        "short",
+        cap,
+        ReplayParams(port=0, node_delay=0, start=end - 3600, clock_anchor=1_800_000_000),
+    )
+    frames: list[mesh_pb2.FromRadio] = []
+    sess._send_db_phase(frames.append, 1)
+    heard = [
+        f.node_info.last_heard
+        for f in frames
+        if f.WhichOneof("payload_variant") == "node_info"
+        and f.node_info.num != sess.params.observer_num
+    ]
+    assert len(set(heard)) > len(heard) // 2
+
+
+def test_heartbeat_gets_a_queue_status_reply():
+    """Firmware answers a heartbeat with queueStatus; Meshtastic-Apple drops a link that doesn't."""
+    cap = sim.generate(nodes=3, days=1, seed=9, start=1_700_000_000)
+    sess = ReplaySession(
+        "hb", cap, ReplayParams(host="127.0.0.1", port=0, local_metrics_interval=0)
+    )
+    sess.start()
+    try:
+        client = socket.create_connection(("127.0.0.1", sess.params.port), timeout=5)
+        _send_toradio(client, heartbeat=mesh_pb2.Heartbeat())
+        fr = _read_frame(client)
+        assert fr.WhichOneof("payload_variant") == "queueStatus"
+        client.close()
+    finally:
+        sess.stop()
+
+
+def test_hold_serves_a_client_that_reconnects_after_hanging_up():
+    """A held session plays the window once per connection and outlives a hang-up."""
+    cap = sim.generate(nodes=4, days=1, seed=10, start=1_700_000_000)
+    end = cap.span[1]
+    params = ReplayParams(
+        host="127.0.0.1",
+        port=0,
+        rate=2000,
+        node_delay=0,
+        start=end - 3600,
+        hold=True,
+        local_metrics_interval=0,
+        stats_interval=0,
+    )
+    sess = ReplaySession("hold", cap, params)
+    sess.start()
+    try:
+        for _ in range(2):
+            client = socket.create_connection(("127.0.0.1", sess.params.port), timeout=5)
+            _send_toradio(client, want_config_id=replay_engine.NONCE_DB)
+            deadline = time.time() + 5
+            while not sess.state.pass_complete and time.time() < deadline:
+                time.sleep(0.05)
+            assert sess.state.pass_complete
+            client.close()
+            deadline = time.time() + 5
+            while sess.state.connected and time.time() < deadline:
+                time.sleep(0.05)
+            time.sleep(1.5)  # past the listener's 1 s accept timeout, where it checks for a hang-up
+            assert not sess.state.ended
+        assert sess.state.packets_sent >= 2 * sess.state.packets_total
+    finally:
+        sess.stop()

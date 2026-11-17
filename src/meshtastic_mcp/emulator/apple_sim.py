@@ -215,22 +215,53 @@ def booted_udid() -> str | None:
     return None
 
 
-def ensure_booted(name_contains: str = "iPhone", timeout: float = 180) -> str:
-    """Boot a simulator (first matching `name_contains` if none booted) and return its udid."""
-    udid = booted_udid()
-    if udid:
-        return udid
-    match = next(
-        (s for s in list_simulators() if name_contains.lower() in (s.get("name") or "").lower()),
-        None,
-    )
-    if not match:
-        raise AppleSimError(f"no available simulator matching {name_contains!r}")
-    udid = match["udid"]
+def ensure_booted(
+    name_contains: str = "iPhone", timeout: float = 180, *, udid: str | None = None
+) -> str:
+    """Boot a simulator and return its udid.
+
+    With `udid`, boots that device. Otherwise returns the booted simulator if there is one,
+    else boots the first available one whose name contains `name_contains`. idb_companion is
+    registered only when idb is installed, so screenshots work on a bare Xcode install.
+    """
+    if udid is None:
+        udid = booted_udid()
+        if udid:
+            _ensure_companion(udid)
+            return udid
+        match = next(
+            (
+                s
+                for s in list_simulators()
+                if name_contains.lower() in (s.get("name") or "").lower()
+            ),
+            None,
+        )
+        if not match:
+            raise AppleSimError(f"no available simulator matching {name_contains!r}")
+        udid = match["udid"]
     simctl("boot", udid, check=False)
     _run([_xcrun_bin(), "simctl", "bootstatus", udid, "-b"], timeout=timeout)
-    start_companion(udid)  # register idb_companion so UI calls work immediately
+    _ensure_companion(udid)
     return udid
+
+
+def _ensure_companion(udid: str) -> None:
+    """Register idb_companion for `udid` once, when idb is installed, so UI calls work."""
+    proc = _companion_procs.get(udid)
+    if proc is not None and proc.poll() is None:
+        return
+    if not (has_idb() and shutil.which("idb_companion")):
+        return
+    # A companion started by another process (an earlier server, an e2e run) already
+    # serves this udid, and a second one exits at once; reuse it when UI calls answer.
+    try:
+        probe = idb("ui", "describe-all", "--json", udid=udid, timeout=15, check=False)
+        if probe.returncode == 0:
+            return
+    except AppleSimError:
+        pass  # a stalled probe means no usable companion; start one
+    start_companion(udid)
 
 
 def shutdown(udid: str | None = None) -> None:
@@ -270,6 +301,115 @@ def ui_dump(*, udid: str | None = None) -> list[dict[str, Any]]:
 def screenshot(out_path: str | Path, *, udid: str | None = None) -> Path:
     simctl("io", udid or "booted", "screenshot", str(out_path))
     return Path(out_path)
+
+
+APPEARANCES = ("light", "dark")
+
+
+def set_appearance(mode: str, *, udid: str | None = None) -> None:
+    """Switch the simulator between light and dark appearance."""
+    if mode not in APPEARANCES:
+        raise AppleSimError(f"appearance must be one of {APPEARANCES}, got {mode!r}")
+    simctl("ui", udid or "booted", "appearance", mode)
+
+
+def clean_status_bar(*, udid: str | None = None) -> None:
+    """Pin the status bar to 9:41, full signal and a full battery, as in App Store shots."""
+    simctl(
+        "status_bar",
+        udid or "booted",
+        "override",
+        "--time",
+        "9:41",
+        "--dataNetwork",
+        "wifi",
+        "--wifiMode",
+        "active",
+        "--wifiBars",
+        "3",
+        "--cellularMode",
+        "active",
+        "--cellularBars",
+        "4",
+        "--batteryState",
+        "charged",
+        "--batteryLevel",
+        "100",
+    )
+
+
+def reset_status_bar(*, udid: str | None = None) -> None:
+    simctl("status_bar", udid or "booted", "clear", check=False)
+
+
+def set_location(lat: float, lon: float, *, udid: str | None = None) -> None:
+    simctl("location", udid or "booted", "set", f"{lat:.7f},{lon:.7f}")
+
+
+def clear_location(*, udid: str | None = None) -> None:
+    simctl("location", udid or "booted", "clear", check=False)
+
+
+def reset_app_prefs(bundle_id: str, *, udid: str | None = None) -> None:
+    """Quit the app and delete its UserDefaults, keeping onboarding marked done.
+
+    Sort, filter and display choices go back to their defaults. Granted permissions
+    and the app's stored data stay.
+    """
+    target = udid or "booted"
+    simctl("terminate", target, bundle_id, check=False)
+    simctl("spawn", target, "defaults", "delete", bundle_id, check=False)
+    simctl("spawn", target, "defaults", "write", bundle_id, "firstLaunch", "-bool", "NO")
+
+
+def open_url(url: str, *, udid: str | None = None) -> None:
+    """Open a URL in the simulator, as if tapped: a deep link reaches the installed app."""
+    simctl("openurl", udid or "booted", url)
+
+
+def tap_label(label: str, *, udid: str | None = None, timeout: float = 10.0) -> bool:
+    """Tap the last accessibility element whose label is exactly `label`. Needs idb."""
+    deadline = time.time() + timeout
+    while True:
+        hits = [e for e in ui_dump(udid=udid) if (e.get("AXLabel") or "").strip() == label]
+        frame = hits[-1].get("frame") if hits else None
+        if frame:
+            tap(
+                int(frame["x"] + frame["width"] / 2),
+                int(frame["y"] + frame["height"] / 2),
+                udid=udid,
+            )
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+OPEN_IN_APP_PROMPT = "Open in “Meshtastic”?"
+
+
+def dismiss_open_sheet(*, udid: str | None = None, timeout: float = 3.0) -> bool:
+    """Confirm iOS's "Open in "Meshtastic"?" sheet if `openurl` raised one.
+
+    iOS shows it for some `simctl openurl` calls and not others, so this waits briefly
+    and reports whether there was one. Needs idb.
+    """
+    deadline = time.time() + timeout
+    while True:
+        if any((e.get("AXLabel") or "") == OPEN_IN_APP_PROMPT for e in ui_dump(udid=udid)):
+            return tap_label("Open", udid=udid, timeout=2.0)
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+def connect_link(port: int = DEFAULT_TCP_PORT) -> str:
+    """The app's connect link for a host-side TCP node, e.g. one `replay_start` serves.
+
+    Opening it shows the app's "Connect to this device?" prompt (design#177); confirm it to
+    connect. The Android emulator reaches the same node at `10.0.2.2:<port>`.
+    """
+    return f"meshtastic://meshtastic/connections?address=t{tcp_dut_address(port)}"
 
 
 def _element_text(el: dict[str, Any]) -> str:

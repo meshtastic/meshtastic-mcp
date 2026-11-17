@@ -264,6 +264,9 @@ class ReplayParams:
     start: int | None = None  # window start epoch
     end: int | None = None  # window end epoch
     loop: bool = False
+    # Play the window once per connection, then stay connected and quiet; a client
+    # that hangs up or is preempted can reconnect, as with a radio. Ignored with `loop`.
+    hold: bool = False
     limit_nodes: int = 200
     node_delay: float = 0.01  # spacing between NodeInfos during DB download
     fuzz: FuzzConfig | None = None  # fault-injection / adversary layer (None = clean)
@@ -302,6 +305,11 @@ class ReplayParams:
     # the device it's connected to populates and updates. chutil tracks the live
     # replay load. Seconds; 0 = off. Default 300 (5 min).
     local_metrics_interval: float = 300.0
+    # Epoch the capture's last packet is stamped as. None stamps every packet and
+    # node-DB entry with the wall clock as it is sent. Set, the window keeps its own
+    # spacing and ends at this instant, so sessions sharing an anchor give their apps
+    # identical last-heard and message times whenever each one connects.
+    clock_anchor: int | None = None
 
 
 @dataclass
@@ -324,6 +332,7 @@ class _SessionState:
     # *achieved* stream rate (self-verifying stress tests). Reset per connection
     # so idle gaps between a disconnect and a reconnect don't dilute the rate.
     stream_started_at: float | None = None
+    pass_complete: bool = False  # the current connection has received the whole window
     stream_base: int = 0
     local_metrics_sent: int = 0  # DEVICE_METRICS telemetry emitted for the local node
     connected: bool = False
@@ -358,6 +367,9 @@ class ReplaySession:
         # than in synthetic noise: the median of every DeviceMetrics sample in the
         # replay window. Computed once — the window never changes.
         self._channel_utilization, self._air_util_tx = _representative_radio_metrics(window)
+        self._clock_shift, self._last_rx = _anchored_clock(
+            capture.window(None, params.end), window, params.clock_anchor
+        )
         # Guards the observer LocalStats counters. `_send_db_phase` runs on the
         # reader thread and can re-enter on a second want_config_id while the
         # stream thread is already emitting periodic stats + counting duplicates.
@@ -371,6 +383,10 @@ class ReplaySession:
         )
         self._srv: socket.socket | None = None
         self._client: socket.socket | None = None  # currently-connected client, if any
+        # Ownership of the connection state changes hands only under this lock; the
+        # event ends the owner's waits early when a newer client preempts it.
+        self._owner_lock = threading.Lock()
+        self._owner_cancel: threading.Event | None = None
         self._advertiser: _mdns.Advertiser | None = None  # mDNS/Bonjour, if enabled
         self._ch_index = {name: i for i, name in enumerate(capture.channels)}
         # live-injection queue: (MeshPacket, channel_name, fuzz) drained per client
@@ -426,7 +442,7 @@ class ReplaySession:
             ) from exc
         # port=0 -> OS picks a free port; surface the real one in status
         self.params.port = srv.getsockname()[1]
-        srv.listen(1)
+        srv.listen(4)
         srv.settimeout(1.0)
         self._srv = srv
         t = threading.Thread(target=self._accept_loop, name=f"replay-{self.state.id}", daemon=True)
@@ -464,6 +480,7 @@ class ReplaySession:
         # idly-connected client's `_read_toradio()`. shutdown() reliably interrupts
         # a blocking recv() from another thread (unlike close(), which risks an FD-
         # reuse race); best-effort since the client may have already disconnected.
+        self._cancel_owner()
         if self._client is not None:
             with contextlib.suppress(OSError):
                 self._client.shutdown(socket.SHUT_RDWR)
@@ -471,8 +488,12 @@ class ReplaySession:
     # -- server loop --
     def _accept_loop(self) -> None:
         assert self._srv is not None
+        serving: tuple[socket.socket, threading.Thread] | None = None
         try:
             while not self.state.stop.is_set():
+                keep_listening = self.params.loop or self.params.hold
+                if serving is not None and not serving[1].is_alive() and not keep_listening:
+                    break  # the client hung up on its own; a non-loop session is done
                 try:
                     client, addr = self._srv.accept()
                 except TimeoutError:
@@ -489,34 +510,27 @@ class ReplaySession:
                     with contextlib.suppress(OSError):
                         client.close()
                     continue
-                self.state.client_addr = f"{addr[0]}:{addr[1]}"
-                self.state.connected = True
-                self._client = client
-                self.state.error = None  # clear any prior disconnect's error on a fresh connect
-                self._log_event("client_connected", client=self.state.client_addr)
-                packets_before = self.state.packets_sent
-                try:
-                    self._serve_client(client)
-                except (OSError, ConnectionError) as exc:
-                    self.state.error = str(exc)
-                finally:
-                    try:
-                        client.close()
-                    except OSError:
-                        pass
-                    self.state.connected = False
-                    self._client = None
-                    self._log_event(
-                        "client_disconnected",
-                        client=self.state.client_addr,
-                        error=self.state.error,
-                        packets_sent_this_connection=self.state.packets_sent - packets_before,
-                        packets_sent_total=self.state.packets_sent,
-                        fuzz=self.fuzzer.status() if self.fuzzer is not None else None,
-                    )
-                if not self.params.loop:
-                    break
+                # Like firmware's APIServerPort, a new connection force-closes the
+                # previous one. Apps open a fresh socket before giving up on the old
+                # one, and Meshtastic-Apple holds a heartbeat-only socket open while it
+                # sends want_config on a second, so serving clients in turn hangs it.
+                if serving is not None and serving[1].is_alive():
+                    self._log_event("client_preempted", client=self.state.client_addr)
+                    self._cancel_owner()
+                    self._sever(serving[0])
+                    serving[1].join(timeout=10.0)
+                t = threading.Thread(
+                    target=self._run_client,
+                    args=(client, addr),
+                    daemon=True,
+                    name=f"replay-client-{self.state.id}",
+                )
+                serving = (client, t)
+                t.start()
         finally:
+            if serving is not None:
+                self._sever(serving[0])
+                serving[1].join(timeout=10.0)
             try:
                 self._srv.close()
             except OSError:
@@ -533,7 +547,49 @@ class ReplaySession:
             self._log.close()
             self.state.ended = True
 
-    def _serve_client(self, client: socket.socket) -> None:
+    def _cancel_owner(self) -> None:
+        with self._owner_lock:
+            if self._owner_cancel is not None:
+                self._owner_cancel.set()
+
+    def _run_client(self, client: socket.socket, addr: tuple[str, int]) -> None:
+        cancel = threading.Event()
+        with self._owner_lock:
+            if self._owner_cancel is not None:
+                self._owner_cancel.set()
+            self._owner_cancel = cancel
+            self._client = client
+            self.state.client_addr = f"{addr[0]}:{addr[1]}"
+            self.state.connected = True
+            self.state.error = None  # clear any prior disconnect's error on a fresh connect
+        self._log_event("client_connected", client=f"{addr[0]}:{addr[1]}")
+        packets_before = self.state.packets_sent
+        error: str | None = None
+        try:
+            self._serve_client(client, cancel)
+        except (OSError, ConnectionError) as exc:
+            error = str(exc)
+        finally:
+            with contextlib.suppress(OSError):
+                client.close()
+            # A preempted connection must not touch its successor's state.
+            with self._owner_lock:
+                if self._client is client:
+                    self.state.error = error
+                    self.state.connected = False
+                    self.state.pass_complete = False
+                    self._client = None
+                    self._owner_cancel = None
+            self._log_event(
+                "client_disconnected",
+                client=f"{addr[0]}:{addr[1]}",
+                error=error,
+                packets_sent_this_connection=self.state.packets_sent - packets_before,
+                packets_sent_total=self.state.packets_sent,
+                fuzz=self.fuzzer.status() if self.fuzzer is not None else None,
+            )
+
+    def _serve_client(self, client: socket.socket, cancel: threading.Event | None = None) -> None:
         send_lock = threading.Lock()
         streaming = [False]
 
@@ -575,7 +631,7 @@ class ReplaySession:
             if tr.HasField("want_config_id"):
                 nonce = tr.want_config_id
                 if nonce == NONCE_DB:
-                    self._send_db_phase(send, nonce)
+                    self._send_db_phase(send, nonce, cancel)
                     if not streaming[0]:
                         streaming[0] = True
                         threading.Thread(
@@ -588,7 +644,14 @@ class ReplaySession:
                     self._send_config_phase(send, nonce)
             elif tr.HasField("packet"):
                 self._handle_client_packet(tr.packet, send)
-            # heartbeats / other ToRadio: drain and ignore
+            elif tr.HasField("heartbeat") and tr.heartbeat.nonce != 1:
+                # Firmware answers a keepalive with its queue status; Meshtastic-Apple
+                # marks a quiet link dead when no reply comes within 5 s.
+                fr = mesh_pb2.FromRadio()
+                fr.queueStatus.free = 16
+                fr.queueStatus.maxlen = 16
+                send(fr)
+            # other ToRadio: drain and ignore
 
     # -- handshake phases --
     def _send_config_phase(self, send: Any, nonce: int) -> None:
@@ -669,18 +732,26 @@ class ReplaySession:
         fr.config_complete_id = nonce
         send(fr)
 
-    def _send_db_phase(self, send: Any, nonce: int) -> None:
+    def _send_db_phase(self, send: Any, nonce: int, cancel: threading.Event | None = None) -> None:
+        def pause() -> None:
+            delay = self.params.node_delay
+            if delay > 0 and (cancel or self.state.stop).wait(delay):
+                raise ConnectionError("preempted by a newer client")
+
         now = int(time.time())
         send(self._observer_nodeinfo())
         self._send_observer_stats(send)
-        if self.params.node_delay > 0:
-            time.sleep(self.params.node_delay)
+        pause()
         for n in self.capture.nodes:
             fr = mesh_pb2.FromRadio()
-            fr.node_info.CopyFrom(node_to_nodeinfo(n, last_heard=now))
+            heard = now
+            if self._clock_shift is not None:
+                heard = (
+                    self._last_rx.get(n.num & 0xFFFFFFFF, self.capture.span[0]) + self._clock_shift
+                )
+            fr.node_info.CopyFrom(node_to_nodeinfo(n, last_heard=heard))
             send(fr)
-            if self.params.node_delay > 0:
-                time.sleep(self.params.node_delay)
+            pause()
         fr = mesh_pb2.FromRadio()
         fr.config_complete_id = nonce
         send(fr)
@@ -928,8 +999,8 @@ class ReplaySession:
         """
         fr = mesh_pb2.FromRadio()
         mp = fr.packet
-        setattr(mp, "from", OBSERVER_NUM)
-        mp.to = OBSERVER_NUM  # a node's own telemetry is addressed to itself
+        setattr(mp, "from", self.params.observer_num)
+        mp.to = self.params.observer_num  # a node's own telemetry is addressed to itself
         mp.channel = 0
         mp.id = random.getrandbits(31) or 1
         mp.rx_time = int(time.time())
@@ -1016,6 +1087,7 @@ class ReplaySession:
             try:
                 send(fr)
             except (OSError, ConnectionError):
+                self._inject_fr_q.put(fr)  # leave it for the live connection
                 return
             self.state.packets_sent += 1
             self.state.injected += 1
@@ -1052,6 +1124,7 @@ class ReplaySession:
                 try:
                     send(fr)
                 except (OSError, ConnectionError):
+                    self._inject_q.put((mp, ch_name, fuzz))  # leave it for the live connection
                     return
                 self.state.packets_sent += 1
                 self.state.injected += 1
@@ -1076,6 +1149,10 @@ class ReplaySession:
         p = self.params
         pkts = self.window
         if not pkts:
+            if not p.loop:
+                self.state.pass_complete = True
+                if not p.hold:
+                    self.state.ended = True
             return
         mp = mesh_pb2.MeshPacket()
         fixed_delay = (1.0 / p.rate) if p.rate else None
@@ -1105,6 +1182,7 @@ class ReplaySession:
         # accurate across wraps; a reconnect gets a fresh anchor + baseline so
         # the idle gap between connections doesn't dilute the reading.
         self.state.stream_started_at = time.time()
+        self.state.pass_complete = False
         self.state.stream_base = self.state.packets_sent - self.state.injected
         next_stats_at = (
             time.time() + p.stats_interval if p.stats_interval and p.stats_interval > 0 else None
@@ -1143,7 +1221,9 @@ class ReplaySession:
                     mp.ParseFromString(raw)
                 except Exception:
                     continue
-                mp.rx_time = int(time.time())  # time-travel: stamp as now
+                # time-travel: stamp as now, or as the capture's own time moved to the anchor
+                shift = self._clock_shift
+                mp.rx_time = int(time.time()) if shift is None else rxt + shift
                 mp.channel = self._ch_index.get(ch_name, 0)
                 outs = self.fuzzer.on_packet(mp, ch_name) if self.fuzzer else [mp]
                 if self.fuzzer is not None:
@@ -1193,8 +1273,31 @@ class ReplaySession:
                 except (OSError, ConnectionError):
                     self._sever(client)
                     return
-                self.state.ended = True
+                self.state.pass_complete = True
+                if not p.hold:
+                    self.state.ended = True
                 return
+
+
+def _anchored_clock(
+    history: list[tuple[int, bytes, str]],
+    window: list[tuple[int, bytes, str]],
+    anchor: int | None,
+) -> tuple[int | None, dict[int, int]]:
+    """The shift that moves the window's last packet to `anchor`, and each sender's
+    last rx_time up to the window's end, read from `history` so nodes quiet during a
+    short window still keep their own last-heard time."""
+    if anchor is None or not window:
+        return None, {}
+    last: dict[int, int] = {}
+    mp = mesh_pb2.MeshPacket()
+    for rxt, raw, _ in history:
+        try:
+            mp.ParseFromString(raw)
+        except Exception:
+            continue
+        last[getattr(mp, "from")] = rxt
+    return anchor - window[-1][0], last
 
 
 # ── Manager (process-global) ─────────────────────────────────────────────────
@@ -1285,6 +1388,8 @@ def _status_dict(sess: ReplaySession) -> dict[str, Any]:
         "target_rate": round(p.rate, 2) if p.rate else None,
         "achieved_rate": achieved_rate,
         "loop": p.loop,
+        "hold": p.hold,
+        "pass_complete": st.pass_complete,
         "nodes": len(sess.capture.nodes),
         "channels": sess.capture.channels,
         "packets_total": st.packets_total,
