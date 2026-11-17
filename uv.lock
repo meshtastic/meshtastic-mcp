@@ -1623,9 +1623,6 @@ sdr = [
 sim = [
     { name = "faker" },
 ]
-tak = [
-    { name = "meshtastic-tak" },
-]
 tasks = [
     { name = "fastmcp", extra = ["tasks"] },
 ]
@@ -1662,6 +1659,11 @@ web = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 
+[package.dev-dependencies]
+tak = [
+    { name = "meshtastic-tak" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", marker = "extra == 'web'", specifier = ">=0.19" },
@@ -1675,7 +1677,6 @@ requires-dist = [
     { name = "fastmcp", extras = ["tasks"], marker = "extra == 'test'", specifier = ">=4.1,<5" },
     { name = "mcp", specifier = ">=2" },
     { name = "meshtastic", specifier = ">=2.7.8" },
-    { name = "meshtastic-tak", marker = "extra == 'tak'", git = "https://github.com/meshtastic/TAKPacket-SDK.git?subdirectory=python" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "numpy", marker = "extra == 'sdr'", specifier = ">=1.26" },
     { name = "numpy", marker = "extra == 'ui'", specifier = ">=1.26" },
@@ -1705,7 +1706,10 @@ requires-dist = [
     { name = "uiautomator2", marker = "extra == 'android-fast'", specifier = ">=3.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.27" },
 ]
-provides-extras = ["android-fast", "dev", "inject", "menubar", "sdr", "sim", "tak", "tasks", "test", "ui", "ui-min", "web"]
+provides-extras = ["android-fast", "dev", "inject", "menubar", "sdr", "sim", "tasks", "test", "ui", "ui-min", "web"]
+
+[package.metadata.requires-dev]
+tak = [{ name = "meshtastic-tak", git = "https://github.com/meshtastic/TAKPacket-SDK.git?subdirectory=python" }]
 
 [[package]]
 name = "meshtastic-tak"

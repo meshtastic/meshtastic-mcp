@@ -143,7 +143,7 @@ PROFILE: dict = {
     # in the real captures. See WS-A in docs/sim-realism-plan.md.
     # ``wire``: "v1" (default) emits the legacy uncompressed TAKPacket; "v2"
     # emits real zstd-dictionary-compressed TAKPacketV2 payloads and requires
-    # the [tak] extra (meshtastic-tak SDK) — see replay/tak.py.
+    # the meshtastic-tak SDK (the `tak` dependency group) — see replay/tak.py.
     "tak": {
         "team_nodes": 0,
         "pli_interval": 45,

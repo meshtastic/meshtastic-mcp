@@ -18,7 +18,7 @@ import pytest
 from meshtastic_mcp.replay import tak
 
 _SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "scripts"
-requires_tak = pytest.mark.skipif(not tak.available(), reason="[tak] extra not installed")
+requires_tak = pytest.mark.skipif(not tak.available(), reason="meshtastic-tak not installed")
 
 
 def _load(name: str = "ci_atak_app_loop"):

@@ -12,7 +12,7 @@ asserting the resulting CoT is well-formed and carries the right identity,
 type, position, and chat. This validates our TAK stimulus end-to-end without an
 emulator; the full app-plane loop lives in ``scripts/ci_atak_app_loop.py``.
 
-SDK-gated: skips when the ``[tak]`` extra (meshtastic-tak) isn't installed.
+SDK-gated: skips when meshtastic-tak (the ``tak`` dependency group) isn't installed.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from meshtastic.protobuf import mesh_pb2
 
 from meshtastic_mcp.replay import metrics, sim, tak
 
-requires_tak = pytest.mark.skipif(not tak.available(), reason="[tak] extra not installed")
+requires_tak = pytest.mark.skipif(not tak.available(), reason="meshtastic-tak not installed")
 
 TAK_V2_PORT = 78
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Meshtastic contributors
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""TAKPacketV2 wire-format support (the optional ``[tak]`` extra).
+"""TAKPacketV2 wire-format support (the optional ``tak`` dependency group).
 
 The SDK (meshtastic-tak) is a git-only dependency, so the wire-format tests
 skip when it isn't installed; the availability-gate and error-path tests run
@@ -10,12 +10,16 @@ unconditionally.
 
 from __future__ import annotations
 
+import re
+import tomllib
+from pathlib import Path
+
 import pytest
 from meshtastic.protobuf import mesh_pb2
 
 from meshtastic_mcp.replay import metrics, sim, tak
 
-requires_tak = pytest.mark.skipif(not tak.available(), reason="[tak] extra not installed")
+requires_tak = pytest.mark.skipif(not tak.available(), reason="meshtastic-tak not installed")
 
 
 # ATAK_PLUGIN (legacy v1) and ATAK_PLUGIN_V2 (compressed v2) portnums.
@@ -40,12 +44,18 @@ def test_available_is_boolean():
 
 
 def test_v2_requested_without_sdk_raises(monkeypatch):
-    """profile tak.wire='v2' must fail fast with an install hint when the extra
+    """profile tak.wire='v2' must fail fast with an install hint when the SDK
     is absent — no silent fallback that would confuse an explicit request."""
     monkeypatch.setattr(tak, "available", lambda: False)
     prof = {"tak": {"team_nodes": 2, "wire": "v2"}}
-    with pytest.raises(RuntimeError, match=r"\[tak\] extra"):
+    with pytest.raises(RuntimeError, match=re.escape(tak.SDK_REQUIREMENT)):
         sim.generate(nodes=40, days=1, seed=1, start=1_700_000_000, profile=prof)
+
+
+def test_install_hint_names_the_same_requirement_as_the_tak_group():
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    groups = tomllib.loads(pyproject.read_text())["dependency-groups"]
+    assert groups["tak"] == [tak.SDK_REQUIREMENT]
 
 
 @requires_tak

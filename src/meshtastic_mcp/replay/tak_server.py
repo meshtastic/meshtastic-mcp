@@ -15,8 +15,8 @@ Meshtastic app), and the server the Android ATAK e2e loop
 
 Wire: the classic TAK **TCP streaming** protocol — complete ``<event>…</event>``
 CoT documents concatenated on the socket (no XML declaration, no length prefix),
-which ATAK ingests as a plain streaming TCP input. Requires the ``[tak]`` extra
-(meshtastic-tak) for the CoT build; :func:`capture_to_cot_events` raises without
+which ATAK ingests as a plain streaming TCP input. Requires the meshtastic-tak
+SDK (the ``tak`` dependency group) for the CoT build; :func:`capture_to_cot_events` raises without
 it.
 """
 

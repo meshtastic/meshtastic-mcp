@@ -14,7 +14,7 @@ own self-PLI streams back to the server and converts to a mesh TAKPacketV2
 
     python scripts/ci_atak_app_loop.py --atak-apk ATAK-CIV.apk
 
-Requires the ``[tak]`` extra (meshtastic-tak) for the CoT build, ATAK-CIV
+Requires the meshtastic-tak SDK (``uv run --group tak``) for the CoT build, ATAK-CIV
 installed/installable, and the ``android`` capability (adb). Emits
 ``LOOP atak-render …`` + ``LOOP atak-send …`` and exits non-zero if either leg fails.
 
@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if not tak.available():
             print(
-                "FAIL: the [tak] extra is required (pip install 'meshtastic-mcp[tak]')",
+                f"FAIL: the meshtastic-tak SDK is required ({tak.INSTALL_HINT})",
                 file=sys.stderr,
             )
             return 2
