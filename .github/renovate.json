@@ -1,8 +1,46 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "One weekly PR per ecosystem for non-major updates, so bumps never pile up as one PR per package rewriting the same lockfile. Majors stay separate PRs. A 3-day soak matches the org's KMP preset, timestamp-optional as there, so digest and lockfile-maintenance updates, which carry no release timestamp, are not held forever. Vulnerability fixes skip the schedule and the soak.",
+  "extends": [
+    "config:recommended",
+    ":semanticCommitTypeAll(build)",
+    ":dependencyDashboard",
+    "helpers:pinGitHubActionDigests",
+    ":timezone(UTC)"
+  ],
   "rebaseWhen": "conflicted",
-  "extends": ["config:recommended", ":semanticCommits", ":dependencyDashboard"],
   "labels": ["dependencies"],
-  "pip_requirements": { "enabled": true },
-  "github-actions": { "pinDigests": true }
+  "minimumReleaseAge": "3 days",
+  "minimumReleaseAgeBehaviour": "timestamp-optional",
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "labels": ["dependencies", "security"],
+    "minimumReleaseAge": null,
+    "schedule": ["at any time"]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "minimumReleaseAge": null,
+    "schedule": ["before 6am on monday"]
+  },
+  "packageRules": [
+    {
+      "groupName": "python non-major",
+      "matchManagers": ["pep621"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "groupName": "web-ui non-major",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "groupName": "github actions",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
+      "schedule": ["before 6am on monday"]
+    }
+  ]
 }
