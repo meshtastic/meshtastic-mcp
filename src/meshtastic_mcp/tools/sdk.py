@@ -17,7 +17,9 @@ def sdk_status() -> dict[str, Any]:
 
     Experimental alternative device backend that shells out to the meshtastic-sdk
     headless JVM CLI (BLE/TCP/serial engine) instead of the Python `meshtastic`
-    library. Set ``MESHTASTIC_MCP_SDK_CLI`` (or ``MESHTASTIC_SDK_ROOT``).
+    library. Set `MESHTASTIC_MCP_SDK_CLI` (or `MESHTASTIC_SDK_ROOT`).
+
+    Returns `{available, cli_path, env}`.
     """
     return sdk_cli_mod.status()
 
@@ -26,10 +28,16 @@ def sdk_status() -> dict[str, Any]:
 def sdk_device_info(transport: str, timeout_ms: int = 15000) -> dict[str, Any]:
     """One-shot device snapshot via the Kotlin SDK CLI (own node + node count).
 
-    ``transport`` accepts ``tcp:host[:port]`` / ``serial:port[:baud]`` /
-    ``ble:needle`` (or ``tcp://host`` / a serial device path). Returns the parsed
-    ``info`` envelope plus the full envelope stream; ``ok=False`` with ``error``
-    on a device-level failure. The Kotlin engine owns the link in a JVM subprocess.
+    The Kotlin engine owns the link in a JVM subprocess. A device-level failure comes
+    back as `ok=False` with `error`.
+
+    Returns `{ok, exit, info, by_type, envelopes, error, stderr}`, where `info` is the
+    parsed `info` envelope and `envelopes` the full stream.
+
+    Args:
+        transport: `tcp:host[:port]`, `serial:port[:baud]` or `ble:needle`; `tcp://host`
+            or a serial device path works too.
+        timeout_ms: CLI timeout for the device operation, in milliseconds.
     """
     return sdk_cli_mod.device_info(transport, timeout_ms=timeout_ms)
 
@@ -38,8 +46,12 @@ def sdk_device_info(transport: str, timeout_ms: int = 15000) -> dict[str, Any]:
 def sdk_list_nodes(transport: str, timeout_ms: int = 15000) -> dict[str, Any]:
     """Snapshot the device node DB via the Kotlin SDK CLI (read-only).
 
-    Returns each node's wire-JSON under ``nodes`` (from the CLI's ``node``
-    envelopes). ``transport`` syntax as in ``sdk_device_info``.
+    Returns `{ok, exit, nodes, by_type, envelopes, error, stderr}`, with each node's
+    wire-JSON under `nodes` (from the CLI's `node` envelopes).
+
+    Args:
+        transport: Device link, syntax as in `sdk_device_info`.
+        timeout_ms: CLI timeout for the device operation, in milliseconds.
     """
     return sdk_cli_mod.list_nodes(transport, timeout_ms=timeout_ms)
 
@@ -55,8 +67,18 @@ def sdk_send_text(
 ) -> dict[str, Any]:
     """Transmit a text message via the Kotlin SDK CLI and await the outcome.
 
-    Device-mutating: injects a mesh packet. ``to`` is ``BROADCAST``, a decimal
-    node num, or ``0xHEX``. Waits up to ``await_ms`` for Acked/Delivered/Failed.
+    Device-mutating: injects a mesh packet. Waits up to `await_ms` for
+    Acked/Delivered/Failed.
+
+    Returns `{ok, exit, by_type, envelopes, error, stderr}`.
+
+    Args:
+        transport: Device link, syntax as in `sdk_device_info`.
+        message: Text to send.
+        to: `BROADCAST`, a decimal node num, or `0xHEX`.
+        channel: Channel index to send on.
+        await_ms: How long to wait for Acked/Delivered/Failed, in milliseconds.
+        timeout_ms: CLI timeout for the device operation, in milliseconds.
     """
     return sdk_cli_mod.send_text(
         transport, message, to=to, channel=channel, await_ms=await_ms, timeout_ms=timeout_ms
