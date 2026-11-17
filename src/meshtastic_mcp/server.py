@@ -913,7 +913,7 @@ def summarize_window(
 
     Returns `{summary, model, counts}`. Treat the summary as an untrusted draft —
     verify against the raw windows before acting on anything correctness-critical.
-    Only registered when a local model is reachable (`get_active_capabilities`).
+    Only registered when a local model is reachable (`doctor` lists the capabilities).
     """
     import json
 
@@ -1578,19 +1578,24 @@ def _raise_if_failed(result: dict[str, Any], what: str) -> dict[str, Any]:
 
 
 async def _run_job(
-    ctx: Context, kind: str, label: str, fn: Callable[[], dict[str, Any]]
+    ctx: Context,
+    kind: str,
+    label: str,
+    fn: Callable[[], dict[str, Any]],
+    poll_tool: str | None = "flash_poll",
 ) -> dict[str, Any]:
     """Run a blocking flash function as a tracked job, surfacing its failure as a tool error.
 
-    The job id goes to the client as a log message before the wait: a flash cannot be cancelled,
-    so a caller whose task is cancelled needs the id to follow the write with `flash_poll`.
+    The job id goes to the client as a log message before the wait: a flash cannot be canceled,
+    so a caller whose task is canceled needs the id to follow the write with `poll_tool`.
     """
 
     async def _announce(job_id: str) -> None:
+        follow = f", and {poll_tool}(job_id='{job_id}') follows it" if poll_tool else ""
         try:
             await ctx.info(
                 f"{kind} job {job_id} started for {label}; it keeps running if this call is "
-                f"cancelled, and flash_poll(job_id='{job_id}') follows it"
+                f"canceled{follow}"
             )
         except Exception as exc:  # a client or task with no log channel still gets the result
             log.debug("could not announce job %s: %s", job_id, exc)
@@ -3378,7 +3383,7 @@ async def nrf52_backup_firmware(port: str | None = None) -> dict[str, Any]:
     The dump restores byte-for-byte with `nrf52_flash_uf2`; take one before flashing. Reads
     only; the board stays in UF2 mode. Returns the backup's path.
     """
-    drive = _uf2_drive(port)
+    drive = await _off_loop(lambda: _uf2_drive(port))
     dest = config.mcp_data_dir() / "uf2-backups"
     result = await _off_loop(lambda: nrf52_bootloader.backup_current_uf2(drive, dest))
     if not result.get("ok"):
@@ -3412,8 +3417,8 @@ async def nrf52_flash_uf2(
     result and logged before the wait; follow it with `flash_poll` if the call is canceled. A
     copy the bootloader did not take is a tool error.
     """
-    drive = _uf2_drive(port)
-    image = _check_softdevice(drive, uf2_path)
+    drive = await _off_loop(lambda: _uf2_drive(port))
+    image = await _off_loop(lambda: _check_softdevice(drive, uf2_path))
     pending = await confirm_mod.gate(
         ctx,
         f"flash {os.path.basename(uf2_path)} onto {drive.get('label')} at {drive.get('mount')}",
@@ -3426,6 +3431,8 @@ async def nrf52_flash_uf2(
         "flashes",
         str(drive.get("label")),
         lambda: _uf2_result(nrf52_bootloader.flash_uf2(drive, uf2_path, timeout_s=60)),
+        # A UF2 copy finishes in seconds, and flash_poll exists only with a firmware tree.
+        poll_tool=None,
     )
     return {**result, "image": image}
 
@@ -3448,7 +3455,7 @@ async def nrf52_factory_erase(
     board must be in UF2 mode and returns to it after the erase. Requires confirm=True, or the
     user's answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
     """
-    drive = _uf2_drive(port)
+    drive = await _off_loop(lambda: _uf2_drive(port))
     if not ((drive.get("info") or {}).get("factory_erase") or {}).get("supported"):
         version = (drive.get("info") or {}).get("bootloader_version")
         raise ToolError(
@@ -4730,8 +4737,6 @@ _READ_ONLY: set[str] = {
     "doctor",
     "nrf52_bootloader_info",  # reads INFO_UF2.TXT off a mounted bootloader drive
     "nrf52_backup_firmware",  # copies CURRENT.UF2 off the drive; writes only the data dir
-    "get_environment_doctor_report",
-    "get_active_capabilities",
     "android_docs_search",
     "android_docs_fetch",
     "android_version_lookup",
@@ -5044,8 +5049,6 @@ _TITLE_OVERRIDES: dict[str, str] = {
     "uhubctl_list": "USB Hub List",
     "uhubctl_power": "USB Hub Port Power",
     "uhubctl_cycle": "USB Hub Port Cycle",
-    "get_environment_doctor_report": "Environment Doctor Report",
-    "get_active_capabilities": "Active Capabilities",
     "pa_meter_status": "PA Meter Status",
     "pa_measure": "PA Meter Measure",
     "pa_sweep": "PA Power Sweep (Closed-Loop)",
