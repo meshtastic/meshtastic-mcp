@@ -5,6 +5,11 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-17
+
+The first release published since 0.1.0: the 0.2.0 tag never reached PyPI, the GitHub releases or
+the MCP Registry, so this release also carries everything listed under 0.2.0.
+
 ### Added
 - **HTTP serving** - `meshtastic-mcp serve` serves the tools over streamable HTTP from the bench
   host, so every client shares one owner of the serial ports, the recorder and the jobs. Every
