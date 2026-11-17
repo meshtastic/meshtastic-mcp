@@ -248,6 +248,49 @@ def test_single_want_config_delivers_channels_nodes_and_stream():
         sess.stop()
 
 
+def test_every_want_config_on_one_socket_gets_its_own_answer():
+    """69420 gets config, 69421 the node's own NodeInfo and the node DB, any other nonce both.
+
+    Apple re-sends 69420 on the open socket after saving channels and needs its config again.
+    """
+    cap = sim.generate(nodes=6, days=1, seed=3, start=1_700_000_000)
+    params = ReplayParams(
+        host="127.0.0.1", port=0, rate=5, node_delay=0, local_metrics_interval=0, stats_interval=0
+    )
+    sess = ReplaySession("resync", cap, params)
+    sess.start()
+    try:
+        client = socket.create_connection(("127.0.0.1", sess.params.port), timeout=5)
+        client.settimeout(5)
+
+        def answer(nonce: int) -> Counter:
+            _send_toradio(client, want_config_id=nonce)
+            kinds: Counter = Counter()
+            while True:
+                fr = _read_frame(client)
+                variant = fr.WhichOneof("payload_variant")
+                if variant == "config_complete_id" and fr.config_complete_id == nonce:
+                    return kinds
+                if variant != "packet":
+                    kinds[variant] += 1
+
+        config_only = answer(69420)
+        nodes_only = answer(69421)
+        resync = answer(69420)
+        full = answer(4242)
+        client.close()
+    finally:
+        sess.stop()
+
+    assert config_only["my_info"] == 1
+    assert config_only["channel"] == MAX_CHANNELS
+    assert config_only["config"] >= 1
+    assert config_only["node_info"] == 1  # the node's own NodeInfo, no node DB
+    assert resync == config_only
+    assert nodes_only == Counter(node_info=len(cap.nodes) + 1)
+    assert full == config_only + Counter(node_info=len(cap.nodes))
+
+
 def test_config_phase_beacon_listen_module_config():
     """beacon_listen adds a ModuleConfig.mesh_beacon (field 17) with FLAG_LISTEN_ENABLED."""
     cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)

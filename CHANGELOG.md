@@ -23,21 +23,11 @@ All notable changes are documented here. Format loosely follows
   draw that painted every link the same colour.
 
 ### Fixed
-- **Replay handshake now answers a single `want_config_id` with the full config, so real
-  clients get their channels** — the engine split the want-config response into two
-  mutually-exclusive phases: channels + `my_info` + config were sent only for a "config" nonce,
-  while the node DB + packet stream were sent only for an invented `69421` "DB" nonce. But real
-  clients (phone apps, the `meshtastic` CLI/python lib) send exactly **one** `want_config_id`
-  with a random nonce and expect everything back in one stream (firmware behaviour). So a real
-  client got one half or the other — most visibly, the iOS app streamed thousands of messages
-  but showed an **empty Channels list**; a python-lib client got channels but only the observer
-  node and no packet stream. The two-phase split only ever worked for the test harness, which
-  explicitly sent both nonces. The handshake now sends config content (`my_info`, channels,
-  config sections) on the first want-config of a connection regardless of nonce, and the node
-  DB + stream whenever the nonce isn't the reserved `NODELESS` value (`69420`), then closes with
-  `config_complete_id`. The older two-request pattern (`69420` then `69421`) still maps cleanly
-  onto this. Regression test:
-  `test_single_want_config_delivers_channels_nodes_and_stream`.
+- **Replay answers want_config as firmware does** - 69420 (`SPECIAL_NONCE_ONLY_CONFIG`) gets
+  `my_info`, channels and config; 69421 (`SPECIAL_NONCE_ONLY_NODES`) gets the node's own
+  NodeInfo and the node DB; any other nonce gets both. Every nonce but 69420 starts the packet
+  stream. Android and Apple send 69420 then 69421. meshtastic-python sends one random nonce,
+  which got config with no node DB or packet stream.
 
 ## [0.3.0] - 2026-11-17
 

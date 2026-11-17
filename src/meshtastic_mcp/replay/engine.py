@@ -71,17 +71,10 @@ def _replay_log_dir() -> Path:
 START1 = 0x94
 START2 = 0xC3
 
-# Real clients (phone apps, the `meshtastic` CLI/python lib) send a SINGLE
-# `want_config_id` with a random nonce, and the firmware answers it with the
-# full config in one stream: my_info, metadata, all channels, every config
-# section, the whole node DB, then `config_complete_id`, and then streams
-# packets. The one reserved value is NODELESS (69420) — "send my own config but
-# skip the bulk node DB" (meshtastic.NODELESS_WANT_CONFIG_ID). We therefore send
-# the config content (my_info + channels + config sections) on the FIRST
-# want-config of a connection whatever its nonce, and the node DB + packet
-# stream whenever the nonce is not NODELESS. NONCE_DB is kept only so the older
-# two-request test/CLI pattern (69420 for config, then 69421 for the DB) still
-# maps cleanly onto that behaviour.
+# want_config nonces as firmware's PhoneAPI reads them: 69420 (SPECIAL_NONCE_ONLY_CONFIG)
+# skips the node DB, 69421 (SPECIAL_NONCE_ONLY_NODES) sends only the node's own NodeInfo
+# and the node DB, and any other nonce sends both. Android and Apple send 69420 then
+# 69421; meshtastic-python sends one random nonce.
 NONCE_NODELESS = 69420
 NONCE_CONFIG = NONCE_NODELESS  # backwards-compatible alias
 NONCE_DB = 69421
@@ -611,7 +604,6 @@ class ReplaySession:
     def _serve_client(self, client: socket.socket, cancel: threading.Event | None = None) -> None:
         send_lock = threading.Lock()
         streaming = [False]
-        config_sent = [False]
 
         def send(fr: mesh_pb2.FromRadio) -> None:
             data = _frame(fr.SerializeToString())
@@ -652,13 +644,11 @@ class ReplaySession:
                 nonce = tr.want_config_id
                 nodeless = nonce == NONCE_NODELESS
                 self._log_event("want_config", nonce=nonce, nodeless=nodeless)
-                # Config content (my_info, channels, config sections) goes out on
-                # the first want-config of the connection regardless of nonce, so
-                # a single-request client still receives its channels. The bulk
-                # node DB + packet stream follow whenever the request is not the
-                # nodeless variant. `config_complete_id` closes each request.
-                if not config_sent[0]:
-                    config_sent[0] = True
+                # Every want_config restarts the handshake, as in firmware, so a config
+                # re-sync on an open socket gets the config again.
+                if nonce == NONCE_DB:
+                    send(self._observer_nodeinfo())
+                else:
                     self._send_config_phase(send)
                 if not nodeless:
                     self._send_node_db(send, cancel)
@@ -688,9 +678,9 @@ class ReplaySession:
     def _send_config_phase(self, send: Any) -> None:
         """my_info + metadata + observer NodeInfo + channels + config sections.
 
-        Sent once per connection, on the first want-config, ahead of the bulk
-        node DB. `config_complete_id` is emitted by the caller after the DB (if
-        any) so a single request closes with one completion for its own nonce.
+        Sent for every want_config but 69421, ahead of the node DB. The caller
+        sends `config_complete_id` after the DB, if any, so each request closes
+        with one completion for its own nonce.
         """
         n_nodes = len(self.capture.nodes)
         fr = mesh_pb2.FromRadio()
@@ -772,10 +762,10 @@ class ReplaySession:
     def _send_node_db(self, send: Any, cancel: threading.Event | None = None) -> None:
         """Observer LocalStats, then the bulk node DB.
 
-        The observer NodeInfo already went out during `_send_config_phase`, so
-        this streams stats (ahead of the bulk rows, so a stats row renders before
-        a large download can stall the UI) followed by every captured node. The
-        caller emits `config_complete_id` afterward.
+        The caller has already sent the observer NodeInfo, with the config or on
+        its own for 69421. Stats go ahead of the bulk rows so a stats row renders
+        before a large download can stall the UI. The caller sends
+        `config_complete_id` afterward.
         """
 
         def pause() -> None:
