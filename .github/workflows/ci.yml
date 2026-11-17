@@ -99,9 +99,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Same steps as release.yml's build, so a broken SPA or wheel fails here, not at the tag.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build the FleetSuite SPA (the wheel ships it)
+        run: npm ci && npm run build
+        working-directory: web-ui
       - uses: astral-sh/setup-uv@v5
       - name: Build sdist + wheel
         run: uv build
+      - name: Smoke-install the wheel with no extras
+        run: |
+          python -m zipfile -l dist/*.whl | grep -q "web/static/index.html"
+          python -m venv /tmp/smoke && /tmp/smoke/bin/pip install -q dist/*.whl
+          /tmp/smoke/bin/python -c "import meshtastic_mcp.server"
       - name: Check the bundled skills shipped in the wheel
         run: |
           list=$(python -m zipfile -l dist/*.whl)
