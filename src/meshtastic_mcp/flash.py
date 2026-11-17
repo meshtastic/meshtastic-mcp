@@ -454,28 +454,31 @@ def _run_install_script(script: Path, port: str, binary: Path) -> dict[str, Any]
     # The scripts invoke `esptool` from PATH, which may not carry the venv /
     # PlatformIO location our resolver finds — prepend it so they agree.
     esptool_dir = str(config.esptool_bin().parent)
-    env = os.environ.copy()
-    existing_path = env.get("PATH", "")
-    env["PATH"] = os.pathsep.join(part for part in (esptool_dir, existing_path) if part)
+    existing_path = os.environ.get("PATH", "")
+    path = os.pathsep.join(part for part in (esptool_dir, existing_path) if part)
 
-    t0 = time.monotonic()
-    proc = subprocess.run(
-        [str(script), "-p", port, "-f", binary.name],
-        cwd=str(binary.parent),
-        capture_output=True,
-        text=True,
-        timeout=pio.TIMEOUT_UPLOAD,
-        env=env,
-    )
-    duration = time.monotonic() - t0
-    port_mismatch = _verify_upload_port(port, proc.stdout, proc.stderr)
-    exit_code = proc.returncode
+    # pio's capture streams the script's esptool output into the job's progress.
+    try:
+        returncode, stdout, stderr, duration = pio._run_capturing(
+            [str(script), "-p", port, "-f", binary.name],
+            cwd=binary.parent,
+            timeout=pio.TIMEOUT_UPLOAD,
+            extra_env={"PATH": path},
+            tee=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise FlashError(
+            f"{script.name} timed out after {pio.TIMEOUT_UPLOAD}s on {port}; the flash may be "
+            "half-written, so flash it again"
+        ) from exc
+    port_mismatch = _verify_upload_port(port, stdout, stderr)
+    exit_code = returncode
     if port_mismatch and exit_code == 0:
         exit_code = 1
     out = {
         "exit_code": exit_code,
-        "stdout_tail": pio.tail_lines(proc.stdout, 200),
-        "stderr_tail": pio.tail_lines(proc.stderr, 200),
+        "stdout_tail": pio.tail_lines(stdout, 200),
+        "stderr_tail": pio.tail_lines(stderr, 200),
         "duration_s": round(duration, 2),
     }
     if port_mismatch:

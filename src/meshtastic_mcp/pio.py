@@ -19,12 +19,16 @@ have a single place that owns timeouts, buffer sizes, JSON parsing, and the
 
 `hw_tools.py` shares the streaming helper via `pio._run_capturing()` so
 esptool/nrfutil/picotool output also streams when the env var is set.
+
+On a thread that reports progress (a job's, or a `jobs.tracking` block's) the
+output also streams, through `OutputProgress`, into that progress.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -89,6 +93,94 @@ def _flash_log_path() -> Path | None:
     return Path(raw)
 
 
+_MESSAGE_MAX = 120
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# esptool names each image's erase range before writing it; v4 names them all up front.
+_ESPTOOL_RANGE = re.compile(r"Flash will be erased from (0x[0-9a-fA-F]+) to (0x[0-9a-fA-F]+)")
+# esptool v4, `Writing at 0x00010000... (45 %)`: the address of the block about to be written.
+_ESPTOOL_V4 = re.compile(r"Writing at (0x[0-9a-fA-F]+)\.\.\. \((\d{1,3}) ?%\)")
+# esptool v5, `Writing at 0x00012000 [===>    ]  45.2% ...`: the address written up to.
+_ESPTOOL_V5 = re.compile(r"Writing at (0x[0-9a-fA-F]+) .*?(\d{1,3}(?:\.\d+)?)%")
+_PICOTOOL = re.compile(
+    r"((?:Loading into|Verifying) \w+|Erasing|Saving file):\s*\[[^\]]*\]\s*(\d{1,3})%"
+)
+# adafruit-nrfutil prints a `#` per DFU packet, 40 to a line, and no total.
+_NRFUTIL_PACKETS = re.compile(r"#+")
+
+
+class OutputProgress:
+    """Reads one run's output lines into a `jobs.Progress`.
+
+    esptool's write counts bytes across every image it named a range for, picotool's bar counts
+    percent, adafruit-nrfutil's `#` rows count packets, and any other line is just the message.
+    PlatformIO's `RAM:`/`Flash:` usage bars print a percent that is not progress.
+    """
+
+    def __init__(self, progress: jobs.Progress) -> None:
+        self._progress = progress
+        self._lock = threading.Lock()  # the stdout and stderr readers both feed it
+        self._ranges: dict[int, int] = {}
+        self._reached: dict[int, float] = {}
+        self._base = 0.0
+        self._percent = 0.0
+        self._packets = 0
+
+    def feed(self, raw: str) -> None:
+        line = _ANSI.sub("", raw).strip()
+        if line:
+            with self._lock:
+                self._read(line)
+
+    def _read(self, line: str) -> None:
+        if m := _ESPTOOL_V4.search(line):
+            self._esptool(int(m[1], 16), float(m[2]), False, f"Writing at {m[1]} ({m[2]}%)")
+        elif m := _ESPTOOL_V5.search(line):
+            self._esptool(int(m[1], 16), float(m[2]), True, f"Writing at {m[1]} ({m[2]}%)")
+        elif m := _PICOTOOL.search(line):
+            self._phase(float(m[2]), f"{m[1]} ({m[2]}%)")
+        elif _NRFUTIL_PACKETS.fullmatch(line):
+            self._packets += len(line)
+            self._progress.update(f"DFU: {self._packets} packets sent", self._packets)
+        else:
+            if m := _ESPTOOL_RANGE.search(line):
+                start = int(m[1], 16)
+                self._ranges[start] = int(m[2], 16) - start + 1
+            self._progress.update(line[:_MESSAGE_MAX])
+
+    def _esptool(self, address: int, percent: float, written_up_to: bool, message: str) -> None:
+        for start, size in self._ranges.items():
+            end = start + size
+            if (start < address <= end) if written_up_to else (start <= address < end):
+                done = address - start if written_up_to else size * percent / 100
+                self._reached[start] = max(self._reached.get(start, 0.0), done)
+                total = float(sum(self._ranges.values()))
+                self._progress.update(message, sum(self._reached.values()), total)
+                return
+        self._phase(percent, message)
+
+    def _phase(self, percent: float, message: str) -> None:
+        """Percent of one step; a drop starts the next step, counted 100 points on."""
+        if percent < self._percent:
+            self._base += 100
+        self._percent = percent
+        self._progress.update(message, self._base + percent, self._base + 100)
+
+
+def _with_progress(
+    progress: jobs.Progress, line_cb: Callable[[str], None] | None
+) -> Callable[[str], None]:
+    reader = OutputProgress(progress)
+
+    def cb(line: str) -> None:
+        try:
+            if line_cb is not None:
+                line_cb(line)
+        finally:
+            reader.feed(line)
+
+    return cb
+
+
 def _kill_group(proc: subprocess.Popen[str]) -> None:
     """Kill a process started with `start_new_session=True` and every child it spawned.
 
@@ -109,8 +201,11 @@ def _run_capturing(
     tee_header: str | None = None,
     extra_env: dict[str, str] | None = None,
     line_cb: Callable[[str], None] | None = None,
+    tee: bool = True,
 ) -> tuple[int, str, str, float]:
     """Run a subprocess, capture stdout+stderr, optionally tee to the flash log.
+
+    `tee=False` keeps this run out of the flash log.
 
     Returns `(returncode, stdout_str, stderr_str, duration_s)`. Raises
     `subprocess.TimeoutExpired` on timeout (callers map this to their own
@@ -127,14 +222,19 @@ def _run_capturing(
     the flash log file. Stdout and stderr stay separate in the return value
     (so `stderr_tail` still means stderr), but are interleaved in the log
     file in the order they arrived — that's what a human wants to read.
+    A thread that reports progress also takes the streaming path, so each
+    line reaches its `jobs.Progress` as it arrives.
     """
-    log_path = _flash_log_path()
+    log_path = _flash_log_path() if tee else None
     t0 = time.monotonic()
     env = None
     if extra_env:
         env = {**os.environ, **extra_env}
 
     interruptible = jobs.cancellable_job_running()
+    progress = jobs.current_progress()
+    if progress is not None:
+        line_cb = _with_progress(progress, line_cb)
 
     if log_path is None and line_cb is None and interruptible:
         # A cancellable job gets its own process group so `jobs.cancel` stops pio's children too.
@@ -261,6 +361,12 @@ def _run_capturing(
         t_err.join(timeout=2)
         raise
 
+    if timeout is not None:
+        # A child that outlives the tool can hold the pipes open; the timeout covers that too.
+        for reader in (t_out, t_err):
+            reader.join(max(0.0, t0 + timeout - time.monotonic()))
+        if t_out.is_alive() or t_err.is_alive():
+            raise subprocess.TimeoutExpired(list(argv), timeout)
     t_out.join()
     t_err.join()
     duration = time.monotonic() - t0

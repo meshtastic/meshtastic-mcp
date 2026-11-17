@@ -23,6 +23,18 @@ Poll every few seconds until `status` is `done` or `failed`. A poll returns the 
 
 Before it waits, each flash tool logs a line to the client naming its job, for example `flashes job 3f2a... started for heltec-v3; ... flash_poll(job_id='3f2a...') follows it`. A flash cannot be canceled, so if the call times out or is canceled, that id is how you follow the write to the end. `build`'s job is the same one `build_start` would make, so `build_poll(build_id=<job_id>)` reads it.
 
+## Progress
+
+While they wait, these five tools send MCP progress notifications to a client that asked for them with a progress token. The esptool, nrfutil and picotool tools (`esptool_raw`, `nrfutil_dfu`, `picotool_load` and the rest) send them while they run.
+
+- esptool's write counts bytes over the images esptool has named a flash range for, so the total grows when the next image starts.
+- picotool's bar counts percent.
+- adafruit-nrfutil prints no total, so its notifications count DFU packets.
+- A UF2 copy counts bytes copied. The drive receives them during the sync that follows, and the message says so.
+- A compile has nothing to count, so its notifications carry the last line of output and no total.
+
+A caller gets at most one notification a second however fast a build prints, and the progress value only grows. In a background task the same updates show as the task's status message. A client that sends no progress token gets no notifications and the same result.
+
 ## MCP background tasks
 
 Install the `[tasks]` extra to let those five tools run as MCP background tasks:

@@ -13,28 +13,135 @@ build/flash instead of growing a second one.
 The registry is process-global and in-memory: jobs do not survive a server
 restart, which `poll()` says out loud when an id is unknown. Under
 `meshtastic-mcp serve` every client shares it.
+
+A job's thread records its progress with `report`, and a caller awaiting the job
+with `wait(on_progress=...)` forwards it as MCP progress notifications.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import math
 import os
 import signal
 import subprocess
 import threading
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from . import config
+
+log = logging.getLogger(__name__)
 
 _active: dict[str, dict[str, Any]] = {}
 LOCK = threading.Lock()
 """Guards every mutation of a job's state dict — worker bodies included."""
 
 _ctx = threading.local()
+
+PROGRESS_INTERVAL_S = 1.0
+"""The least time between two progress notifications to one caller, however chatty the tool."""
+
+_PROGRESS_STEP = 0.01
+
+ProgressSend = Callable[[float, float | None, str | None], Awaitable[None]]
+"""`Context.report_progress`'s shape: `(progress, total, message)`."""
+
+
+class Progress:
+    """The latest progress of blocking work, set by the thread doing it and read by its waiter.
+
+    `done` and `total` count work in the tool's own units (bytes, percent points, packets); an
+    update with only a message keeps the last count.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._seq = 0
+        self._message = ""
+        self._done: float | None = None
+        self._total: float | None = None
+
+    def update(self, message: str, done: float | None = None, total: float | None = None) -> None:
+        with self._lock:
+            self._seq += 1
+            self._message = message
+            if done is not None:
+                self._done, self._total = done, total
+
+    def snapshot(self) -> tuple[int, str, float | None, float | None]:
+        with self._lock:
+            return self._seq, self._message, self._done, self._total
+
+
+def current_progress() -> Progress | None:
+    """The `Progress` this thread reports into: its job's, or a `tracking` block's."""
+    return getattr(_ctx, "progress", None)
+
+
+def report(message: str, done: float | None = None, total: float | None = None) -> None:
+    """Record progress for the job or `tracking` block on this thread; a no-op anywhere else."""
+    progress = current_progress()
+    if progress is not None:
+        progress.update(message, done, total)
+
+
+@contextmanager
+def tracking(progress: Progress) -> Iterator[None]:
+    """Send `report` calls made on this thread to `progress` for the length of the block."""
+    previous = current_progress()
+    _ctx.progress = progress
+    try:
+        yield
+    finally:
+        _ctx.progress = previous
+
+
+class _Forwarder:
+    """Turns `Progress` snapshots into notifications that are throttled and only ever grow."""
+
+    def __init__(self, send: ProgressSend) -> None:
+        self._send: ProgressSend | None = send
+        self._seq = 0
+        self._sent_at = -math.inf
+        self._value = 0.0
+        self._extra = 0.0
+
+    async def __call__(self, progress: Progress) -> None:
+        seq, message, done, total = progress.snapshot()
+        now = time.monotonic()
+        if self._send is None or seq == self._seq or now - self._sent_at < PROGRESS_INTERVAL_S:
+            return
+        self._seq, self._sent_at = seq, now
+        value = (done or 0.0) + self._extra
+        if value <= self._value:
+            # MCP progress must grow with every notification, so an update that only changes
+            # the message counts as a sliver of work, in the total too.
+            self._extra += self._value + _PROGRESS_STEP - value
+            value = self._value + _PROGRESS_STEP
+        self._value = value
+        try:
+            await self._send(value, None if total is None else total + self._extra, message or None)
+        except Exception as exc:  # the caller still gets its result
+            log.debug("progress notification failed, sending no more: %s", exc)
+            self._send = None
+
+
+def forward_progress(progress: Progress, send: ProgressSend, poll_s: float = 0.5) -> asyncio.Task:
+    """Forward `progress` to `send` from a task on the running loop until that task is cancelled."""
+
+    async def _loop() -> None:
+        forward = _Forwarder(send)
+        while True:
+            await asyncio.sleep(poll_s)
+            await forward(progress)
+
+    return asyncio.ensure_future(_loop())
 
 
 def cancellable_job_running() -> bool:
@@ -99,12 +206,14 @@ def start(
         "artifacts": [],
         "log_path": str(log_path),
         "cancellable": cancellable,
+        "progress": Progress(),
     }
     with LOCK:
         _active[job_id] = state
 
     def _run() -> None:
         _ctx.state = state
+        _ctx.progress = state["progress"]
         try:
             worker_body(state, log_path)
         except Exception as exc:
@@ -115,6 +224,7 @@ def start(
                 state["error"] = str(exc)
         finally:
             _ctx.state = None
+            _ctx.progress = None
             with LOCK:
                 state["proc"] = None
                 if state.get("cancel_requested") and state["status"] == "failed":
@@ -182,13 +292,21 @@ def cancel(job_id: str) -> dict[str, Any]:
 
 
 async def wait(
-    job_id: str, poll_s: float = 0.5, tail_lines: int = 50, *, cancel_job: bool = True
+    job_id: str,
+    poll_s: float = 0.5,
+    tail_lines: int = 50,
+    *,
+    cancel_job: bool = True,
+    on_progress: ProgressSend | None = None,
 ) -> dict[str, Any]:
     """Await a job's terminal status and return `poll`'s view of it.
 
     If the awaiting task is cancelled and `cancel_job` is set, a cancellable job is cancelled too;
-    otherwise the job keeps running and stays pollable by `job_id`.
+    otherwise the job keeps running and stays pollable by `job_id`. `on_progress` gets what the
+    job reports, at most once per `PROGRESS_INTERVAL_S`; a failure there stops the notifications,
+    never the wait.
     """
+    forward = _Forwarder(on_progress) if on_progress is not None else None
     try:
         while True:
             with LOCK:
@@ -196,6 +314,9 @@ async def wait(
                 settled = state is None or state.get("settled", False)
             if settled:
                 break
+            progress = state.get("progress") if state is not None else None
+            if forward is not None and progress is not None:
+                await forward(progress)
             await asyncio.sleep(poll_s)
     except asyncio.CancelledError:
         if cancel_job:
@@ -211,12 +332,14 @@ async def run_sync(
     *,
     cancellable: bool = False,
     on_started: Callable[[str], Awaitable[None]] | None = None,
+    on_progress: ProgressSend | None = None,
 ) -> dict[str, Any]:
     """Run a blocking function as a tracked job and return its result with the `job_id`.
 
     The job stays pollable by `job_id` if the awaiting task is cancelled; `on_started` receives
     that id before the wait begins, so a caller whose task is cancelled still has it. A function
     that raises makes the job `failed`, and this raises `RuntimeError` with its message.
+    `on_progress` is `wait`'s.
     """
 
     def _body(state: dict[str, Any], log_path: Path) -> None:
@@ -236,7 +359,7 @@ async def run_sync(
     job_id = started["job_id"]
     if on_started is not None:
         await on_started(job_id)
-    final = await wait(job_id)
+    final = await wait(job_id, on_progress=on_progress)
     state = state_of(job_id) or {}
     if "result" not in state:
         raise RuntimeError(

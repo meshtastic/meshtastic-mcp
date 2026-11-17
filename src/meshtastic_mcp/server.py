@@ -1493,7 +1493,12 @@ async def build(
     )
     # Only an explicit task cancel stops the build; an inline call abandoned by a client timeout
     # leaves it running, as the synchronous tool always did.
-    final = await jobs.wait(started["job_id"], tail_lines=200, cancel_job=ctx.is_background_task)
+    final = await jobs.wait(
+        started["job_id"],
+        tail_lines=200,
+        cancel_job=ctx.is_background_task,
+        on_progress=ctx.report_progress,
+    )
     if final["status"] != "done":
         raise ToolError(
             f"build of {env} {final['status']} with exit code {final['exit_code']}\n"
@@ -1544,9 +1549,27 @@ async def _off_loop(fn: Callable[[], Any]) -> Any:
     """Run blocking device work on a worker thread, as FastMCP does for sync tools.
 
     A gated tool is `async` so it can ask the human, but the serial, subprocess and sleep work
-    after the gate would otherwise hold the event loop and stall every other request.
+    after the gate would otherwise hold the event loop and stall every other request. What the
+    work reports through `jobs` (an esptool, nrfutil or picotool run) goes to the calling
+    client as progress.
     """
-    return await anyio.to_thread.run_sync(fn)
+    from fastmcp.server.dependencies import get_context
+
+    try:
+        ctx = get_context()
+    except RuntimeError:  # not inside a tool call
+        return await anyio.to_thread.run_sync(fn)
+    progress = jobs.Progress()
+
+    def _tracked() -> Any:
+        with jobs.tracking(progress):
+            return fn()
+
+    forwarder = jobs.forward_progress(progress, ctx.report_progress)
+    try:
+        return await anyio.to_thread.run_sync(_tracked)
+    finally:
+        forwarder.cancel()
 
 
 def _output_tail(value: Any, limit: int = 1500) -> str:
@@ -1587,7 +1610,8 @@ async def _run_job(
     """Run a blocking flash function as a tracked job, surfacing its failure as a tool error.
 
     The job id goes to the client as a log message before the wait: a flash cannot be canceled,
-    so a caller whose task is canceled needs the id to follow the write with `poll_tool`.
+    so a caller whose task is canceled needs the id to follow the write with `poll_tool`. The
+    job's progress goes to the client while it waits.
     """
 
     async def _announce(job_id: str) -> None:
@@ -1601,7 +1625,9 @@ async def _run_job(
             log.debug("could not announce job %s: %s", job_id, exc)
 
     try:
-        result = await jobs.run_sync(kind, label, fn, on_started=_announce)
+        result = await jobs.run_sync(
+            kind, label, fn, on_started=_announce, on_progress=ctx.report_progress
+        )
     except RuntimeError as exc:
         raise ToolError(str(exc)) from exc
     return _raise_if_failed(result, f"flash of {label}")
