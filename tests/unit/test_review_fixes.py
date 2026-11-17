@@ -49,7 +49,9 @@ def test_a_slow_gated_tool_does_not_stall_other_calls(server, monkeypatch) -> No
     monkeypatch.setattr(
         admin,
         "reboot",
-        lambda port=None, confirm=False, seconds=10: time.sleep(1.5) or {"ok": True},
+        lambda port=None, confirm=False, seconds=10: (
+            time.sleep(1.5) or {"ok": True, "rebooting_in_s": seconds}
+        ),
     )
     app = FastMCP("t")
     app.tool()(getattr(server.reboot, "fn", server.reboot))
