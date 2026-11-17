@@ -116,14 +116,14 @@ with no firmware checkout. Optional capabilities activate when their prerequisit
 | **core** | none | discovery, serial+TCP transport, `device_info`/`list_nodes`/admin/`send_text`/reboot, recorder + log/telemetry/packet/event queries, **replay** (simulated TCP device + synthetic mesh + fuzzer), input-events, uhubctl, `esptool`/`nrfutil`/`picotool`, the nRF52 bootloader's UF2 drive (`nrf52_*`) |
 | **firmware** | `MESHTASTIC_FIRMWARE_ROOT` + PlatformIO `pio` | build / clean / flash / OTA / board enum / userPrefs |
 | **android** | `android` CLI + `adb` | Android-emulator + native-node orchestration for hardware-free e2e |
-| **apple** | `xcrun` (+ `idb` for UI) | iOS Simulator / macOS-app orchestration for hardware-free e2e |
-| **local-model** | a reachable Ollama or OpenAI-compatible `llama-server` (or a `llama` binary to start one) | offload tools that push token-heavy work onto a local GPU — summarize/triage recorder windows, e2e-failure first pass, and an offline **vision oracle**; see [docs/local-models.md](docs/local-models.md) |
-| **sdr** | `[sdr]` extra (bundles `pyrtlsdrlib`, a prebuilt librtlsdr) + an RTL-SDR dongle | RF-compliance oracle: `rf_scan` occupancy checks and `rf_confirm_tx` on-air verification, no second radio needed. *macOS/Homebrew note:* a system `librtlsdr` from Homebrew is the osmocom fork and lacks `rtlsdr_set_dithering`, so `import rtlsdr` fails — the bundled `pyrtlsdrlib` avoids this and is preferred by pyrtlsdr's loader. |
+| **apple** | `xcrun` (+ `idb` for UI) | iOS Simulator / macOS-app orchestration for hardware-free e2e (`ios_*`); `screenshot_set_*` registers with this or android and captures matching Android and iOS screens, see [docs/screenshot-set.md](docs/screenshot-set.md) |
+| **local-model** | a reachable Ollama or OpenAI-compatible `llama-server` (or a `llama` binary to start one) | offload tools that push token-heavy work onto a local GPU: summarize/triage recorder windows, e2e-failure first pass, and an offline **vision oracle**; see [docs/local-models.md](docs/local-models.md) |
+| **sdr** | `[sdr]` extra (bundles `pyrtlsdrlib`, a prebuilt librtlsdr) + an RTL-SDR dongle | RF-compliance oracle: `rf_scan` occupancy checks and `rf_confirm_tx` on-air verification, no second radio needed; see [docs/rf-oracle.md](docs/rf-oracle.md). *macOS/Homebrew note:* a system `librtlsdr` from Homebrew is the osmocom fork and lacks `rtlsdr_set_dithering`, so `import rtlsdr` fails; the bundled `pyrtlsdrlib` avoids this and is preferred by pyrtlsdr's loader. |
 | **tak** | the meshtastic-tak SDK, which is not on PyPI: install it with the command `doctor` prints, or `uv sync --group tak` in a checkout | real TAKPacketV2 zstd wire compression for the replay sim's TAK squad (`profile tak.wire="v2"`) and its CoT stream to ATAK |
 | **sdk-cli** *(experimental)* | Kotlin SDK headless CLI | alternate device-IO backend over the JVM CLI; see [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md) |
-| **discord** | a read-only bot token (`$DISCORD_BOT_TOKEN` or `<user-config-dir>/meshtastic-mcp/discord.token` — `doctor` prints the path) | read the Meshtastic Discord server — server-side search, history, threads/forum posts, pins, mentions of you, with a per-message role-derived `trust` tier (`discord_*`); stdlib only, never posts; see [docs/discord.md](docs/discord.md) |
-| **ble-sniffer** | an [nRF Sniffer for Bluetooth LE](https://www.nordicsemi.com/Products/Development-tools/nRF-Sniffer-for-Bluetooth-LE) dongle (Nordic VID `0x1915`/PID `0x522A`) + Nordic's `nrfutil-ble-sniffer` plugin | capture the **phone-to-node BLE link** from outside both ends (`ble_sniff_start`/`_poll`/`_stop`) — the independent oracle for when the app says "no devices found" and the node says "advertising". `ble_sniff_status` is core. Receive-only; output is untrusted (a BLE name is arbitrary text from any radio in range); see [docs/ble-sniffer.md](docs/ble-sniffer.md) |
-| **mvgrind** | the [`mvgrind`](https://github.com/miketweaver/mvgrind) binary + an OpenCL driver | grind a **vanity NodeNum or app colour** on the GPU (`vanity_grind_start`/`_poll`/`_stop`) — a node's number is `crc32(x25519_public_key)` and the apps paint it with the low 24 bits, so a chosen id or colour means searching the keyspace. `vanity_preview` and `vanity_apply` are core, so a key ground elsewhere still applies here; see [docs/vanity.md](docs/vanity.md) |
+| **discord** | a read-only bot token (`$DISCORD_BOT_TOKEN` or `<user-config-dir>/meshtastic-mcp/discord.token`; `doctor` prints the path) | read the Meshtastic Discord server: server-side search, history, threads/forum posts, pins, mentions of you, with a per-message role-derived `trust` tier (`discord_*`); stdlib only, never posts; see [docs/discord.md](docs/discord.md) |
+| **ble-sniffer** | an [nRF Sniffer for Bluetooth LE](https://www.nordicsemi.com/Products/Development-tools/nRF-Sniffer-for-Bluetooth-LE) dongle (Nordic VID `0x1915`/PID `0x522A`) + Nordic's `nrfutil-ble-sniffer` plugin | capture the **phone-to-node BLE link** from outside both ends (`ble_sniff_start`/`_poll`/`_stop`), the independent oracle for when the app says "no devices found" and the node says "advertising". `ble_sniff_status` is core. Receive-only; output is untrusted (a BLE name is arbitrary text from any radio in range); see [docs/ble-sniffer.md](docs/ble-sniffer.md) |
+| **mvgrind** | the [`mvgrind`](https://github.com/miketweaver/mvgrind) binary + an OpenCL driver | grind a **vanity NodeNum or app color** on the GPU (`vanity_grind_start`/`_poll`/`_stop`): a node's number is `crc32(x25519_public_key)` and the apps paint it with the low 24 bits, so a chosen id or color means searching the keyspace. `vanity_preview` and `vanity_apply` are core, so a key ground elsewhere still applies here; see [docs/vanity.md](docs/vanity.md) |
 
 The active set is logged at startup (`meshtastic-mcp capabilities active: …`).
 
@@ -202,7 +202,8 @@ which suits any client. `build`, `pio_flash`, `erase_and_flash`, `update_flash` 
 MCP tasks gets a background task, and other clients wait for the job to end. A failure is a tool
 error carrying the output tail. A flash cannot be canceled; its `job_id`, in the result and in
 the log line the tool sends before it waits, follows it with `flash_poll`. See
-[docs/background-jobs.md](docs/background-jobs.md).
+[docs/background-jobs.md](docs/background-jobs.md), and
+[docs/firmware-builds.md](docs/firmware-builds.md) for each tool's arguments.
 
 ## nRF52: UF2 flashing and recovery
 
@@ -243,8 +244,11 @@ shares one owner of the serial ports, the recorder and the jobs. See [docs/serve
 ## Trim the tool list
 
 `MESHTASTIC_MCP_TOOLSETS=core,firmware` exposes only the named groups, and
-`MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. See
-[docs/toolsets.md](docs/toolsets.md).
+`MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. The groups are `core` (the
+portable device set), `firmware`, `hardware`, `android`, `apple`, `discord`, `replay`, `rf`,
+`local-model` and `sdk`. A capability decides whether a tool registers and a toolset decides
+whether a session lists it, so the vendor flash tools and the `nrf52_*` tools register with the
+core capability but list under `hardware`. See [docs/toolsets.md](docs/toolsets.md).
 
 ## Hardware-free e2e (emulator + TCP)
 
@@ -344,6 +348,9 @@ replay_stop()
   spoofing, forged ACKs, rogue ADMIN reboot/factory-reset, malicious waypoints). Seeded so a
   crash reproduces; activity surfaces under `fuzz` in `replay_status`. Presets: `light`,
   `parser`, `adversary`, `chaos`.
+
+Every `replay_start` parameter, the `sim_profile` keys and the inject tools are in
+[docs/replay.md](docs/replay.md).
 
 ## Bundled skills
 

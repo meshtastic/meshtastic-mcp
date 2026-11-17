@@ -17,7 +17,7 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   (`capture_display` — the device's own framebuffer over the phone API, the on-device
   counterpart to the webcam `capture_screen`; `drive_display_start`/`_poll` runs input
   steps against a live mirror and snapshots each; needs firmware with screen-mirror
-  support), `uhubctl`, `hw_tools`,
+  support; see `docs/display-mirror.md`), `uhubctl`, `hw_tools`,
   `replay/cot_relay.py` (ATAK/iTAK CoT capture + N-way relay — `cot_relay_*`; pure stdlib, so core),
   `nrf52_bootloader.py` (the Meshtastic nRF52 bootloader's UF2 drive — `nrf52_*`: enter UF2 mode
   via `enter_dfu_mode_request`, read `INFO_UF2.TXT`, back up `CURRENT.UF2`, flash a `.uf2` by
@@ -44,11 +44,12 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 - **apple capability** (needs `xcrun`; `idb` for UI): `emulator/apple_sim.py` iOS-Sim/macOS
   app-plane orchestration, plus `ios_list_simulators`, `ios_boot`, `ios_screenshot`
   (light/dark, App Store status bar), `ios_open_url` (deep links, and the connect link to a
-  `replay_start` node so iOS and the Android emulator show one simulated mesh),
+  `replay_start` node, which serves one client at a time),
   `ios_ui_dump`, `ios_tap` and `ios_type_text` (the last three need idb).
-  `screenshot_set_start`/`_poll` (`screenshot_set.py`, registered with either capability)
-  serves each app a replay node from one seed, connects both, and captures matching
-  Android and iOS screens by deep link in light and dark.
+  `screenshot_set_start`/`_poll` (`screenshot_set.py`, registered with either capability,
+  in the `apple` toolset) serves each app a replay node from one seed, connects both, and
+  captures matching Android and iOS screens by deep link in light and dark; see
+  `docs/screenshot-set.md`.
 - **local-model capability** (needs a reachable Ollama / OpenAI-compatible `llama-server`, or a
   `llama` binary to start one): `local_model.py` offload client + `llama_server.py`. Gates the
   offload tools (`summarize_window` / `vision_oracle` / `triage_window`) and backend bootstrap
@@ -213,7 +214,10 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   advertises it as `outputSchema`, and clients validate against it, so a field whose type varies
   stays `Any`.
 - **Every new tool gets a toolset.** A tool outside `core` goes into `toolsets._GROUPS` or
-  `_PREFIXES`; `_GROUPS["firmware"]` must equal `_FIRMWARE_TOOLS` (a test checks it).
+  `_PREFIXES`; `_GROUPS["firmware"]` must equal `_FIRMWARE_TOOLS` (a test checks it). `core` is
+  the portable device set, the tools that need only the base install and a radio, and
+  `tests/unit/test_toolsets.py` pins it to an allowlist read from every tool `server.py`
+  defines, so a tool that matches no group fails there until it gets one.
 - **Destructive tools stay `confirm`-gated** (`reboot`, `factory_reset`, the flash and `nrf52_*`
   tools, `uhubctl_*`; the full list is in `docs/confirmations.md`) **and
   `destructiveHint`-annotated** (see the annotation maps in `server.py`). Don't bypass the gate.
@@ -327,7 +331,8 @@ This pair works with any client. `build`, `pio_flash`, `erase_and_flash`, `updat
 `nrf52_flash_uf2` run the same jobs in one call: with the `[tasks]` extra a client that
 supports MCP tasks gets a background task, and any other client blocks until the job ends,
 past a 60 s client timeout, so use the pair there. esptool/nrfutil/picotool remain for
-chip-specific recovery. Detail: `docs/background-jobs.md`.
+chip-specific recovery. Detail: `docs/background-jobs.md`; each tool's arguments:
+`docs/firmware-builds.md`.
 
 **Follow a job by id**
 
@@ -413,7 +418,11 @@ with `packets_window`; it returns empty even when the message was delivered.
 `wait_for_tx=True` instead looks for the firmware's `Started Tx (id=…)` log line
 (and for a neighbour rebroadcasting the packet). That log only reaches the
 recorder when `set_debug_log_api(True)` is on for the port, or a `serial_session`
-is tapping it. `tx_confirmed` is three-valued:
+is tapping it. With it on, the firmware streams its log lines as `LogRecord` protobufs
+(the `meshtastic.log.line` topic in meshtastic-python) over the connection the admin
+tools use, so no monitor session or second port lock is needed. The firmware's log path
+has its own scratch and tx buffers and shares a mutex with the packet path, so it is safe
+to leave on under traffic. `tx_confirmed` is three-valued:
 
 | value | meaning |
 | --- | --- |
@@ -463,7 +472,8 @@ replay_stop()
 App/AVD connects to `10.0.2.2:<port>` (emulator) or the host IP (device). `fuzz` presets:
 `light`/`parser`/`adversary`/`chaos` — list them with `replay_fuzz_presets`. Pacing priority:
 `duration` (whole capture in N wall-clock seconds) > `rate` (steady pkts/sec) > `speed`
-(cadence multiplier); `replay_status` reports `target_rate` vs live `achieved_rate`.
+(cadence multiplier); `replay_status` reports `target_rate` vs live `achieved_rate`. Every
+parameter and the inject tools: `docs/replay.md`.
 
 **Give a node a chosen id or colour**
 ```

@@ -43,6 +43,12 @@ Managed roles (boosters, integrations) never count. Override the whole map with
 says *who is speaking*, not whether they are right — the tool docstrings tell the agent to
 weigh `authoritative`/`maintainer` answers and treat `community` claims as unverified.
 
+`trust` reflects the author's server roles when this server process first looked them up, not
+the role they held when they posted. Members are cached for the life of the process, so a role
+change or a departure after that first lookup shows only after a restart. An author who had
+already left reads as `left-server`, the lowest tier, so `trust` alone is no reason to discount
+an old, otherwise credible answer.
+
 ## Setup for a new operator (≈5 min)
 
 ### 1. Get the token

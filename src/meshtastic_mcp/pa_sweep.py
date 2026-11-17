@@ -539,6 +539,7 @@ def sweep(
             admin.set_config("lora.override_duty_cycle", True, port=port)
             duty_override_touched = True
 
+        failure: Exception | None = None
         try:
             for p in powers:
                 admin.set_config("lora.tx_power", int(p), port=port)
@@ -564,6 +565,9 @@ def sweep(
                         margin_db=floor_margin_db,
                     )
                 )
+        except Exception as exc:
+            failure = exc
+            raise
         finally:
             # Restore each field independently: a busy/transient failure on one
             # must not skip the next (leaving override_duty_cycle stuck on is the
@@ -574,6 +578,12 @@ def sweep(
                     _restore_config(
                         "lora.override_duty_cycle", original_duty_override, port, restore_errors
                     )
+            if failure is not None and restore_errors:
+                # The sweep's own error would hide that the node was left changed.
+                raise PaSweepError(
+                    f"pa_sweep failed ({failure}) and could not restore the node: "
+                    + "; ".join(restore_errors)
+                ) from failure
 
     table = [_step_row(s) for s in steps]
     silent_steps = [s.configured_dbm for s in steps if not s.rf_observed]

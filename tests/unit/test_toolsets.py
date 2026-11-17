@@ -5,11 +5,53 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import importlib.util
+from pathlib import Path
 
 import pytest
 
 from meshtastic_mcp import toolsets
+
+# The portable device set: tools that need only the base install and a radio over serial or
+# TCP. A new tool that matches no group lands here, so this list fails until it is placed.
+_CORE = frozenset(
+    {
+        "capture_display",
+        "config_diff",
+        "config_snapshot",
+        "config_snapshots_list",
+        "device_info",
+        "doctor",
+        "drive_display_poll",
+        "drive_display_start",
+        "events_window",
+        "factory_reset",
+        "get_channel_url",
+        "get_config",
+        "inject_frame",
+        "list_devices",
+        "list_nodes",
+        "logs_window",
+        "mark_event",
+        "packets_window",
+        "reboot",
+        "recorder_export",
+        "recorder_pause",
+        "recorder_resume",
+        "recorder_status",
+        "send_input_event",
+        "send_text",
+        "set_channel_url",
+        "set_config",
+        "set_debug_log_api",
+        "set_owner",
+        "shutdown",
+        "telemetry_timeline",
+        "triage_bundle",
+    }
+)
 
 
 @pytest.fixture(scope="module")
@@ -18,6 +60,40 @@ def server():
     from meshtastic_mcp import server as server_mod
 
     return server_mod
+
+
+def _is_tool_decorator(node: ast.expr) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr == "tool" and isinstance(func.value, ast.Name) and func.value.id == "app"
+    return isinstance(func, ast.Name) and func.id.endswith("_tool")
+
+
+def _defined_tools() -> set[str]:
+    """Every tool `server.py` defines, whether or not this host's capabilities register it."""
+    spec = importlib.util.find_spec("meshtastic_mcp.server")
+    assert spec is not None and spec.origin is not None
+    tree = ast.parse(Path(spec.origin).read_text(encoding="utf-8"))
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and any(_is_tool_decorator(d) for d in node.decorator_list)
+    }
+
+
+def test_tool_discovery_sees_gated_and_registered_tools(server) -> None:
+    defined = _defined_tools()
+    assert {t.name for t in asyncio.run(server.app.list_tools())} <= defined
+    assert {"build", "ios_boot", "rf_scan", "sdk_status", "screenshot_set_start"} <= defined
+
+
+def test_core_is_exactly_the_portable_device_set() -> None:
+    core = {name for name in _defined_tools() if toolsets.toolset_of(name) == toolsets.CORE}
+    assert core - _CORE == set(), "tools that fell into core; give each a group"
+    assert _CORE - core == set(), "allowlisted core tools that are gone or grouped"
 
 
 def test_unset_and_all_mean_every_group() -> None:
@@ -42,7 +118,13 @@ def test_classification_of_known_tools() -> None:
     assert toolsets.toolset_of("discord_search") == "discord"
     assert toolsets.toolset_of("cot_relay_start") == "replay"
     assert toolsets.toolset_of("vanity_preview") == "rf"
+    assert toolsets.toolset_of("rf_confirm_tx") == "rf"
     assert toolsets.toolset_of("vision_oracle") == "local-model"
+    assert toolsets.toolset_of("ios_boot") == "apple"
+    assert toolsets.toolset_of("screenshot_set_start") == "apple"
+    assert toolsets.toolset_of("sdk_send_text") == "sdk"
+    assert toolsets.toolset_of("serial_open") == "hardware"
+    assert toolsets.toolset_of("capture_screen") == "hardware"
 
 
 def test_firmware_group_matches_the_servers_firmware_gate(server) -> None:
@@ -51,6 +133,15 @@ def test_firmware_group_matches_the_servers_firmware_gate(server) -> None:
 
 def test_android_group_covers_the_servers_android_gate(server) -> None:
     assert {n for n in server._ANDROID_TOOLS if toolsets.toolset_of(n) != "android"} == set()
+
+
+def test_apple_group_covers_the_servers_apple_gate(server) -> None:
+    assert {n for n in server._APPLE_TOOLS if toolsets.toolset_of(n) != "apple"} == set()
+
+
+def test_rf_group_covers_the_servers_sdr_and_sniffer_gates(server) -> None:
+    gated = {*server._SDR_TOOLS, *server._BLE_SNIFFER_TOOLS, *server._VANITY_TOOLS}
+    assert {n for n in gated if toolsets.toolset_of(n) != "rf"} == set()
 
 
 def _listed(server, env: dict[str, str]) -> set[str]:

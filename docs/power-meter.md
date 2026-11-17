@@ -139,6 +139,38 @@ clear "no meter" result or error when one is not attached — deliberately, so
 `pa_meter_status` is available precisely when you suspect the meter has powered
 itself off. `doctor` reports meter presence under the `power_meter` group.
 
+`pa_meter_status` returns `{present, port, version, stored_freq_mhz, current_avg_dbm,
+current_peak_dbm}`, or `{present: false, detail}` with no meter attached. Call it before a
+`pa_sweep` to confirm the meter is awake.
+
+`pa_measure` drives no Meshtastic device: use it to read the noise floor, verify a signal
+generator, or spot-check a TX something else is keying. `band` takes a region name or a bare
+MHz value, snapped to the nearest calibration point. It returns `{band, requested_center_mhz,
+meter_cal_mhz, kind, attenuator_db, samples, min_dbm, mean_dbm, max_dbm}`.
+
+## `pa_sweep`
+
+For each value in `powers` the sweep writes `lora.tx_power`, keys `burst_repeat` broadcast
+bursts, and samples the meter. It captures the meter's noise floor first and keeps only the
+TX-active samples (above floor + margin) at each step. `band` defaults to the node's configured
+region. `override_duty_cycle=True` (the default) lifts the node's duty-cycle limit for the run
+in every region, not only EU_868; pass `False` to keep the limit.
+
+On exit it restores the original `tx_power` and duty-cycle override unless
+`restore_config=False`. Each restore runs on its own, and one that fails (a busy port, say) is
+listed in `restore_errors` rather than leaving the node changed without a word. If a step fails
+and a restore fails too, the sweep raises a `PaSweepError` naming both.
+
+A step with no TX-active sample lands in `silent_steps_dbm`. That can be a dead PA, but under
+airtime pressure a queued packet can also transmit after the sampling window closes, so re-run
+spaced out before concluding a step is truly silent.
+
+It returns `{band, region, requested_center_mhz, meter_cal_mhz, attenuator_db, tx_linger_s,
+floor_dbm, floor_margin_db, table: [{configured_dbm, measured_avg_dbm, measured_peak_dbm,
+delta_db, active_samples, total_samples, rf_observed}], curve: {points, saturation_dbm,
+max_measured_dbm, max_measured_at_configured_dbm, offset_at_min_db, monotonic},
+silent_steps_dbm, config_restored, restore_errors, caveat}`.
+
 ## Reference implementations
 
 - [ExpressLRS/RfPowerMeter](https://github.com/ExpressLRS/RfPowerMeter) — the
