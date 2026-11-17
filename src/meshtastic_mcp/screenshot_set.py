@@ -256,6 +256,7 @@ class Plan:
     connect_wait_s: float = 150.0
     clean_status_bar: bool = True
     reset_apps: bool = False
+    beacon_listen: bool = False
     shots: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -349,6 +350,7 @@ def _run(plan: Plan, state: dict[str, Any], log_path: Path) -> None:
                     mdns=False,
                     observer_num=observer_num,
                     clock_anchor=anchor,
+                    beacon_listen=plan.beacon_listen,
                 ),
             )
             sessions.append(status["id"])
