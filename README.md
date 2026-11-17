@@ -118,7 +118,7 @@ with no firmware checkout. Optional capabilities activate when their prerequisit
 | **android** | `android` CLI + `adb` | Android-emulator + native-node orchestration for hardware-free e2e |
 | **apple** | `xcrun` (+ `idb` for UI) | iOS Simulator / macOS-app orchestration for hardware-free e2e (`ios_*`); `screenshot_set_*` registers with this or android and captures matching Android and iOS screens, see [docs/screenshot-set.md](docs/screenshot-set.md) |
 | **local-model** | a reachable Ollama or OpenAI-compatible `llama-server` (or a `llama` binary to start one) | offload tools that push token-heavy work onto a local GPU — summarize/triage recorder windows, e2e-failure first pass, and an offline **vision oracle**; see [docs/local-models.md](docs/local-models.md) |
-| **sdr** | `[sdr]` extra (bundles `pyrtlsdrlib`, a prebuilt librtlsdr) + an RTL-SDR dongle | RF-compliance oracle: `rf_scan` occupancy checks and `rf_confirm_tx` on-air verification, no second radio needed. *macOS/Homebrew note:* a system `librtlsdr` from Homebrew is the osmocom fork and lacks `rtlsdr_set_dithering`, so `import rtlsdr` fails — the bundled `pyrtlsdrlib` avoids this and is preferred by pyrtlsdr's loader. |
+| **sdr** | `[sdr]` extra (bundles `pyrtlsdrlib`, a prebuilt librtlsdr) + an RTL-SDR dongle | RF-compliance oracle: `rf_scan` occupancy checks and `rf_confirm_tx` on-air verification, no second radio needed; see [docs/rf-oracle.md](docs/rf-oracle.md). *macOS/Homebrew note:* a system `librtlsdr` from Homebrew is the osmocom fork and lacks `rtlsdr_set_dithering`, so `import rtlsdr` fails — the bundled `pyrtlsdrlib` avoids this and is preferred by pyrtlsdr's loader. |
 | **tak** | the meshtastic-tak SDK, which is not on PyPI: install it with the command `doctor` prints, or `uv sync --group tak` in a checkout | real TAKPacketV2 zstd wire compression for the replay sim's TAK squad (`profile tak.wire="v2"`) and its CoT stream to ATAK |
 | **sdk-cli** *(experimental)* | Kotlin SDK headless CLI | alternate device-IO backend over the JVM CLI; see [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md) |
 | **discord** | a read-only bot token (`$DISCORD_BOT_TOKEN` or `<user-config-dir>/meshtastic-mcp/discord.token` — `doctor` prints the path) | read the Meshtastic Discord server — server-side search, history, threads/forum posts, pins, mentions of you, with a per-message role-derived `trust` tier (`discord_*`); stdlib only, never posts; see [docs/discord.md](docs/discord.md) |
@@ -202,7 +202,8 @@ which suits any client. `build`, `pio_flash`, `erase_and_flash`, `update_flash` 
 MCP tasks gets a background task, and other clients wait for the job to end. A failure is a tool
 error carrying the output tail. A flash cannot be canceled; its `job_id`, in the result and in
 the log line the tool sends before it waits, follows it with `flash_poll`. See
-[docs/background-jobs.md](docs/background-jobs.md).
+[docs/background-jobs.md](docs/background-jobs.md), and
+[docs/firmware-builds.md](docs/firmware-builds.md) for each tool's arguments.
 
 ## nRF52: UF2 flashing and recovery
 
@@ -347,6 +348,9 @@ replay_stop()
   spoofing, forged ACKs, rogue ADMIN reboot/factory-reset, malicious waypoints). Seeded so a
   crash reproduces; activity surfaces under `fuzz` in `replay_status`. Presets: `light`,
   `parser`, `adversary`, `chaos`.
+
+Every `replay_start` parameter, the `sim_profile` keys and the inject tools are in
+[docs/replay.md](docs/replay.md).
 
 ## Bundled skills
 

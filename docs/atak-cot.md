@@ -12,7 +12,9 @@ this captures what the app actually emits.
   endpoint (core; pure stdlib). TAK clients connect as an unauthenticated
   streaming input. Every `<event>` is saved to
   `<data_dir>/cot_captures/<session>/NNNN_<type>.xml` + `manifest.jsonl`, and
-  rebroadcast to every other connected client (N-way relay).
+  rebroadcast to every other connected client (N-way relay). `session` defaults to a
+  timestamp and must be a single path component. One relay runs at a time; stop it to
+  bind another port.
 - **`atak_fleet_up` / `atak_fleet_down`** — clone a base AVD into N provisioned
   ATAK-CIV emulators pointed at the relay (android capability).
 - **`atak_drive_route`** — feed an emulator a moving GPS track so its self-PLI

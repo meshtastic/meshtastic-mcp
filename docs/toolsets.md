@@ -22,7 +22,7 @@ Every tool a client loads costs context. Two environment variables shrink what t
 
 `core` holds only tools that need the base install and a radio over serial or TCP. A test pins it to an allowlist, so a new tool must name its group. `screenshot_set_*` registers with the android or the apple capability and lives in `apple`, so an Android-only session adds `apple` to get it. An unknown name stops the server at startup and lists the valid ones.
 
-`core` alone is about a fifth of the full list's size, `READ_ONLY` about half, and both together under a tenth. The capabilities active on the host decide the full list; your client's tool list shows what a setting leaves.
+`core` alone is about a quarter of the full list's size, `READ_ONLY` a little under half, and both together about an eighth. The capabilities active on the host decide the full list; your client's tool list shows what a setting leaves.
 
 ```bash
 claude mcp add meshtastic -e MESHTASTIC_MCP_TOOLSETS=core,firmware -e MESHTASTIC_MCP_READ_ONLY=1 -- meshtastic-mcp

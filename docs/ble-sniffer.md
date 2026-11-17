@@ -68,9 +68,9 @@ that hardware being missing.
 
 | Tool | What it does |
 | --- | --- |
-| `ble_sniff_status` | Dongles attached, plugin resolved, captures already running. Core. |
+| `ble_sniff_status` | Dongles attached, plugin resolved, captures already running. Core. `transmit_supported` is always `false`. |
 | `ble_sniff_start` | Start a background capture, returns a `job_id`. |
-| `ble_sniff_poll` | Status plus a summary of everything captured so far. |
+| `ble_sniff_poll` | Status plus a summary of everything captured so far. It parses the pcap up to its last complete record, so a running capture reports live advertisers. |
 | `ble_sniff_stop` | Stop a capture; the pcap so far is kept and summarized. |
 
 Captures outrun the 60 s MCP timeout, so they use the `jobs.py` async pattern like

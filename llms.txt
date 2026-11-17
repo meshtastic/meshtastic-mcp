@@ -19,8 +19,18 @@
   `MESHTASTIC_MCP_CONFIRM`, and what `confirm=True` means
 - [docs/background-jobs.md](docs/background-jobs.md): jobs, `job_id` polling, MCP background
   tasks (`[tasks]` extra), canceling builds and following flashes
+- [docs/firmware-builds.md](docs/firmware-builds.md): build and flash arguments, `DEBUG_HEAP`,
+  userPrefs, the ESP32 install/update scripts, fake node DBs
 - [docs/serve.md](docs/serve.md): `meshtastic-mcp serve`, a token-authenticated HTTP server for a shared bench
-- [docs/toolsets.md](docs/toolsets.md): `MESHTASTIC_MCP_TOOLSETS` / `MESHTASTIC_MCP_READ_ONLY`, trimming the advertised tool list
+- [docs/toolsets.md](docs/toolsets.md): `MESHTASTIC_MCP_TOOLSETS` / `MESHTASTIC_MCP_READ_ONLY`,
+  the toolset groups, trimming the advertised tool list
+- [docs/replay.md](docs/replay.md): `replay_start` parameters, the `sim_profile` keys, fuzz
+  presets and the `replay_inject_*` tools
+- [docs/display-mirror.md](docs/display-mirror.md): `capture_display`, `drive_display_start` and
+  `send_input_event` on the device's own screen
+- [docs/screenshot-set.md](docs/screenshot-set.md): matching Android and iOS screenshots on one
+  simulated mesh, and connecting the iOS app to a replay node
+- [docs/rf-oracle.md](docs/rf-oracle.md): the RTL-SDR on-air checks `rf_scan` and `rf_confirm_tx`
 - [docs/local-models.md](docs/local-models.md): local-model offload (tools, backends, config)
 - [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md): experimental Kotlin-SDK device-IO backend
 - [docs/vanity.md](docs/vanity.md): vanity NodeNums / app colors: grind (mvgrind), verify, apply
