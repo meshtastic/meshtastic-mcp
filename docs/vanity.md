@@ -38,8 +38,8 @@ key ground on a friend's GPU is still inspectable and applicable here.
 ## A worked run
 
 ```python
-vanity_grind_start(color="crimson", tol=6)     # -> {"job_id": "ea27…"}
-vanity_grind_poll("ea27…")                     # -> hits[0].node_id "!19d70f3f", verified true
+vanity_grind_start(color="crimson", tol=6)  # -> {"job_id": "ea27…"}
+vanity_grind_poll("ea27…")  # -> hits[0].node_id "!19d70f3f", verified true
 vanity_apply(private_key=hits[0]["private_key_hex"], port="/dev/ttyUSB0", confirm=True)
 # -> {"changed": true, "node_id": "!19d70f3f", "verified": true}
 ```

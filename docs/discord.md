@@ -101,15 +101,15 @@ for moderation / security channels — whatever the bot can read ends up in an a
 ## Usage
 
 ```python
-discord_search("OTAFIX", since="2026-08-01")                 # whole server, Discord's index
+discord_search("OTAFIX", since="2026-08-01")  # whole server, Discord's index
 discord_search(channel="#android", author="me", has="link")  # my posts with links
-discord_mentions(since="2026-08-20")                         # what's waiting on me
-discord_context("https://discord.com/channels/g/c/m", 5, 10) # the conversation around a hit
-discord_read("#firmware", after="2026-08-18T00:00:00Z")      # since Monday, newest first
-discord_forum_posts("help-forum", tag="Android", limit=20)   # open tickets, then:
-discord_thread("<post id>")                                  #   read one in full (bounded)
-discord_pins("#android")                                     # curated answers
-discord_member("rcarteraz")                                  # who is this, what trust
+discord_mentions(since="2026-08-20")  # what's waiting on me
+discord_context("https://discord.com/channels/g/c/m", 5, 10)  # the conversation around a hit
+discord_read("#firmware", after="2026-08-18T00:00:00Z")  # since Monday, newest first
+discord_forum_posts("help-forum", tag="Android", limit=20)  # open tickets, then:
+discord_thread("<post id>")  #   read one in full (bounded)
+discord_pins("#android")  # curated answers
+discord_member("rcarteraz")  # who is this, what trust
 ```
 
 Search is Discord's own index: `total_results` is approximate under churn, `offset` caps at

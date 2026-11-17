@@ -77,10 +77,10 @@ Captures outrun the 60 s MCP timeout, so they use the `jobs.py` async pattern li
 build/flash/grind. `duration_s=0` runs until `ble_sniff_stop`.
 
 ```python
-ble_sniff_status()                       # ready? which port?
-job = ble_sniff_start(duration_s=30)     # passive, all advertisers
-ble_sniff_poll(job["job_id"])            # works mid-capture
-ble_sniff_stop(job["job_id"])            # early stop; pcap kept
+ble_sniff_status()  # ready? which port?
+job = ble_sniff_start(duration_s=30)  # passive, all advertisers
+ble_sniff_poll(job["job_id"])  # works mid-capture
+ble_sniff_stop(job["job_id"])  # early stop; pcap kept
 ```
 
 Useful arguments:

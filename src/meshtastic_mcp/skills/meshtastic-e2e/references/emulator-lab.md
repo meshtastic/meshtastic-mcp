@@ -37,28 +37,30 @@ from pathlib import Path
 from meshtastic_mcp.emulator import native_node, avd
 
 # 1. Device plane: two native nodes mesh over UDP
-BIN = Path(".pio/build/native/meshtasticd")   # Linux native (has HAS_UDP_MULTICAST)
+BIN = Path(".pio/build/native/meshtasticd")  # Linux native (has HAS_UDP_MULTICAST)
 nodes = native_node.build_lab(BIN, Path("/tmp/lab"), count=2)  # ports 4403 (DUT), 4404 (tester)
 for n in nodes:
     n.start()
-import time; time.sleep(10)
+import time
+
+time.sleep(10)
 for n in nodes:
-    n.configure()      # region US + enable UDP; under a supervisor that restarts on reboot
+    n.configure()  # region US + enable UDP; under a supervisor that restarts on reboot
 
 # 2. App plane: boot emulator, install app
 name = avd.ensure_avd("medium_phone")
-avd.start(name)                       # blocks until ready
+avd.start(name)  # blocks until ready
 serial = avd.wait_for_boot()
-avd.install_app(["app-debug.apk"])    # Meshtastic-Android debug build
+avd.install_app(["app-debug.apk"])  # Meshtastic-Android debug build
 
 # 3. Connect the app to the DUT node over TCP (UI-driven: Add device → IP)
-dut = avd.tcp_dut_address(4403)       # "10.0.2.2:4403"
+dut = avd.tcp_dut_address(4403)  # "10.0.2.2:4403"
 #   drive the app's add-device flow with avd.ui_dump()/tap()/type_text(dut)
 
 # 4. Run a loop, e.g. inbound (device → app):
 TOKEN = f"E2E-{int(time.time())}"
 # tester sends via the MCP send_text / mesh_e2e.py against :4404 ...
-assert avd.poll_for_text(TOKEN, serial=serial, timeout=30)   # app rendered it → PASS
+assert avd.poll_for_text(TOKEN, serial=serial, timeout=30)  # app rendered it → PASS
 ```
 
 ## Gotcha: outbound broadcast shows an "error" icon (NOT a delivery failure)

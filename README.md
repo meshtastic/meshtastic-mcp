@@ -195,20 +195,27 @@ behaving like a radio sitting in the mesh. Useful for app/UI development and tes
 hardware and a fully controllable, reproducible mesh.
 
 ```python
-replay_start(source="meshcon")                       # generated synthetic mesh (no file)
-replay_start(source="capture.db", speed=30)          # SQLite capture (full-fidelity payloads)
-replay_start(source="capture.db", duration=150)      # whole capture in 2.5 min (stress test)
+replay_start(source="meshcon")  # generated synthetic mesh (no file)
+replay_start(source="capture.db", speed=30)  # SQLite capture (full-fidelity payloads)
+replay_start(source="capture.db", duration=150)  # whole capture in 2.5 min (stress test)
 # or from the shell (foreground, mDNS-advertised so apps auto-discover it):
 #   meshtastic-mcp replay conference-stress --nodes 1600 --rate 140 --loop
-replay_start(source="event.db", channels=[             # split by OTA hash + decrypt
-    {"name": "Primary", "psk": "AQ==", "primary": True},
-    {"name": "Secret", "psk": "<base64-key>"},
-    {"name": "Unknown", "catch_all": True}])
+replay_start(
+    source="event.db",
+    channels=[  # split by OTA hash + decrypt
+        {"name": "Primary", "psk": "AQ==", "primary": True},
+        {"name": "Secret", "psk": "<base64-key>"},
+        {"name": "Unknown", "catch_all": True},
+    ],
+)
 replay_start(source="defcon", sim_profile={"bots": {"count": 17}})  # BBS bots + tapback storms
-replay_start(source="meshcon", fuzz="adversary")     # lace it with bad actors
+replay_start(source="meshcon", fuzz="adversary")  # lace it with bad actors
 replay_start(source="capture.db", announce_interval=30)  # in-app "Replay Clock" progress
-replay_inject(sid, "waypoint", {"lat":37,"lon":-122,"geofence_radius":500,"notify_on_enter":True})
-replay_status(); replay_stop()
+replay_inject(
+    sid, "waypoint", {"lat": 37, "lon": -122, "geofence_radius": 500, "notify_on_enter": True}
+)
+replay_status()
+replay_stop()
 ```
 
 - **Sources** (`replay/capture.py`): SQLite captures (`*.db`/`.gz`, the Burning Man / DEF CON /
