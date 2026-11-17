@@ -18,6 +18,9 @@ skill maps common operator intents to the right tools and the safe order to use 
   (`core`, `firmware`, `android`, `apple`).
 - Prereq binaries are gated: `firmware` tools (build/flash/boards/userprefs) register only
   when `MESHTASTIC_FIRMWARE_ROOT` + `pio` are present. Core (admin/recorder/transport) is always on.
+- The server's `MESHTASTIC_MCP_TOOLSETS` / `MESHTASTIC_MCP_READ_ONLY` can hide whole groups
+  (the flash and `nrf52_*` tools live in `hardware` and `firmware`). A tool that is not listed
+  cannot be called; ask the user to widen the setting rather than working around it.
 
 ## Connect
 
@@ -41,26 +44,50 @@ meshtastic-mcp boards get heltec-v3     # full metadata for one board
 Fall back to MCP tools when already in an MCP session or when you need board metadata
 for a follow-on `build_start`:
 ```
-list_devices                     # find candidates (include_unknown=true to see every port)
-device_info <port>               # firmware version, node identity, channel summary
-list_nodes <port>                # the node DB (long/short name, SNR, last-heard, position)
+list_devices()                   # find candidates (include_unknown=True to see every port)
+device_info(port=P)              # firmware version, node identity, channel summary
+list_nodes(port=P)               # the node DB (long/short name, SNR, last-heard, position)
 ```
+
+Pass `port` as the path `list_devices` reports (on Linux prefer the stable
+`/dev/serial/by-id/...` link) or `tcp://host:port`. Omit it only when exactly one radio is
+attached.
 
 One MCP call per serial port at a time — the port lock is **exclusive and non-blocking**:
 contention fails fast with "busy … Retry shortly" (it does not queue). Open → act → close.
 
-## Configure (mutating — confirm-gated)
+A board whose USB serial has wedged fails the call within `timeout_s` plus a grace period,
+with "looks wedged. Power-cycle it (uhubctl_cycle) and retry". Power-cycle it; retrying the
+same call does not help.
+
+## Configure (mutating)
 
 ```
-get_config <port> <section>      # lora | device | position | power | network | display | ...
-set_config <port> <section> <field>=<value> ...
-get_channel_url <port>           # the shareable channel URL (keys)
-set_channel_url <port> <url>
-set_owner <port> --long ... --short ...
+get_config(section="lora", port=P)                   # lora | device | position | power | ...
+set_config(path="lora.region", value="US", port=P)   # one field by dot-path
+get_channel_url(port=P)                              # the shareable channel URL (keys)
+set_channel_url(url=U, port=P)
+set_owner(long_name="...", short_name="ABCD", port=P)
 ```
 After a write, **reboot then re-read** to prove it persisted to NVS, not just RAM
-(`reboot <port>` → `get_config`). Region (`lora.region`) and `network.enabled_protocols`
-are the two that bite — see `meshtastic-e2e` `topology.md`.
+(`reboot(port=P)`, which is confirm-gated, then `get_config`). Region (`lora.region`) and
+`network.enabled_protocols` are the two that bite; see `meshtastic-e2e` `topology.md`.
+
+## Destructive tools and confirmation
+
+`reboot`, `shutdown`, `factory_reset`, the flash tools, the `nrf52_*` writers, `uhubctl_power`
+(off) / `uhubctl_cycle`, `vanity_apply` and the destructive `esptool`/`nrfutil`/`picotool` calls
+take `confirm`.
+
+- Call without `confirm` first. A client that supports elicitation shows the user
+  `Allow: <action>?`; accept runs the tool, decline fails it.
+- A refusal naming `confirm=True` means this client cannot ask (subagents, `claude -p`). Tell
+  the user what will happen and pass `confirm=True` only after they agree. Never retry with it
+  on your own.
+- With `MESHTASTIC_MCP_CONFIRM=human` on the server, irreversible tools (`factory_reset`,
+  `erase_and_flash`, `nrf52_factory_erase`, `vanity_apply`, destructive vendor calls) ask even
+  with `confirm=True`; "cannot ask" then means the user must run it from a client that can.
+- `esptool_raw(args=["flash_id"])` and other harmless subcommands never ask.
 
 ## Vanity identity (chosen node id / app colour)
 
@@ -71,7 +98,7 @@ read as RGB, so both are chosen by grinding keys, not by setting a field.
 vanity_grind_start color=crimson tol=6        # or pattern=dc80, or both; returns job_id
 vanity_grind_poll <job_id>                    # hits[]; NEVER use one with verified=false
 vanity_preview <private_key>                  # what any key gives you — no device, no GPU
-vanity_apply <private_key> <port> confirm=true
+vanity_apply <private_key> <port>             # asks; irreversible (see Destructive tools)
 ```
 
 - `tol` is free and finds a hit orders of magnitude sooner — always offer it.
@@ -98,30 +125,59 @@ recorder_status / recorder_pause / recorder_resume / recorder_export
 For app-visible delivery vs wire truth (broadcast shows an error icon in a flat mesh even when
 delivered) see `meshtastic-e2e` `references/loop-outbound.md`.
 
-## Recover + flash (firmware capability)
+## Recover + flash
 
 ```bash
 # Board lookup — use the CLI (no schema overhead):
 meshtastic-mcp boards --query <slug>                     # find the env name
 meshtastic-mcp boards get <env>                          # confirm arch + upload_speed
 ```
+Build and flash from the firmware tree (firmware capability). The start/poll pair works with
+any client:
 ```
-# Build + flash via MCP (async to avoid 60 s client timeout):
-build_start <env>                                        # returns build_id immediately
-build_poll <build_id>                                    # poll until status=done
-pio_flash <env> <port> / erase_and_flash <env> <port> / update_flash <env> <port>
-touch_1200bps <port>          # bounce into the bootloader (nRF/RP2040)
+build_start(env=E)                         # returns build_id immediately
+build_poll(build_id=ID)                    # poll until status=done/failed
+flash_start(env=E, port=P)                 # asks (or confirm=True), returns job_id
+flash_poll(job_id=ID)                      # poll until status=done/failed
 ```
-Chip-specific escape hatches when pio can't help: `esptool_*`, `nrfutil_*`, `picotool_*`
-(raw passthroughs; destructive ones are confirm-gated). For a wedged USB device, power-cycle
-the hub port with `uhubctl_list` / `uhubctl_power` / `uhubctl_cycle`.
+`build`, `pio_flash`, `erase_and_flash` (ESP32 full erase) and `update_flash` (ESP32 OTA) do
+the same in one call. With the server's `[tasks]` extra a task-capable client runs them as
+background tasks; otherwise the call blocks until the job ends. Each returns a `job_id`, and the
+flash tools log it before they wait. A flash cannot be canceled: if the call is canceled or
+times out, `flash_poll` that id to the end before touching the board. A failed build or flash
+is a tool error carrying the output tail.
+
+**nRF52 by UF2** (Meshtastic bootloader; core, no firmware tree needed). Faster than serial DFU
+and no touch:
+```
+nrf52_enter_uf2(port=P)                    # reboots into the UF2 drive (asks)
+nrf52_bootloader_info(port=P)              # bootloader version, SoftDevice, Last-Fault
+nrf52_backup_firmware(port=P)              # CURRENT.UF2 into the data dir; do this first
+nrf52_flash_uf2(uf2_path=F, port=P)        # asks; refuses a wrong-SoftDevice image
+nrf52_factory_erase(port=P)                # wipes config/node DB/keys, keeps firmware
+```
+Keep passing the board's app port (its by-id path): the drive is matched by USB serial even
+after that link disappears in UF2 mode. The drive must be mounted; a headless host that does not
+automount needs it mounted by hand. The board stays in UF2 mode until a UF2 lands or it is
+power-cycled.
+
+**nRF52 by serial DFU**: `nrfutil_dfu(port=P, package_path=ZIP)` touches the board into DFU
+itself and fails unless adafruit-nrfutil printed `Device programmed.`. A board left sitting in
+serial DFU takes the package with no touch:
+`nrfutil_raw(args=["dfu", "serial", "--package", ZIP, "--port", "/dev/ttyACM0", "-b", "115200", "--singlebank"], confirm=True)`.
+
+`touch_1200bps(port=P)` bounces nRF52, ESP32-S3 and RP2040 boards into their bootloader and
+reports the bootloader's port. Chip-specific escape hatches when pio can't help:
+`esptool_*`, `nrfutil_*`, `picotool_*` (raw passthroughs; destructive subcommands ask). For a
+wedged USB device, power-cycle the hub port with `uhubctl_list` / `uhubctl_power` /
+`uhubctl_cycle`.
 > **Linux:** `uhubctl` requires udev rules to work without root. Run
 > `meshtastic-mcp doctor` — it will detect the permission issue and print
 > the exact `sudo curl … && sudo udevadm trigger` command to fix it.
 
 ### BLE OTA DFU (manual — no MCP tool covers this yet)
 
-Every `flash`/`pio_flash`/`nrfutil_dfu` path above is USB (serial or UF2). There is
+Every `pio_flash`/`nrfutil_dfu`/`nrf52_flash_uf2` path above is USB (serial or UF2). There is
 no MCP tool for the *wireless* leg — the Nordic legacy BLE DFU that the Meshtastic
 Android app uses for its in-app bootloader/firmware upgrade, and that the
 Meshtastic nRF52 Bootloader (`meshtastic/nRF52_Bootloader`)
@@ -306,8 +362,11 @@ Two things that bite in practice:
 ## Hard rules
 
 1. One call per serial port at a time (exclusive non-blocking lock).
-2. Mutations are confirm-gated and reversible-by-reboot only for RAM writes — re-read after reboot.
-3. `factory_reset(full=true)` wipes BLE bonds + the identity key; `full=false` keeps them.
-4. Prefer the recorder windows over ad-hoc reads — they're timestamped and align with app snapshots.
-5. Never apply a ground key whose `verified` is false, and never apply one without telling the
+2. A config write lives in RAM until a reboot commits it; re-read after the reboot.
+3. Destructive tools ask the user when the client can; never pass `confirm=True` for an action
+   the user has not agreed to.
+4. `factory_reset(full=true)` wipes BLE bonds + the identity key; `full=false` keeps them.
+5. Prefer the recorder windows over ad-hoc reads: they're timestamped and align with app snapshots.
+6. A canceled flash keeps writing; follow its `job_id` with `flash_poll` before touching the board.
+7. Never apply a ground key whose `verified` is false, and never apply one without telling the
    operator the old node id first — the change is not reversible without the previous key.

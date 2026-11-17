@@ -11,7 +11,8 @@ and a tail of the job's log. This module is that shape, factored out of
 build/flash instead of growing a second one.
 
 The registry is process-global and in-memory: jobs do not survive a server
-restart, which `poll()` says out loud when an id is unknown.
+restart, which `poll()` says out loud when an id is unknown. Under
+`meshtastic-mcp serve` every client shares it.
 """
 
 from __future__ import annotations
@@ -129,7 +130,7 @@ def poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
     with LOCK:
         state = _active.get(job_id)
     if state is None:
-        return {"error": f"Unknown job_id {job_id!r} (only this session's jobs are tracked)."}
+        return {"error": f"Unknown job_id {job_id!r}; jobs end when the server restarts."}
 
     log_path = Path(state["log_path"])
     log_tail: list[str] = []
@@ -160,7 +161,7 @@ def cancel(job_id: str) -> dict[str, Any]:
     with LOCK:
         state = _active.get(job_id)
         if state is None:
-            return {"error": f"Unknown job_id {job_id!r} (only this session's jobs are tracked)."}
+            return {"error": f"Unknown job_id {job_id!r}; jobs end when the server restarts."}
         status = state["status"]
         if status != "running":
             return {"job_id": job_id, "status": status, "cancelled": False}

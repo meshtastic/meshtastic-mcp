@@ -2,24 +2,38 @@
 
 > MCP server + agent skills for AI tooling to discover, drive, observe, and test Meshtastic
 > devices and the apps that talk to them. Portable core (serial/TCP device admin + recorder +
-> replay/simulated-device streaming with a synthetic-mesh generator and fuzzer), with optional
-> firmware (build/flash), android/apple emulator (hardware-free e2e), local-model offload, and
-> RTL-SDR RF-compliance capabilities — plus FleetSuite, a local web control plane for a
-> multi-board hardware bench ([web] extra, `meshtastic-mcp-web`).
+> replay/simulated-device streaming with a synthetic-mesh generator and fuzzer, plus nRF52
+> UF2 bootloader flashing), with optional firmware (build/flash), android/apple emulator
+> (hardware-free e2e), local-model offload, and RTL-SDR RF-compliance capabilities, plus
+> FleetSuite, a local web control plane for a multi-board hardware bench ([web] extra,
+> `meshtastic-mcp-web`).
 > Run `meshtastic-mcp doctor` (or the `doctor` tool) to see + acquire any missing dependencies.
 
 ## Docs
-- [README](README.md): install, capabilities, hardware-free e2e overview
-- [AGENTS.md](AGENTS.md): architecture, capability model, rules
+- [README](README.md): install, capabilities, confirmations, builds and flashes, nRF52 UF2
+  flashing and recovery, hardware-free e2e overview
+- [AGENTS.md](AGENTS.md): architecture, capability model, rules, common workflows
 - [CONTRIBUTING](CONTRIBUTING.md): setup + gates
-- [docs/local-models.md](docs/local-models.md): local-model offload (tools, backends, config)
+- [SECURITY](SECURITY.md): confirmation gate, prompt-injection sources, elevated-risk tools
+- [docs/confirmations.md](docs/confirmations.md): how destructive tools ask the human,
+  `MESHTASTIC_MCP_CONFIRM`, and what `confirm=True` means
+- [docs/background-jobs.md](docs/background-jobs.md): jobs, `job_id` polling, MCP background
+  tasks (`[tasks]` extra), canceling builds and following flashes
 - [docs/serve.md](docs/serve.md): `meshtastic-mcp serve`, a token-authenticated HTTP server for a shared bench
 - [docs/toolsets.md](docs/toolsets.md): `MESHTASTIC_MCP_TOOLSETS` / `MESHTASTIC_MCP_READ_ONLY`, trimming the advertised tool list
+- [docs/local-models.md](docs/local-models.md): local-model offload (tools, backends, config)
 - [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md): experimental Kotlin-SDK device-IO backend
-- [docs/vanity.md](docs/vanity.md): vanity NodeNums / app colours — grind (mvgrind), verify, apply
+- [docs/vanity.md](docs/vanity.md): vanity NodeNums / app colors: grind (mvgrind), verify, apply
 - [docs/discord.md](docs/discord.md): read-only Discord source tools (`discord_*`) and token setup
 - [docs/ble-sniffer.md](docs/ble-sniffer.md): off-device BLE capture of the phone<->node
-  link (`ble_sniff_*`) — nRF Sniffer dongle, pcap format, untrusted output
+  link (`ble_sniff_*`): nRF Sniffer dongle, pcap format, untrusted output
+- [docs/power-meter.md](docs/power-meter.md): ImmersionRC RF power meter and the `pa_*` PA
+  calibration tools
+- [docs/atak-cot.md](docs/atak-cot.md): ATAK/iTAK CoT capture relay and the ATAK emulator fleet
+- [docs/atak-cot-emission.md](docs/atak-cot-emission.md): ATAK-CIV CoT emission reference
+- [docs/nightly.md](docs/nightly.md): FleetSuite nightly bake
+- [docs/sim-realism-plan.md](docs/sim-realism-plan.md): calibrating the replay sim against real
+  event captures
 - [tests/README.md](tests/README.md): tiered hardware test suite + bench roles
 - [docs/bench-setup.md](docs/bench-setup.md): set up your own hardware bench
 - [web-ui/README.md](web-ui/README.md): FleetSuite SPA development

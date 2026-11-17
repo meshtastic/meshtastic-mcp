@@ -95,8 +95,14 @@ async def gate(
         return None
     if not _can_ask(ctx):
         if confirm:
-            raise ToolError(f"{action} needs a human to confirm it, and this client cannot ask.")
-        raise ToolError(f"{action} is destructive and requires confirm=True.")
+            raise ToolError(
+                f"{action} needs a human to confirm it ({POLICY_ENV}={HUMAN}), and this client "
+                "cannot ask. Run it from a client that supports elicitation."
+            )
+        raise ToolError(
+            f"{action} is destructive and requires confirm=True. This client cannot ask the "
+            "user, so tell them what it will do and pass confirm=True only once they agree."
+        )
 
     message = f"Allow: {action}?"
     if _is_modern(ctx):
@@ -114,5 +120,5 @@ async def gate(
         accepted = isinstance(result, AcceptedElicitation) and result.data is True
 
     if not accepted:
-        raise ToolError(f"{action} was not confirmed.")
+        raise ToolError(f"{action} was not confirmed, so nothing ran.")
     return None

@@ -20,3 +20,10 @@ intent,expected_tool
 "What's the latest material3 version?",android_version_lookup
 "Render the MessageBubble Compose preview to an image",android_render_compose_preview
 "Capture the device's OLED screen",capture_screen
+"Put the RAK4631 into its UF2 bootloader drive",nrf52_enter_uf2
+"Which bootloader version and SoftDevice does this nRF52 board have?",nrf52_bootloader_info
+"Save the firmware that's on the nRF52 before I reflash it",nrf52_backup_firmware
+"Copy this .uf2 onto the nRF52's bootloader drive",nrf52_flash_uf2
+"Wipe the nRF52's config and keys through its bootloader but keep the firmware",nrf52_factory_erase
+"DFU-flash this release zip to the nRF52 over serial",nrfutil_dfu
+"Is the flash job I started earlier finished?",flash_poll

@@ -30,9 +30,12 @@ Inside Claude Code (or any MCP client registered with `meshtastic`):
 list_devices()                          → find your device port
 device_info(port="/dev/cu.usbmodem101") → firmware, region, node count
 list_nodes(port="/dev/cu.usbmodem101")  → mesh peers
-send_text(port="/dev/cu.usbmodem101", text="hello mesh")
-packets_window(port="/dev/cu.usbmodem101", start="-30s")  → confirm TX packet
+set_debug_log_api(port="/dev/cu.usbmodem101", enabled=True)
+send_text(port="/dev/cu.usbmodem101", text="hello mesh", wait_for_tx=True)  → tx_confirmed
 ```
+
+A node never sees its own transmission on the receive path, so `packets_window` cannot confirm a
+local send; `wait_for_tx=True` reads the firmware's TX log line instead.
 
 No firmware checkout required. Core tools work against any serial or TCP device.
 
@@ -43,7 +46,7 @@ No firmware checkout required. Core tools work against any serial or TCP device.
 uv tool install 'meshtastic-mcp[ui]'       # includes camera/OCR support
 # or without UI extras:
 uv tool install meshtastic-mcp
-# other extras: [web] FleetSuite bench UI · [sdr] RF-compliance oracle · [test] pytest harness
+# other extras: [tasks] MCP background tasks · [web] FleetSuite bench UI · [sdr] RF-compliance oracle · [test] pytest harness
 
 # Unreleased master, straight from git (no build step):
 uv tool install 'meshtastic-mcp[ui] @ git+https://github.com/meshtastic/meshtastic-mcp'
@@ -110,7 +113,7 @@ with no firmware checkout. Optional capabilities activate when their prerequisit
 
 | Capability | Prerequisite | Adds |
 |---|---|---|
-| **core** | — | discovery, serial+TCP transport, `device_info`/`list_nodes`/admin/`send_text`/reboot, recorder + log/telemetry/packet/event queries, **replay** (simulated TCP device + synthetic mesh + fuzzer), input-events, uhubctl, `esptool`/`nrfutil`/`picotool` |
+| **core** | none | discovery, serial+TCP transport, `device_info`/`list_nodes`/admin/`send_text`/reboot, recorder + log/telemetry/packet/event queries, **replay** (simulated TCP device + synthetic mesh + fuzzer), input-events, uhubctl, `esptool`/`nrfutil`/`picotool`, the nRF52 bootloader's UF2 drive (`nrf52_*`) |
 | **firmware** | `MESHTASTIC_FIRMWARE_ROOT` + PlatformIO `pio` | build / clean / flash / OTA / board enum / userPrefs |
 | **android** | `android` CLI + `adb` | Android-emulator + native-node orchestration for hardware-free e2e |
 | **apple** | `xcrun` (+ `idb` for UI) | iOS Simulator / macOS-app orchestration for hardware-free e2e |
@@ -127,6 +130,10 @@ Beyond tools, the server exposes MCP **resources** (`meshtastic://doctor`,
 `meshtastic://capabilities`, and the templated `meshtastic://e2e/{loop}` for bundled e2e recipes)
 and **prompts** (`triage_e2e_failure`, `bringup_device`, `inbound_loop`). The `android_docs_search`/
 `android_docs_fetch` tools answer Android/Compose questions grounded in the official Knowledge Base.
+
+`list_devices`, `device_info`, `list_nodes`, `logs_window`, `packets_window`, `events_window` and
+`doctor` advertise an output schema. A device, flash or hardware tool that fails returns a tool
+error (`isError`) carrying the cause and the tail of any command output.
 
 ### Source repos — two modes
 
@@ -176,6 +183,67 @@ requires Python ≤ 3.12).
 
 All scripts clone fresh if no source dir is provided, accept `--ref` to pin a git sha/tag/branch,
 and print a machine-readable `<component>-sha=<sha>` line for CI provenance.
+
+## Destructive tools ask first
+
+Tools that reboot, erase, reflash or rewrite a board take `confirm`. Without it, a client that
+supports elicitation asks the human (`Allow: <action>?`), and a client that cannot ask gets a
+refusal naming `confirm=True`. `MESHTASTIC_MCP_CONFIRM=human` makes the irreversible ones
+(`factory_reset`, `erase_and_flash`, `nrf52_factory_erase`, `vanity_apply`, the destructive vendor
+calls) ask even when the agent passes `confirm=True`. See
+[docs/confirmations.md](docs/confirmations.md).
+
+## Builds and flashes
+
+`build_start`/`build_poll` and `flash_start`/`flash_poll` return a `job_id` at once and poll it,
+which suits any client. `build`, `pio_flash`, `erase_and_flash`, `update_flash` and
+`nrf52_flash_uf2` run the same jobs in one call: with the `[tasks]` extra, a client that supports
+MCP tasks gets a background task, and other clients wait for the job to end. A failure is a tool
+error carrying the output tail. A flash cannot be canceled; its `job_id`, in the result and in
+the log line the tool sends before it waits, follows it with `flash_poll`. See
+[docs/background-jobs.md](docs/background-jobs.md).
+
+## nRF52: UF2 flashing and recovery
+
+Boards on the Meshtastic nRF52 bootloader show a USB drive in UF2 mode. Copying a `.uf2` onto it
+is several times faster than serial DFU and needs no 1200 baud touch:
+
+```
+nrf52_enter_uf2(port=P)                         # reboot into the UF2 drive (asks first)
+nrf52_bootloader_info(port=P)                   # bootloader version, board, SoftDevice, Last-Fault
+nrf52_backup_firmware(port=P)                   # copy CURRENT.UF2 into the data dir
+nrf52_flash_uf2(uf2_path="fw.uf2", port=P)      # refuses a non-UF2 or wrong-SoftDevice image
+nrf52_factory_erase(port=P)                     # wipe saved data, keep the firmware
+```
+
+Pass the board's app port, preferably its `/dev/serial/by-id/` path. The drive is matched by USB
+serial, and the by-id name still carries that serial after the link disappears in UF2 mode. The
+tools read the drive where the OS mounts it, so on a host that does not automount, mount it
+first. `nrf52_factory_erase` needs a bootloader whose `INFO_UF2.TXT` has a `Factory-Erase:` line.
+
+Serial DFU still works. `nrfutil_dfu(port, package_path)` does the 1200 baud touch itself,
+dropping DTR as the nRF52 core needs, and fails unless adafruit-nrfutil printed
+`Device programmed.`. A board left sitting in serial DFU takes the package with no touch:
+
+```
+nrfutil_raw(args=["dfu", "serial", "--package", "fw.zip", "--port", "/dev/ttyACM0",
+                  "-b", "115200", "--singlebank"], confirm=True)
+```
+
+A board whose USB serial has wedged fails the call within its timeout with a hint to power-cycle
+it; `uhubctl_cycle` on its hub port brings it back.
+
+## Serve a shared bench
+
+`meshtastic-mcp serve --host 0.0.0.0 --port 8765` serves the tools over HTTP behind a required
+bearer token (`MESHTASTIC_MCP_TOKEN` or `MESHTASTIC_MCP_TOKEN_FILE`), so every client on a bench
+shares one owner of the serial ports, the recorder and the jobs. See [docs/serve.md](docs/serve.md).
+
+## Trim the tool list
+
+`MESHTASTIC_MCP_TOOLSETS=core,firmware` exposes only the named groups, and
+`MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. See
+[docs/toolsets.md](docs/toolsets.md).
 
 ## Hardware-free e2e (emulator + TCP)
 

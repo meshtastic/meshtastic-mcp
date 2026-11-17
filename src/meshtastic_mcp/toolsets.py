@@ -84,6 +84,7 @@ _GROUPS: dict[str, frozenset[str]] = {
 _PREFIXES: dict[str, tuple[str, ...]] = {
     "android": ("android_", "atak_"),
     "discord": ("discord_",),
+    "hardware": ("nrf52_",),
     "replay": ("replay_", "cot_relay_"),
     "rf": ("ble_sniff_", "vanity_", "pa_"),
 }

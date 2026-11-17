@@ -161,6 +161,22 @@ def test_factory_erase_asks_then_writes_the_erase_file(server, monkeypatch, tmp_
     assert written == [nrf52_bootloader.factory_erase_uf2_bytes()]
 
 
+def test_a_backup_with_no_current_uf2_is_a_tool_error(server, monkeypatch, tmp_path) -> None:
+    drive = _drive(tmp_path, INFO_OTAFIX)
+    monkeypatch.setattr(server, "_uf2_drive", lambda port: drive)
+    result = _call(_app(server, "nrf52_backup_firmware"), "nrf52_backup_firmware", {})
+    assert result.is_error is True and "CURRENT.UF2" in result.content[0].text
+
+
+def test_a_backup_copies_current_uf2_into_the_data_dir(server, monkeypatch, tmp_path) -> None:
+    drive = _drive(tmp_path, INFO_OTAFIX)
+    _uf2(tmp_path / "RAK4631" / "CURRENT.UF2", 0x26000)
+    monkeypatch.setattr(server, "_uf2_drive", lambda port: drive)
+    result = _call(_app(server, "nrf52_backup_firmware"), "nrf52_backup_firmware", {})
+    assert result.is_error is False
+    assert "uf2-backups" in result.structured_content["path"]
+
+
 def test_enter_uf2_sends_nothing_without_a_confirmation(server, monkeypatch) -> None:
     monkeypatch.setattr(admin, "enter_uf2_mode", lambda **k: pytest.fail("sent"))
     app = _app(server, "nrf52_enter_uf2")

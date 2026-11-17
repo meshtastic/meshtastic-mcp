@@ -23,6 +23,14 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   via `enter_dfu_mode_request`, read `INFO_UF2.TXT`, back up `CURRENT.UF2`, flash a `.uf2` by
   copy, and factory-erase through the bootloader when `INFO_UF2.TXT` has a `Factory-Erase:` line;
   a drive is tied to its board by USB serial, so pass the board's app port).
+- **server plumbing** (always loaded): `confirm.py` (the confirmation gate every destructive tool
+  calls; see `docs/confirmations.md`), `jobs.py` (the one job registry) and `tasks.py` (MCP
+  background tasks when the `[tasks]` extra is installed; see `docs/background-jobs.md`),
+  `toolsets.py` (`MESHTASTIC_MCP_TOOLSETS` / `MESHTASTIC_MCP_READ_ONLY`, a `Transform` that hides
+  tools; see `docs/toolsets.md`), `schemas.py` (TypedDict output schemas for the most-used tools)
+  and `serve.py` (`meshtastic-mcp serve`, HTTP with a bearer token; see `docs/serve.md`). Tool
+  hints come from the `_READ_ONLY` / `_DESTRUCTIVE` / `_OPEN_WORLD` maps through
+  `_AnnotationTransform` in `server.py`.
 - **firmware capability** (needs `MESHTASTIC_FIRMWARE_ROOT` + `pio`): `flash`, `boards`,
   `userprefs`, `pio`, `fixtures`.
 - **android capability** (needs `android` + `adb`): `emulator/` native-node + AVD
@@ -106,11 +114,10 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
 decorator (`_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled tools only when
-`CAPS.firmware` is active — 68 always-on tools (includes the 3 power-meter tools,
-`vanity_preview`/`vanity_apply` and `ble_sniff_status`, always registered); +14 android,
-+17 firmware, +2 sdr, +3 mvgrind, +3 ble-sniffer, and the apple/sdk-cli/local-model gates
-on top (≈130 with everything active).
-Counts drift — `doctor` and the startup log are the source of truth.
+`CAPS.firmware` is active, and each other capability has its own decorator the same way. The
+power-meter tools, `vanity_preview`/`vanity_apply` and `ble_sniff_status` always register. Don't
+write tool counts down: the startup log names the tools each inactive capability leaves out,
+`doctor` names the missing prerequisite, and the client's tool list is the live set.
 
 **Provisioning:** `doctor.py` (the `doctor` MCP tool / `meshtastic-mcp doctor` CLI) probes every
 external dependency and emits the exact, platform-aware acquisition command for anything missing
@@ -147,14 +154,15 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   key` → `Expected session key: 00…` → `Admin message without session_key!` (capture via
   `set_debug_log_api` on the same connection).
 - **nRF52 gotcha.** The nRF52 USB CDC wedges under rapid `SerialInterface` open/close churn (unrelated to
-  injection). Keep a single connection for setup + inject + log capture. If it hangs (zero serial
-  output, connect timeout) and `uhubctl` can't power-cycle the port, recover with a 1200 bps-touch DFU
-  reflash (`pio run -e <env> -t upload`) — the bootloader survives the hung app.
+  injection). Keep a single connection for setup + inject + log capture. A wedged board fails the
+  call with a power-cycle hint; recover it with `uhubctl_cycle`, or, where the hub cannot switch
+  power, reflash through the bootloader, which survives the hung app (see *Recover an nRF52*).
 
 ## Rules
 
 - **JDK/Python:** Python ≥ 3.11. Keep the core dependency-light (`fastmcp`, `mcp`,
-  `pyserial`, `meshtastic`, `platformdirs`); heavy deps go in extras (`[test]`, `[ui]`).
+  `pyserial`, `meshtastic`, `platformdirs`); heavy deps go in extras (`[test]`, `[ui]`,
+  `[tasks]`). Code that uses an extra imports it behind a guard, as `tasks.py` does.
   `fastmcp` is the MCP server runtime (standalone FastMCP 4 on the `mcp` 2 SDK); `mcp` is kept as a direct
   dep for `mcp.types.ToolAnnotations` (not re-exported by fastmcp).
 - **The protos are ours, not the library's.** `meshtastic` releases trail `meshtastic/protobufs`
@@ -176,22 +184,41 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   Contention fails fast with a `... is busy ... Retry shortly.` error — it never queues or
   blocks, so the caller must catch and retry.
 - **Anything that can outrun a 60 s MCP call gets a job, not a longer timeout.** `jobs.py`
-  is the one registry (build, flash, grind): `jobs.start()` returns a `job_id`, the tool
-  pairs it with a `_poll`. Don't add a second registry. An MCP background task (`task=True`, the
-  `[tasks]` extra) is an async wrapper that awaits a job with `jobs.wait`, never a registry of its
-  own; only jobs started `cancellable=True` (builds) stop when the task is cancelled, a flash keeps
-  running.
-- **Destructive tools stay `confirm`-gated** (`reboot`, `factory_reset`, `erase_and_flash`,
-  `uhubctl_*`) **and `destructiveHint`-annotated** (see the annotation maps in `server.py`).
-  Don't bypass the gate. New tools get the right read/destructive/open-world hint. A tool calls
-  `confirm.gate(ctx, ...)` before taking any lock or starting any job: without `confirm=True` a
-  client that declared elicitation asks the human, and one that did not gets the `confirm=True`
-  refusal. `MESHTASTIC_MCP_CONFIRM=human` also asks for tools gated `irreversible=True`
-  (`factory_reset`, `erase_and_flash`, `vanity_apply`, `atak_fleet_down` with `delete_clones`, and
-  the destructive esptool/nrfutil/picotool subcommands), because an agent can pass `confirm=True`
-  for itself. The `hw_tools` calls probe with `confirm=False` and ask only when they refuse, so a
-  harmless subcommand never prompts. `pio_flash`, `erase_and_flash` and `update_flash` run their
-  blocking function as a `flashes` job awaited by `jobs.run_sync`.
+  is the one registry (build, flash, grind, sniff, display drive, screenshot set): `jobs.start()`
+  returns a `job_id`, the tool pairs it with a `_poll`. Don't add a second registry. An MCP
+  background task (`task=True` via `tasks.task_kwargs()`, the `[tasks]` extra) is an async
+  wrapper that awaits a job with `jobs.wait`, never a registry of its own; only jobs started
+  `cancellable=True` (builds) stop when the task is canceled, a flash keeps running. A blocking
+  function a tool waits on goes through `jobs.run_sync`, whose `on_started` hook hands the
+  `job_id` to the client before the wait (`_run_job` logs it), so a canceled caller can still
+  follow the job.
+- **Failures raise `ToolError`.** A tool that fails raises `fastmcp.exceptions.ToolError`, so the
+  client sees `isError`; don't return `{"error": ...}` as a normal result (the `_poll` tools'
+  unknown-`job_id` reply is the one exception, and callers branch on it). A flash or hardware
+  helper that reports `exit_code != 0` goes through `_raise_if_failed`, which puts both output
+  tails in the error. Write the message so the caller knows the next step (`... power-cycle it
+  (uhubctl_cycle) and retry`, `... pass the board's port`).
+- **`async` tools keep blocking work off the event loop.** A gated tool is `async` so it can ask
+  the human; everything after the gate (serial, subprocess, sleeps) runs in `_off_loop`.
+- **Output schemas hold for every return.** A tool annotated with a `schemas.py` TypedDict
+  advertises it as `outputSchema`, and clients validate against it, so a field whose type varies
+  stays `Any`.
+- **Every new tool gets a toolset.** A tool outside `core` goes into `toolsets._GROUPS` or
+  `_PREFIXES`; `_GROUPS["firmware"]` must equal `_FIRMWARE_TOOLS` (a test checks it).
+- **Destructive tools stay `confirm`-gated** (`reboot`, `factory_reset`, the flash and `nrf52_*`
+  tools, `uhubctl_*`; the full list is in `docs/confirmations.md`) **and
+  `destructiveHint`-annotated** (see the annotation maps in `server.py`). Don't bypass the gate.
+  New tools get the right read/destructive/open-world hint. A tool calls `confirm.gate(ctx, ...)`
+  before taking any lock or starting any job, because on the modern protocol the call runs again
+  from the top once the human answers: without `confirm=True` a client that declared elicitation
+  asks the human, and one that did not gets the `confirm=True` refusal.
+  `MESHTASTIC_MCP_CONFIRM=human` also asks for tools gated `irreversible=True` (`factory_reset`,
+  `erase_and_flash`, `nrf52_factory_erase`, `vanity_apply`, `atak_fleet_down` with
+  `delete_clones`, and the destructive esptool/nrfutil/picotool subcommands), because an agent
+  can pass `confirm=True` for itself. The `hw_tools` calls probe with `confirm=False` and ask only
+  when they refuse, so a harmless subcommand never prompts. `pio_flash`, `erase_and_flash`,
+  `update_flash` and `nrf52_flash_uf2` run their blocking function as a `flashes` job through
+  `_run_job`.
 - **Prompt injection / lethal trifecta:** `logs_window` and `packets_window` return
   user-authored content from remote mesh nodes (untrusted). `android_ui_dump`,
   `android_screenshot`, and `android_read_logcat` carry the same risk one hop removed —
@@ -215,6 +242,7 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
 ```bash
 # Install (end-user / CI)
 uv tool install 'meshtastic-mcp[ui]'       # installs meshtastic-mcp on PATH
+uv tool install 'meshtastic-mcp[ui,tasks]' # also run build/flash tools as MCP background tasks
 uv tool upgrade meshtastic-mcp             # update to the latest release; restart the MCP client after
 
 # Dev install (editable, picks up source changes immediately)
@@ -222,6 +250,11 @@ uv tool install --editable '/path/to/meshtastic-mcp[ui]'
 
 # Register with an MCP client (set env vars too):
 # { "command": "meshtastic-mcp", "env": { "MESHTASTIC_FIRMWARE_ROOT": "...", ... } }
+# Server env: MESHTASTIC_MCP_TOOLSETS=core,firmware (groups to expose), MESHTASTIC_MCP_READ_ONLY=1,
+# MESHTASTIC_MCP_CONFIRM=human (irreversible tools ask the human even with confirm=True)
+
+# Serve one bench to many clients over HTTP (token required; see docs/serve.md):
+MESHTASTIC_MCP_TOKEN_FILE=~/.config/meshtastic-mcp/token meshtastic-mcp serve --host 0.0.0.0 --port 8765
 
 # Dev loop (run server directly, all extras):
 uv sync --extra test --extra dev            # or: python -m venv .venv && .venv/bin/pip install -e '.[test,dev]'
@@ -245,9 +278,11 @@ uv run meshtastic-mcp replay conference-stress --nodes 1600 --rate 140 --loop
 uv run meshtastic-mcp completion bash        # shell completion (eval "$(...)")
 # All read-only subcommands accept --json for machine-readable output.
 
-# Gates — run before every push (CI enforces the same):
+# Gates: run before every push (CI enforces the same). ruff also formats the Python blocks in
+# Markdown, so run `uv run ruff format .` after editing docs and keep its changes.
 uv run ruff check . && uv run ruff format --check .
 uv run --extra dev mypy
+python3 scripts/check_spdx.py                          # SPDX header on every source file
 uv run --extra test python -m pytest tests/unit -q     # portable tier (no hardware/firmware)
 MESHTASTIC_FIRMWARE_ROOT=/path/to/firmware uv run --extra test python -m pytest tests/unit  # firmware tier
 ```
@@ -272,15 +307,75 @@ device_info(port=<port>)            # firmware version, region, node num, primar
 list_nodes(port=<port>)             # mesh peers visible to this node
 ```
 
-**Build / flash without timing out (async pattern)**
+**Build / flash without timing out**
 ```
-build_start(env=<env>)              # returns job_id immediately
-build_poll(job_id)                  # poll until status=done/failed
+build_start(env=<env>)              # returns build_id (= job_id) immediately
+build_poll(build_id=<id>)           # poll until status=done/failed
 flash_start(env=<env>, port=<port>, confirm=True)   # same pattern for upload
-flash_poll(job_id)                  # poll until status=done/failed
+flash_poll(job_id=<id>)             # poll until status=done/failed
 ```
-The synchronous `build`/`pio_flash` block for minutes and exceed the 60 s MCP timeout;
-prefer the async pair. esptool/nrfutil/picotool remain for chip-specific recovery.
+This pair works with any client. `build`, `pio_flash`, `erase_and_flash`, `update_flash` and
+`nrf52_flash_uf2` run the same jobs in one call: with the `[tasks]` extra a client that
+supports MCP tasks gets a background task, and any other client blocks until the job ends,
+past a 60 s client timeout, so use the pair there. esptool/nrfutil/picotool remain for
+chip-specific recovery. Detail: `docs/background-jobs.md`.
+
+**Follow a job by id**
+
+Every start tool and every flash tool returns a `job_id`. Before waiting, `pio_flash`,
+`erase_and_flash`, `update_flash` and `nrf52_flash_uf2` also log `flashes job <id> started for
+<label>; ... flash_poll(job_id='<id>') follows it` to the client. A flash cannot be canceled,
+so when such a call is canceled or times out, poll that id to the end before touching the
+board. Canceling a `build` task stops the build; an inline `build` abandoned on a timeout keeps
+running and `build_poll(build_id=<job_id>)` reads it. Ids live in server memory and die with a
+restart.
+
+**Confirm a destructive tool**
+```
+reboot(port=<port>)                 # client with elicitation: the human sees "Allow: ...?"
+reboot(port=<port>, confirm=True)   # after the user agreed; runs without asking
+```
+A refusal naming `confirm=True` means the client cannot ask (a subagent, `claude -p`). Tell the
+user what the tool will do and pass `confirm=True` only once they agree. Under
+`MESHTASTIC_MCP_CONFIRM=human` an irreversible tool asks even with `confirm=True`, and a client
+that cannot ask cannot run it. Over `meshtastic-mcp serve` the client declares its own
+elicitation support, so the prompt is not a human gate there. Detail: `docs/confirmations.md`.
+
+**Flash an nRF52**
+
+UF2, for boards on the Meshtastic bootloader. It is several times faster than serial DFU and
+has no touch or DFU window:
+```
+nrf52_enter_uf2(port=<port>)                    # reboots into the UF2 drive
+nrf52_bootloader_info(port=<port>)              # version, board, SoftDevice, Last-Fault
+nrf52_backup_firmware(port=<port>)              # CURRENT.UF2 into the data dir first
+nrf52_flash_uf2(uf2_path=<file.uf2>, port=<port>)
+device_info(port=<port>)                        # the new firmware version
+```
+Pass the board's app port, ideally its `/dev/serial/by-id/` path: the drive is matched by USB
+serial, and the by-id name still carries it after the link disappears in UF2 mode. The drive
+must be mounted (desktops automount it; a headless host needs it mounted by hand). The board
+stays in UF2 mode until a UF2 lands or it is power-cycled. `nrf52_flash_uf2` refuses a file
+built for the other SoftDevice.
+
+Serial DFU, for a release `.zip` or a board without the UF2 bootloader:
+`nrfutil_dfu(port=<port>, package_path=<file.zip>, confirm=True)`. It does the 1200 baud touch
+itself (dropping DTR, which the nRF52 core needs; meshtastic-python clears `HUPCL`, so an open
+and close alone does nothing after a session) and fails unless adafruit-nrfutil printed
+`Device programmed.`. For firmware built from the tree, `pio_flash` uploads through
+PlatformIO, whose touch also drops DTR.
+
+**Recover an nRF52**
+- *Stuck in serial DFU* (the bootloader's port is up, the app never came back): send the
+  package with no touch,
+  `nrfutil_raw(args=["dfu", "serial", "--package", <zip>, "--port", "/dev/ttyACM0", "-b", "115200", "--singlebank"], confirm=True)`.
+- *USB serial wedged* (opens hang; tools fail with `... looks wedged. Power-cycle it`):
+  `uhubctl_cycle(role=<role>)` or `uhubctl_cycle(location=<loc>, port=<n>)` from `uhubctl_list`,
+  then retry.
+- *Saved data crashes the app* (the phone API never answers, so `factory_reset` cannot run):
+  double-press reset into UF2 mode, then `nrf52_factory_erase` (bootloaders whose
+  `INFO_UF2.TXT` has a `Factory-Erase:` line) wipes config, node DB and keys and keeps the
+  firmware.
 
 **Snapshot + diff config (e.g. before/after a firmware upgrade)**
 ```
@@ -334,8 +429,8 @@ get_config(port=<port>, section="lora")     # verify round-trip
 doctor()                            # check every dep including source repo roots
 # fix_commands lists both binary installs and git clone commands
 # or: shell out to `meshtastic-mcp provision` to clone all three repos at once
-build_start(env="tbeam")            # then build_poll(job_id) until done
-flash_start(env="tbeam", port=<port>, confirm=True)   # then flash_poll(job_id)
+build_start(env="tbeam")            # then build_poll(build_id=<id>) until done
+flash_start(env="tbeam", port=<port>, confirm=True)   # then flash_poll(job_id=<id>)
 ```
 
 **Diagnose a device with the recorder**
@@ -395,8 +490,8 @@ logs_window(port=P, start="-30m", end="-10m", max_lines=200)  # sweep the earlie
 `list_nodes` is unbounded (returns all peers). On large meshes (80+ nodes) this can be
 slow; call it once and cache, don't poll.
 
-`build` is synchronous and blocks for the full PlatformIO compile (typically 2–5 minutes),
-past the 60 s MCP call limit; use `build_start` + `build_poll`.
+`build` called inline blocks for the full PlatformIO compile (typically 2 to 5 minutes), past the
+60 s MCP call limit; without MCP task support use `build_start` + `build_poll`.
 
 ## Physical Android vs. emulator
 
@@ -438,8 +533,9 @@ These will produce flaky, slow, or incorrect results:
 - **Polling `device_info()` or `list_nodes()` in a tight loop.** Both open/hold/close the serial port. The exclusive lock is non-blocking — a concurrent caller does not queue; it fails fast with a `... is busy — ... Retry shortly.` error you must catch and retry. Use `recorder_status()` + `events_window()` for ongoing observation instead.
 - **Asserting immediately after `send_text`.** Mesh delivery is best-effort and async. Use `wait_for_tx=True` (bounded by `tx_timeout_s`), not a bare sleep.
 - **Confirming a local send with `packets_window`.** A self-originated packet never reaches that stream — the library drops the firmware's echo as "a packet we sent" — so it reads as failure on a working mesh. Use `wait_for_tx=True` with `set_debug_log_api(True)`, and treat `tx_confirmed: null` as "not observable", not "failed". See *Send a message and confirm delivery*.
-- **Calling a firmware tool without checking `doctor()` first.** If `MESHTASTIC_FIRMWARE_ROOT` is unset, firmware tools are not registered at all. Call `doctor()` on first failure; parse `fix_commands` and surface them to the user.
-- **Omitting `confirm=True` on destructive tools then retrying.** The confirm gate is intentional — don't loop-retry without it. Surface the confirmation requirement to the user.
+- **Calling a firmware tool without checking `doctor()` first.** If `MESHTASTIC_FIRMWARE_ROOT` is unset, firmware tools are not registered at all. Call `doctor()` on first failure; parse `fix_commands` and surface them to the user. A tool can also be missing because `MESHTASTIC_MCP_TOOLSETS` or `MESHTASTIC_MCP_READ_ONLY` hides it; check the server's env before reaching for `doctor`.
+- **Passing `confirm=True` on your own after a refusal.** The refusal means the client could not ask the human. Surface what the tool will do to the user and pass `confirm=True` only once they agree; never loop-retry.
+- **Treating a canceled flash as stopped.** A flash keeps writing after its call is canceled. Follow the `job_id` the tool logged with `flash_poll` before you reset, unplug or reflash the board.
 - **Letting a test suite reach the bench.** Anything that shells out to a real `pio run -t upload` can flash an attached board, and an *invalid* `--upload-port` is the guaranteed trigger for PlatformIO's auto-detect fallback — most dangerous exactly when the port doesn't exist. A stray upload flashes whatever board answers, wrong image included, and can outlive the test run as an orphaned process. Mock the subprocess; never let a port string a test invented reach `pio`.
 - **Assuming the recorder has data immediately.** It starts capturing when a serial session opens. If you just opened the port, query with `start="-5s"` and check `line_count > 0` before asserting content.
 - **Using `serial_open`/`serial_read`/`serial_close` for admin work.** Those are low-level transport tools for raw byte inspection. Use the admin tools (`get_config`, `send_text`, `device_info`, etc.) which manage the session for you.
