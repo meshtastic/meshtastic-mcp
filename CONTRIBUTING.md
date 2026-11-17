@@ -34,3 +34,24 @@ The firmware tier needs `MESHTASTIC_FIRMWARE_ROOT`; hardware tiers need real rad
 - **Commits:** Conventional Commits, signed off with DCO (`git commit -s`).
 - **License:** GPL-3.0-only. Every source file carries the SPDX header (CI enforces it):
   `SPDX-FileCopyrightText: Meshtastic contributors` + `SPDX-License-Identifier: GPL-3.0-only`.
+- **Dependencies:** a dependency that exists only on git goes in a `[dependency-groups]` group,
+  never an extra. PyPI rejects a package whose metadata names a URL; `uv build` in CI refuses one.
+
+## Releasing
+
+The version comes from the git tag (hatch-vcs). `server.json`'s checked-in version is a
+placeholder that `release.yml` overwrites from the tag.
+
+1. In a PR, rename `## [Unreleased]` in `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD` above a fresh
+   empty `## [Unreleased]`, and merge it.
+2. Tag that PR's merge commit and push the tag:
+   `git tag -a vX.Y.Z -m vX.Y.Z <merge-sha> && git push origin vX.Y.Z`.
+   `release.yml` builds, publishes to PyPI by trusted publishing, then creates the GitHub release
+   and publishes `server.json` to the MCP Registry.
+3. Check all three: the version on `https://pypi.org/project/meshtastic-mcp/`, the GitHub release,
+   and `https://registry.modelcontextprotocol.io/v0/servers?search=io.github.meshtastic/meshtastic-mcp`.
+
+A failed `publish-pypi` job means nothing shipped: the GitHub release and the Registry wait on it.
+Fix on `master`, delete the remote tag (`git push origin :refs/tags/vX.Y.Z`) and tag the fix's
+merge commit with the same version. Once PyPI has accepted a version it never takes that version
+again, so after a successful publish, fix forward with a new version.
