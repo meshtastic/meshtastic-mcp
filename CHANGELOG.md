@@ -5,6 +5,30 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **Replay demo fidelity knobs** — `NodeRow.is_favorite` reaches `NodeInfo.is_favorite`, so a
+  capture can pin nodes in the app. `ReplayParams.beacon_listen` sends
+  `ModuleConfig.mesh_beacon` with `FLAG_LISTEN_ENABLED` in the config phase (raw field 17 via
+  `build.mesh_beacon_module_config`; meshtastic-python predates it), so the app stores the
+  passive MESH_BEACON_APP packets it receives. The sim profile's `beacon_presets` sets the
+  ModemPresets a router beacon offers (default `["LONG_FAST"]`); every sim beacon now names one.
+- **Replay honours client node deletes** — an `AdminMessage.remove_by_nodenum` from the app
+  drops that node for the rest of the session: it is left out of the node DB on reconnect and
+  its streamed/injected packets are dropped. (Firmware re-adds a node the next time it is heard;
+  on a replay that brought deleted demo nodes straight back.)
+- **Sim traceroutes follow the map** — relays are picked along the source→destination line,
+  ordered by progress and preferring routers, capped by `traceroute_hops`, instead of a random
+  sample. Per-hop, neighbor and node-DB SNR now come from a weak-skewed tier model (mostly
+  marginal links, a strong minority, `towards`/`back` asymmetric) instead of a flat 6 dB / uniform
+  draw that painted every link the same colour.
+
+### Fixed
+- **Replay answers want_config as firmware does** - 69420 (`SPECIAL_NONCE_ONLY_CONFIG`) gets
+  `my_info`, channels and config; 69421 (`SPECIAL_NONCE_ONLY_NODES`) gets the node's own
+  NodeInfo and the node DB; any other nonce gets both. Every nonce but 69420 starts the packet
+  stream. Android and Apple send 69420 then 69421. meshtastic-python sends one random nonce,
+  which got config with no node DB or packet stream.
+
 ## [0.3.0] - 2026-11-17
 
 The first release published since 0.1.0: the 0.2.0 tag never reached PyPI, the GitHub releases or
