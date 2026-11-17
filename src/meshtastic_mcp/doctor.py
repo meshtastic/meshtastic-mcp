@@ -277,7 +277,7 @@ def _power_meter_check() -> Check:
 
 def _tak_check() -> Check:
     """TAKPacketV2 wire compression (replay sim `profile tak.wire="v2"`): needs the
-    meshtastic-tak SDK (the `tak` extra). Optional — the sim emits legacy
+    meshtastic-tak SDK (the `tak` dependency group). Optional — the sim emits legacy
     uncompressed TAKPacket without it.
     """
     from .replay import tak
@@ -296,7 +296,7 @@ def _tak_check() -> Check:
         STATUS_MISSING,
         'TAKPacketV2 zstd wire compression (replay sim tak.wire="v2")',
         detail="meshtastic-tak not importable (legacy TAKPacket still works)",
-        fix="pip install 'meshtastic-mcp[tak]'  # meshtastic-tak SDK (git) + zstandard",
+        fix=tak.INSTALL_HINT,
     )
 
 

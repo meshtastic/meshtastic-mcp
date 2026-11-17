@@ -5,11 +5,12 @@
 
 Exercises the same server the Android ATAK e2e loop drives, but with a local
 socket client instead of ATAK: it asserts the sim's TAK squad is delivered as
-well-formed, live CoT over the TAK TCP stream. SDK-gated ([tak] extra).
+well-formed, live CoT over the TAK TCP stream. SDK-gated (the ``tak`` group).
 """
 
 from __future__ import annotations
 
+import re
 import socket
 import time
 import xml.etree.ElementTree as ET
@@ -18,7 +19,7 @@ import pytest
 
 from meshtastic_mcp.replay import sim, tak, tak_server
 
-requires_tak = pytest.mark.skipif(not tak.available(), reason="[tak] extra not installed")
+requires_tak = pytest.mark.skipif(not tak.available(), reason="meshtastic-tak not installed")
 
 
 def _squad_capture():
@@ -111,8 +112,8 @@ def test_server_context_manager_and_no_v2_is_empty():
     assert tak_server.capture_to_cot_events(v1) == []
 
 
-def test_capture_to_cot_events_requires_extra(monkeypatch):
+def test_capture_to_cot_events_requires_the_sdk(monkeypatch):
     # without the SDK the bridge path fails fast with the install hint
     monkeypatch.setattr(tak, "available", lambda: False)
-    with pytest.raises(RuntimeError, match=r"\[tak\] extra"):
+    with pytest.raises(RuntimeError, match=re.escape(tak.SDK_REQUIREMENT)):
         tak_server.capture_to_cot_events(sim.generate(nodes=10, days=1, seed=1))

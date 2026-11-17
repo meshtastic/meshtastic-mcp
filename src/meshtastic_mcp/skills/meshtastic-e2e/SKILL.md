@@ -228,7 +228,7 @@ connected ATAK/iTAK client via an **in-app local TAK server** that emits CoT
   `capture_to_cot_events()` reproduces the bridge's wire→TAKPacketV2→CoT path;
   `tests/unit/test_tak_bridge.py` asserts the CoT is well-formed, typed
   (`a-f-G-U-C` PLI), and carries the right callsign/position/GeoChat. Needs the
-  `[tak]` extra (meshtastic-tak SDK).
+  meshtastic-tak SDK (`uv run --group tak` in a checkout; it is not on PyPI).
 - **App-plane (opt-in, needs an emulator + ATAK-CIV), bidirectional:**
   `scripts/ci_atak_app_loop.py` stands up `CotTakServer` from that squad, points
   ATAK-CIV at `10.0.2.2:<port>` (a pushed streaming-input `.pref`), launches it,

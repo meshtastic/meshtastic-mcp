@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Meshtastic contributors
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Optional TAKPacketV2 wire-format support (the ``[tak]`` extra).
+"""Optional TAKPacketV2 wire-format support (the meshtastic-tak SDK).
 
 Thin, import-guarded wrapper over the **meshtastic-tak** SDK
 (`meshtastic/TAKPacket-SDK`), which owns CoT ↔ TAKPacketV2 conversion and the
 zstd *dictionary* compression that shrinks a TAK payload to a LoRa-sized blob
 (median ~87 B, max ~184 B). The replay core must import and run without the SDK,
-so every SDK import lives behind :func:`available`; when the extra is installed
+so every SDK import lives behind :func:`available`; when the SDK is installed
 the sim can emit real wire-compressed TAKPacketV2 payloads instead of the
 legacy uncompressed :class:`atak_pb2.TAKPacket`, for high-fidelity exercise of
 an app's ATAK plane.
@@ -17,7 +17,8 @@ Wire format (from the SDK): a 1-byte dictionary id followed by the zstd body
 round-trip a ``TAKPacketV2`` through it; a payload produced here decompresses in
 any other SDK implementation (Kotlin/Swift/TS/C#) and vice-versa.
 
-Install: ``uv tool install 'meshtastic-mcp[tak]'`` (pulls the SDK + zstandard).
+The SDK is not on PyPI, so it is the ``tak`` dependency group rather than an extra:
+see :data:`INSTALL_HINT`.
 """
 
 from __future__ import annotations
@@ -25,9 +26,18 @@ from __future__ import annotations
 import functools
 from typing import Any
 
+# Must match the `tak` dependency group in pyproject.toml.
+SDK_REQUIREMENT = (
+    "meshtastic-tak @ git+https://github.com/meshtastic/TAKPacket-SDK.git#subdirectory=python"
+)
+INSTALL_HINT = (
+    f"uv tool install meshtastic-mcp --with '{SDK_REQUIREMENT}'"
+    "  # pip: pip install '<same requirement>'; in a checkout: uv sync --group tak"
+)
+
 
 def available() -> bool:
-    """True when the meshtastic-tak SDK is importable (the ``[tak]`` extra)."""
+    """True when the meshtastic-tak SDK is importable."""
     try:
         import meshtastic_tak  # noqa: F401
 
@@ -39,8 +49,8 @@ def available() -> bool:
 def _require() -> None:
     if not available():
         raise RuntimeError(
-            "TAKPacketV2 wire format requires the [tak] extra: "
-            "install 'meshtastic-mcp[tak]' (pulls meshtastic-tak + zstandard)."
+            "TAKPacketV2 wire format requires the meshtastic-tak SDK, which is not on PyPI: "
+            + INSTALL_HINT
         )
 
 

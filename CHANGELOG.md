@@ -61,6 +61,10 @@ the MCP Registry, so this release also carries everything listed under 0.2.0.
   that opens a second socket for `want_config` gets its node list.
 
 ### Fixed
+- **Publishing** - the `tak` extra is now the `tak` dependency group. meshtastic-tak is not on
+  PyPI, and PyPI rejects a package whose metadata names a git URL, which is what stopped 0.2.0.
+  Install the SDK beside a released meshtastic-mcp with the command `doctor` prints, or
+  `uv sync --group tak` in a checkout.
 - **nRF52 1200 baud touch** - `touch_1200bps` and `nrfutil_dfu` drop DTR while the port is open
   at 1200 baud. meshtastic-python clears `HUPCL` on every open, so after any session an open and
   close alone left the board running its app.

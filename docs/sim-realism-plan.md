@@ -224,7 +224,7 @@ of the fitted event profiles. Purpose: exercise app/plugin TAK paths
   Core stays dependency-light — legacy TAKPacket protobuf needs nothing new.
 - **V2 wire format**: `meshtastic/TAKPacket-SDK` (Python impl; CoT XML →
   TAKPacketV2 + zstd dictionary compression, median 87 B payloads) behind an
-  optional `[tak]` extra. When installed, the sim can emit wire-compressed V2
+  optional `tak` dependency group. When installed, the sim can emit wire-compressed V2
   payloads and we validate byte-compat against the SDK's 47 shared fixtures;
   without it, legacy protobuf only.
 - Fuzz composition: malformed/oversized CoT and truncated compressed payloads
@@ -234,7 +234,7 @@ of the fitted event profiles. Purpose: exercise app/plugin TAK paths
 
 **Acceptance:** with `team_nodes=4`, the app-visible mesh shows a moving TAK
 squad (PLI cadence ±20%, chat on the right channel); default profiles remain
-TAK-free; `[tak]` extra round-trips an SDK fixture.
+TAK-free; the `tak` group round-trips an SDK fixture.
 
 ### WS5 — Regression validation
 
@@ -262,7 +262,7 @@ All workstreams landed, plus the deferred stretch items:
 
 - ✅ `capture-stats` CLI subcommand (`meshtastic-mcp capture-stats <db|preset>`,
   `--json`) — read-only wrapper over `metrics.capture_stats`.
-- ✅ TAKPacketV2 wire-format via the optional `[tak]` extra (meshtastic-tak
+- ✅ TAKPacketV2 wire-format via the optional `tak` dependency group (meshtastic-tak
   SDK): `profile tak.wire="v2"` emits real zstd-dictionary-compressed
   TAKPacketV2 payloads (median ~59 B, cross-instance byte-compatible with the
   SDK). Gated by the new `tak` capability + doctor probe; legacy TAKPacket

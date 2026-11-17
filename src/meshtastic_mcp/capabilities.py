@@ -115,11 +115,11 @@ def has_power_meter() -> bool:
 
 
 def has_tak() -> bool:
-    """True when the meshtastic-tak SDK is importable (the ``[tak]`` extra).
+    """True when the meshtastic-tak SDK is importable (the ``tak`` dependency group).
 
     Optional: enables real TAKPacketV2 zstd-dictionary wire compression for the
     replay sim's ATAK squad (``profile tak.wire="v2"``). Install with
-    ``pip install 'meshtastic-mcp[tak]'``.
+    ``replay.tak.INSTALL_HINT``.
     """
     from .replay import tak
 
