@@ -1572,10 +1572,26 @@ def _raise_if_failed(result: dict[str, Any], what: str) -> dict[str, Any]:
     raise ToolError(f"{what} failed with exit code {code}{detail}\n{tail}".rstrip())
 
 
-async def _run_job(kind: str, label: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-    """Run a blocking flash function as a tracked job, surfacing its failure as a tool error."""
+async def _run_job(
+    ctx: Context, kind: str, label: str, fn: Callable[[], dict[str, Any]]
+) -> dict[str, Any]:
+    """Run a blocking flash function as a tracked job, surfacing its failure as a tool error.
+
+    The job id goes to the client as a log message before the wait: a flash cannot be cancelled,
+    so a caller whose task is cancelled needs the id to follow the write with `flash_poll`.
+    """
+
+    async def _announce(job_id: str) -> None:
+        try:
+            await ctx.info(
+                f"{kind} job {job_id} started for {label}; it keeps running if this call is "
+                f"cancelled, and flash_poll(job_id='{job_id}') follows it"
+            )
+        except Exception as exc:  # a client or task with no log channel still gets the result
+            log.debug("could not announce job %s: %s", job_id, exc)
+
     try:
-        result = await jobs.run_sync(kind, label, fn)
+        result = await jobs.run_sync(kind, label, fn, on_started=_announce)
     except RuntimeError as exc:
         raise ToolError(str(exc)) from exc
     return _raise_if_failed(result, f"flash of {label}")
@@ -1611,6 +1627,7 @@ async def pio_flash(
     if pending is not None:
         return cast(dict[str, Any], pending)
     return await _run_job(
+        ctx,
         "flashes",
         env,
         lambda: flash.flash(
@@ -1694,6 +1711,7 @@ async def erase_and_flash(
     if pending is not None:
         return cast(dict[str, Any], pending)
     return await _run_job(
+        ctx,
         "flashes",
         env,
         lambda: flash.erase_and_flash(
@@ -1726,6 +1744,7 @@ async def update_flash(
     if pending is not None:
         return cast(dict[str, Any], pending)
     return await _run_job(
+        ctx,
         "flashes",
         env,
         lambda: flash.update_flash(

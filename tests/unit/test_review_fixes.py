@@ -249,3 +249,40 @@ def test_a_harmless_subcommand_with_flags_still_runs(monkeypatch) -> None:
     monkeypatch.setattr(hw_tools.config, "esptool_bin", lambda: "esptool")
     monkeypatch.setattr(hw_tools, "_run", lambda b, args, **k: {"exit_code": 0, "args": args})
     assert hw_tools.esptool_raw(["--port", "/dev/x", "flash_id"])["exit_code"] == 0
+
+
+# ---- a flash job's id reaches the caller before the wait ---------------------------
+
+
+def test_run_sync_hands_over_the_job_id_before_the_job_finishes() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def slow() -> dict:
+        time.sleep(0.3)
+        return {"exit_code": 0}
+
+    async def on_started(job_id: str) -> None:
+        seen.append((job_id, jobs.poll(job_id)["status"]))
+
+    result = asyncio.run(jobs.run_sync("flashes", "x", slow, on_started=on_started))
+    assert seen == [(result["job_id"], "running")]
+
+
+def test_a_flash_tool_logs_its_job_id_to_the_client(server, monkeypatch) -> None:
+    monkeypatch.setattr(flash, "flash", lambda *a, **k: {"exit_code": 0})
+    app = FastMCP("t")
+    app.tool()(getattr(server.pio_flash, "fn", server.pio_flash))
+    messages: list[str] = []
+
+    async def log_handler(message) -> None:
+        messages.append(str(message.data))
+
+    async def run():
+        async with Client(app, log_handler=log_handler) as client:
+            return await client.call_tool(
+                "pio_flash", {"env": "e", "port": "/dev/x", "confirm": True}
+            )
+
+    result = asyncio.run(run())
+    job_id = result.structured_content["job_id"]
+    assert any(job_id in m and "flash_poll" in m for m in messages), messages

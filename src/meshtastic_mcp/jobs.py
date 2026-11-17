@@ -23,7 +23,7 @@ import subprocess
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -209,11 +209,13 @@ async def run_sync(
     fn: Callable[[], dict[str, Any]],
     *,
     cancellable: bool = False,
+    on_started: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Run a blocking function as a tracked job and return its result with the `job_id`.
 
-    The job stays pollable by `job_id` if the awaiting task is cancelled. A function that raises
-    makes the job `failed`, and this raises `RuntimeError` with its message.
+    The job stays pollable by `job_id` if the awaiting task is cancelled; `on_started` receives
+    that id before the wait begins, so a caller whose task is cancelled still has it. A function
+    that raises makes the job `failed`, and this raises `RuntimeError` with its message.
     """
 
     def _body(state: dict[str, Any], log_path: Path) -> None:
@@ -231,6 +233,8 @@ async def run_sync(
 
     started = start(kind, label, _body, cancellable=cancellable)
     job_id = started["job_id"]
+    if on_started is not None:
+        await on_started(job_id)
     final = await wait(job_id)
     state = state_of(job_id) or {}
     if "result" not in state:
