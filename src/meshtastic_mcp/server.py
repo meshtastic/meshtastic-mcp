@@ -1485,6 +1485,11 @@ async def build(
         build_flags=build_flags,
     )
     final = await jobs.wait(started["job_id"], tail_lines=200)
+    if final["status"] != "done":
+        raise ToolError(
+            f"build of {env} {final['status']} with exit code {final['exit_code']}\n"
+            f"{final['worker_error'] or ''}\n{_output_tail(final['log_tail'])}".strip()
+        )
     return {
         "job_id": final["job_id"],
         "status": final["status"],
@@ -1517,20 +1522,50 @@ async def _confirmed_hw_call(
     """
     human = confirm_mod.policy() == confirm_mod.HUMAN
     try:
-        return call(False if human else confirm)
+        result = call(False if human else confirm)
     except hw_tools.ConfirmRequired as exc:
         pending = await confirm_mod.gate(ctx, f"run {exc.what}", confirm, irreversible=True)
         if pending is not None:
             return cast(dict[str, Any], pending)
-        return call(True)
+        result = call(True)
+    return _raise_if_failed(result, "the command")
+
+
+def _output_tail(value: Any, limit: int = 1500) -> str:
+    text = "\n".join(value) if isinstance(value, list) else str(value or "")
+    return text.strip()[-limit:]
+
+
+def _raise_if_failed(result: dict[str, Any], what: str) -> dict[str, Any]:
+    """Turn a nonzero exit (or a flash that went to the wrong port) into a tool error.
+
+    The flash and hardware helpers report failure as `exit_code != 0` in an ordinary result, which a
+    client reads as success; the tail of the output goes into the error so the cause is visible.
+    """
+    code = result.get("exit_code")
+    mismatch = result.get("upload_port_mismatch")
+    if code in (0, None) and not mismatch:
+        return result
+    # Tools put the cause in either stream (adafruit-nrfutil prints it to stdout), so show both.
+    tail = "\n".join(
+        part
+        for part in (
+            _output_tail(result.get("stdout_tail") or result.get("log_tail"), 1000),
+            _output_tail(result.get("stderr_tail"), 500),
+        )
+        if part
+    )
+    detail = f": {mismatch}" if mismatch else ""
+    raise ToolError(f"{what} failed with exit code {code}{detail}\n{tail}".rstrip())
 
 
 async def _run_job(kind: str, label: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     """Run a blocking flash function as a tracked job, surfacing its failure as a tool error."""
     try:
-        return await jobs.run_sync(kind, label, fn)
+        result = await jobs.run_sync(kind, label, fn)
     except RuntimeError as exc:
         raise ToolError(str(exc)) from exc
+    return _raise_if_failed(result, f"flash of {label}")
 
 
 @firmware_tool(**tasks_mod.task_kwargs())

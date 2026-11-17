@@ -55,6 +55,8 @@ def test_erase_and_flash_resolves_esptool_and_adds_to_path() -> None:
         patch.object(flash.Path, "is_file", return_value=True),  # script exists
         patch.object(flash.subprocess, "run", side_effect=_stub_subprocess_run),
         patch.object(flash, "_factory_bin_for", return_value=factory_bin),
+        patch.object(flash, "_meta_for", return_value=Path("/fake/build/firmware.mt.json")),
+        patch.object(flash, "_stage_install_inputs"),  # staging has its own tests
         patch.object(userprefs, "temporary_overrides", side_effect=_stub_temporary_overrides),
     ):
         flash.erase_and_flash("tbeam", "/dev/ttyUSB0", confirm=True, skip_build=True)

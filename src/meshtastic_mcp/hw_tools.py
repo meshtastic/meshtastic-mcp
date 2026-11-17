@@ -14,8 +14,10 @@ can't accidentally `--write-flash` from freeform args.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -162,6 +164,44 @@ def esptool_raw(args: list[str], port: str | None = None, confirm: bool = False)
 NRFUTIL_DESTRUCTIVE = {"dfu", "settings"}
 
 
+_BY_ID = Path("/dev/serial/by-id")
+_DFU_ENTRY_WAIT_S = 8.0
+
+
+def _by_id_names(device: str) -> set[str]:
+    try:
+        return {p.name for p in _BY_ID.iterdir() if os.path.realpath(p) == device}
+    except OSError:
+        return set()
+
+
+def _touch_into_dfu(device: str) -> None:
+    """Drop DTR at 1200 baud, as PlatformIO's touch does, and wait for the bootloader to appear.
+
+    adafruit-nrfutil's own `-t 1200` only opens and closes the port, which a Meshtastic nRF52
+    app on Linux does not treat as a reset request. The bootloader shows up on the same kernel
+    node under a new by-id name; if no new name appears the board may already be in DFU, and
+    the transfer decides.
+    """
+    import serial
+
+    before = _by_id_names(device)
+    try:
+        s = serial.Serial(device, 1200)
+        s.dtr = False
+        time.sleep(0.1)
+        s.close()
+    except serial.SerialException as exc:
+        raise ToolError(f"could not touch {device} into DFU: {exc}") from exc
+    deadline = time.monotonic() + _DFU_ENTRY_WAIT_S
+    while time.monotonic() < deadline:
+        names = _by_id_names(device)
+        if names and names != before:
+            time.sleep(0.5)
+            return
+        time.sleep(0.2)
+
+
 def nrfutil_dfu(port: str, package_path: str, confirm: bool = False) -> dict[str, Any]:
     _require_confirm(confirm, "nrfutil_dfu")
     connection.reject_if_tcp(port, "nrfutil_dfu")
@@ -169,11 +209,25 @@ def nrfutil_dfu(port: str, package_path: str, confirm: bool = False) -> dict[str
     if not pkg.is_file():
         raise ToolError(f"Package not found: {pkg}")
     binary = config.nrfutil_bin()
-    return _run(
-        binary,
-        ["dfu", "serial", "--package", str(pkg), "--port", port, "-b", "115200"],
-        timeout=_TIMEOUT_LONG,
-    )
+    adafruit = "adafruit" in binary.name
+    # The bootloader re-enumerates under a different /dev/serial/by-id name on the same kernel
+    # node, so a by-id path stops existing between the touch and the transfer.
+    device = os.path.realpath(port) if adafruit else port
+    args = ["dfu", "serial", "--package", str(pkg), "--port", device, "-b", "115200"]
+    if adafruit:
+        # Single bank matches PlatformIO's nRF52 upload. The bootloader leaves DFU ~30 s after
+        # a touch, so the touch happens here, right before the transfer.
+        args.append("--singlebank")
+        if _BY_ID.is_dir():
+            _touch_into_dfu(device)
+        else:
+            args += ["-t", "1200"]
+    res = _run(binary, args, timeout=_TIMEOUT_LONG)
+    # adafruit-nrfutil prints "Failed to upgrade target" and still exits 0; only a run that
+    # printed "Device programmed." wrote the image.
+    if adafruit and res["exit_code"] == 0 and "Device programmed." not in res["stdout"]:
+        res["exit_code"] = 1
+    return res
 
 
 def nrfutil_raw(args: list[str], confirm: bool = False) -> dict[str, Any]:

@@ -12,8 +12,10 @@ artifacts to exist, so these tools build first if needed.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -208,6 +210,35 @@ def _factory_bin_for(env: str) -> Path | None:
         return None
     matches = sorted(build_dir.glob("firmware-*.factory.bin"))
     return matches[0] if matches else None
+
+
+def _meta_for(factory: Path) -> Path:
+    """The `.mt.json` manifest `device-install.sh` reads for a `firmware-*.factory.bin`."""
+    return factory.with_name(factory.name.removesuffix(".factory.bin") + ".mt.json")
+
+
+def _stage_install_inputs(factory: Path) -> None:
+    """Put the unified OTA image next to the factory image, where `device-install.sh` looks.
+
+    The script runs from the build directory, but the OTA image `mt-<mcu>-ota.bin` is kept at the
+    firmware root. The manifest names the MCU, so it must already exist.
+    """
+    meta = _meta_for(factory)
+    if not meta.is_file():
+        raise FlashError(f"{meta.name} is missing from {factory.parent}; run `build` first.")
+    mcu = json.loads(meta.read_text(encoding="utf-8")).get("mcu")
+    if not mcu:
+        raise FlashError(f"{meta.name} names no mcu, so the OTA image cannot be chosen.")
+    ota = factory.parent / f"mt-{mcu}-ota.bin"
+    if ota.is_file():
+        return
+    source = config.firmware_root() / ota.name
+    if not source.is_file():
+        raise FlashError(
+            f"{ota.name} is in neither {factory.parent} nor the firmware root; "
+            "the unified OTA image is required to erase and flash."
+        )
+    shutil.copy2(source, ota)
 
 
 def _firmware_bin_for(env: str) -> Path | None:
@@ -476,10 +507,11 @@ def erase_and_flash(
         # If overrides were provided, always build; otherwise only build if
         # no factory.bin is present.
         factory = _factory_bin_for(env)
-        if factory is None or userprefs_overrides:
+        if factory is None or userprefs_overrides or not _meta_for(factory).is_file():
             if skip_build:
+                what = "factory.bin" if factory is None else _meta_for(factory).name
                 raise FlashError(
-                    f"No factory.bin found for env {env!r} and skip_build=True. "
+                    f"No {what} found for env {env!r} and skip_build=True. "
                     "Run `build` first or set skip_build=False."
                 )
             build_args = ["run", "-e", env, "-t", "mtjson"]
@@ -502,6 +534,7 @@ def erase_and_flash(
         script = config.firmware_root() / "bin" / "device-install.sh"
         if not script.is_file():
             raise FlashError(f"device-install.sh not found at {script}")
+        _stage_install_inputs(factory)
         lock = _acquire_port(port, "erase_and_flash")
         try:
             result = _run_install_script(script, port, factory)
