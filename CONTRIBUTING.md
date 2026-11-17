@@ -29,7 +29,8 @@ The firmware tier needs `MESHTASTIC_FIRMWARE_ROOT`; hardware tiers need real rad
 - **Capability discipline:** core modules must import and run with no firmware checkout. Gate
   firmware/emulator-only tools with the `firmware_tool` decorator / capability checks.
 - **Tool annotations:** new MCP tools get `readOnlyHint`/`destructiveHint`/`openWorldHint` via
-  the maps in `server.py`; destructive tools also take a `confirm` arg.
+  the maps in `server.py` and a group in `toolsets.py`; destructive tools also take a `confirm`
+  arg and call `confirm.gate` before any side effect (see `docs/confirmations.md`).
 - **Commits:** Conventional Commits, signed off with DCO (`git commit -s`).
 - **License:** GPL-3.0-only. Every source file carries the SPDX header (CI enforces it):
   `SPDX-FileCopyrightText: Meshtastic contributors` + `SPDX-License-Identifier: GPL-3.0-only`.

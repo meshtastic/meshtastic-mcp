@@ -25,6 +25,24 @@
           "isRequired": false
         },
         {
+          "name": "MESHTASTIC_MCP_TOOLSETS",
+          "description": "Comma-separated tool groups to expose: core, firmware, hardware, android, discord, replay, rf, local-model. Unset or 'all' exposes every group; a hidden tool cannot be called.",
+          "isRequired": false
+        },
+        {
+          "name": "MESHTASTIC_MCP_READ_ONLY",
+          "description": "Set to 1 to hide every tool that can change device or host state.",
+          "isRequired": false,
+          "format": "boolean"
+        },
+        {
+          "name": "MESHTASTIC_MCP_CONFIRM",
+          "description": "Confirmation policy for destructive tools. 'agent' runs a tool called with confirm=True; 'human' asks the user through elicitation before an irreversible tool (factory_reset, erase_and_flash, nrf52_factory_erase, vanity_apply, destructive esptool/nrfutil/picotool calls) even when confirm=True is passed.",
+          "isRequired": false,
+          "default": "agent",
+          "choices": ["agent", "human"]
+        },
+        {
           "name": "MESHTASTIC_MCP_DATA_DIR",
           "description": "Directory for recorder JSONL logs and persistent data. Defaults to platformdirs user-data-dir, then cwd. Set this to keep recorder data in a known location.",
           "isRequired": false

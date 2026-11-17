@@ -1427,10 +1427,10 @@ def build_start(
 ) -> dict[str, Any]:
     """Start a firmware build in the background and return immediately.
 
-    Returns a `build_id` within ~1 second. Poll with `build_poll(build_id)`
-    to check progress and retrieve output. Use this instead of `build` when
-    your MCP client has a short per-call timeout (the synchronous `build`
-    blocks for 2–5 minutes which exceeds most client timeouts).
+    Returns a `build_id` (also as `job_id`) within ~1 second. Poll with
+    `build_poll(build_id=...)` to check progress and retrieve output. Use this
+    instead of `build` when your client does not run MCP tasks: an inline
+    `build` blocks for the whole compile, past most client timeouts.
     """
     return flash.build_start(
         env,
@@ -1442,11 +1442,12 @@ def build_start(
 
 @firmware_tool()
 def build_poll(build_id: str, tail_lines: int = 50) -> dict[str, Any]:
-    """Poll the status of a background build started with `build_start`.
+    """Poll the status of a background build.
 
-    Returns status (running/done/failed), elapsed_s, artifacts, and the last
-    `tail_lines` lines of build output. Call every few seconds until status
-    is 'done' or 'failed'.
+    `build_id` is the id `build_start` returned, or the `job_id` from `build`.
+    Returns status (running/done/failed/cancelled), elapsed_s, artifacts, and
+    the last `tail_lines` lines of build output. Call every few seconds until
+    the status is no longer 'running'. Ids do not survive a server restart.
     """
     return flash.build_poll(build_id, tail_lines=tail_lines)
 
@@ -1463,7 +1464,9 @@ async def build(
 
     Runs as a background task for clients that support MCP tasks (needs the `[tasks]` extra on the
     server); other clients block until it finishes, so prefer `build_start` + `build_poll` there.
-    Cancelling the task stops the build. The same job is pollable with `build_poll(job_id)`.
+    Canceling the task stops the build; a call abandoned on a client timeout keeps building. The
+    result carries the `job_id`, and `build_poll(build_id=<job_id>)` reads the same job. A failed
+    build is a tool error with the tail of the log.
 
     Returns exit_code, duration, artifact paths under .pio/build/<env>/, and
     the tail of the build log (last 200 lines). with_manifest=True adds the
@@ -1610,10 +1613,12 @@ async def pio_flash(
 ) -> dict[str, Any]:
     """Flash firmware via `pio run -e <env> -t upload --upload-port <port>`.
 
-    Works for any architecture (ESP32/nRF52/RP2040/STM32). Requires confirm=True, or the user's
-    answer when the client can ask. Runs as a background task for clients that support them
-    (`[tasks]` extra); the job is also pollable with `flash_poll(job_id)`, and a flash cannot be
-    cancelled mid-write.
+    Works for any architecture (ESP32/nRF52/RP2040/STM32). `port` is the board's serial port as
+    `list_devices` reports it. Requires confirm=True, or the user's answer when the client can
+    ask. Runs as a background task for clients that support them (`[tasks]` extra). The result
+    carries the `job_id`, and the id is also logged to the client before the wait: a flash cannot
+    be canceled mid-write, so after a cancel or timeout follow it with `flash_poll(job_id=...)`.
+    A failed upload is a tool error with the output tail.
     For first-time flashing a blank ESP32 board (erase + bootloader + app + fs),
     prefer `erase_and_flash`. For ESP32 OTA updates, prefer `update_flash`.
 
@@ -1653,10 +1658,11 @@ async def flash_start(
 ) -> dict[str, Any]:
     """Start a firmware flash in the background and return immediately.
 
-    Returns a `job_id` within ~1 second. Poll with `flash_poll(job_id)` until
-    status is 'done' or 'failed'. Use this instead of `pio_flash` when your MCP
-    client has a short per-call timeout — the upload step routinely exceeds the
-    60 s default. Requires confirm=True.
+    Returns a `job_id` within ~1 second. Poll with `flash_poll(job_id=...)` until
+    status is 'done' or 'failed'. Use this instead of `pio_flash` when your client
+    does not run MCP tasks, since the upload routinely exceeds a 60 s call timeout.
+    Requires confirm=True, or the user's answer when the client can ask. A busy
+    port fails here, not on the first poll.
 
     Returns:
         {job_id: str, status: "running", log_path: str}
@@ -1677,10 +1683,15 @@ async def flash_start(
 
 @firmware_tool()
 def flash_poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
-    """Poll the status of a background flash started with `flash_start`.
+    """Poll the status of a flash job.
 
-    Returns status (running/done/failed), elapsed_s, exit_code, and the last
-    `tail_lines` lines of upload output. Call every few seconds until terminal.
+    `job_id` comes from `flash_start`, or from the result or the logged
+    "flashes job <id> started" line of `pio_flash`, `erase_and_flash`,
+    `update_flash` and `nrf52_flash_uf2`. A flash keeps running after its call
+    is canceled, so poll it to the end before touching the board.
+    Returns status (running/done/failed), elapsed_s, exit_code, `error` when the
+    cause is known, and the last `tail_lines` lines of output. Call every few seconds
+    until terminal. Ids do not survive a server restart.
     """
     return flash.flash_poll(job_id, tail_lines=tail_lines)
 
@@ -1699,9 +1710,10 @@ async def erase_and_flash(
     Wipes the entire flash and writes bootloader, app, OTA, and LittleFS
     partitions from the factory.bin. Requires confirm=True, or the user's answer when the client
     can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`). Runs as a background task for clients
-    that support them; the job is also pollable with `flash_poll(job_id)`, and cannot be cancelled
-    mid-write. Runs `build` first
-    if no factory.bin is present (set skip_build=True to require a prior build).
+    that support them. The result carries the `job_id`, also logged before the wait; the flash
+    cannot be canceled mid-write, so after a cancel or timeout follow it with `flash_poll`.
+    Builds first if no factory.bin is present (set skip_build=True to require a prior build),
+    and rebuilds with the manifest target when the factory.bin has no `.mt.json` beside it.
 
     `userprefs` (optional): dict of `USERPREFS_<KEY>: value` baked into the
     factory.bin via userPrefs.jsonc injection. When provided, forces a rebuild
@@ -1736,8 +1748,9 @@ async def update_flash(
     Updates only the application partition, preserving device config and node
     database. Faster than erase_and_flash but won't recover a broken bootloader.
     Requires confirm=True, or the user's answer when the client can ask. Runs as a background
-    task for clients that support them; the job is also pollable with `flash_poll(job_id)`, and
-    cannot be cancelled mid-write. Builds first if needed.
+    task for clients that support them. The result carries the `job_id`, also logged before the
+    wait; the flash cannot be canceled mid-write, so after a cancel or timeout follow it with
+    `flash_poll`. Builds first if needed.
 
     `userprefs` (optional): dict of `USERPREFS_<KEY>: value` baked into the
     firmware.bin via userPrefs.jsonc injection. When provided, forces a rebuild.
@@ -1996,7 +2009,10 @@ def device_info(port: str | None = None, timeout_s: float = 8.0) -> DeviceInfo:
     """Connect via meshtastic.SerialInterface and return a summary of the node.
 
     If `port` is omitted and exactly one likely-Meshtastic device is connected,
-    it's auto-selected; otherwise the tool errors with the candidate list.
+    it's auto-selected; otherwise the tool errors with the candidate list. `port`
+    also takes `tcp://host[:port]`. A board whose USB serial has wedged fails
+    after `timeout_s` plus a short grace with a hint to power-cycle it
+    (`uhubctl_cycle`).
     """
     return cast(DeviceInfo, info.device_info(port=port, timeout_s=timeout_s))
 
@@ -2343,7 +2359,8 @@ async def inject_frame(
 ) -> dict[str, Any]:
     """Inject a packet into a connected board AS IF it arrived off the LoRa radio.
 
-    Destructive/`confirm=True`-gated: it forges over-the-air traffic (incl. admin) into the target.
+    Destructive: it forges over-the-air traffic (incl. admin) into the target. Requires
+    confirm=True, or the user's answer when the client can ask.
 
     The target must run firmware built with `-D MESHTASTIC_ENABLE_FRAME_INJECTION=1` (portduino
     sim nodes support it unconditionally). The frame enters the real receive pipeline, so it gets
@@ -2400,9 +2417,9 @@ async def inject_frame(
 async def reboot(
     ctx: Context, port: str | None = None, confirm: bool = False, seconds: int = 10
 ) -> dict[str, Any]:
-    """Reboot the connected node in `seconds` seconds. Requires confirm=True.
+    """Reboot the connected node in `seconds` seconds; needed after `set_config` to commit.
 
-    Without confirm=True a client that can ask the user will prompt them instead.
+    Requires confirm=True, or the user's answer when the client can ask.
 
     Returns:
         {ok: true, rebooting_in_s: int}
@@ -2595,7 +2612,7 @@ async def pa_sweep(
     """Closed-loop PA calibration: step `lora.tx_power` through `powers` and
     measure the actual power off the node's PA with the ImmersionRC meter,
     producing a configured-vs-measured table and a compression/saturation
-    analysis. Requires confirm=True.
+    analysis. Requires confirm=True, or the user's answer when the client can ask.
 
     Destructive: for each step it writes `lora.tx_power` on the node, keys real
     ~200 B broadcast bursts onto the mesh (an idle node rarely transmits), and
@@ -2665,9 +2682,9 @@ async def pa_sweep(
 async def shutdown(
     ctx: Context, port: str | None = None, confirm: bool = False, seconds: int = 10
 ) -> dict[str, Any]:
-    """Shut down the connected node in `seconds` seconds. Requires confirm=True.
+    """Shut down the connected node in `seconds` seconds.
 
-    Without confirm=True a client that can ask the user will prompt them instead.
+    Requires confirm=True, or the user's answer when the client can ask.
 
     Returns:
         {ok: true, shutting_down_in_s: int}
@@ -2687,11 +2704,11 @@ async def shutdown(
 async def factory_reset(
     ctx: Context, port: str | None = None, confirm: bool = False, full: bool = False
 ) -> dict[str, Any]:
-    """Factory-reset the connected node. Requires confirm=True.
+    """Factory-reset the connected node.
 
-    `full=True` also wipes device identity/keys (not just config).
-    Without confirm=True a client that can ask the user will prompt them instead; with
-    `MESHTASTIC_MCP_CONFIRM=human` the user is asked even when confirm=True.
+    `full=True` also wipes device identity/keys (not just config). Requires confirm=True, or the
+    user's answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`). An nRF52
+    in UF2 mode, with no app running to take this call, is wiped by `nrf52_factory_erase`.
 
     Returns:
         {ok: true}
@@ -3083,8 +3100,8 @@ async def uhubctl_power(
     `MESHTASTIC_UHUBCTL_LOCATION_<ROLE>` + `_PORT_<ROLE>` env vars first,
     falls back to VID auto-detection.
 
-    `action="off"` requires `confirm=True` (destructive — the attached
-    device will immediately disappear from the OS).
+    `action="off"` requires `confirm=True`, or the user's answer when the client
+    can ask: the attached device disappears from the OS at once. `on` never asks.
     """
     from . import uhubctl as uhubctl_mod
 
@@ -3112,9 +3129,11 @@ async def uhubctl_cycle(
 ) -> dict[str, Any]:
     """Power a USB hub port off, wait `delay_s` seconds, then on.
 
-    The typical hard-reset sequence — shorter than off+on as two RPCs
-    because the timing is handled in-process. Target by (location, port)
-    or by role (see `uhubctl_power`). Requires `confirm=True`.
+    The hard reset for a board whose USB serial has wedged (calls to it fail
+    with "Power-cycle it (uhubctl_cycle)"). One call instead of off+on, with the
+    timing handled in-process. Target by (location, port) from `uhubctl_list`,
+    or by role (see `uhubctl_power`). Requires `confirm=True`, or the user's
+    answer when the client can ask.
     """
     from . import uhubctl as uhubctl_mod
 
@@ -3173,7 +3192,8 @@ async def esptool_raw(
     ctx: Context, args: list[str], port: str | None = None, confirm: bool = False
 ) -> dict[str, Any]:
     """Pass-through to `esptool`. Destructive subcommands (write_flash,
-    erase_flash, erase_region, merge_bin) require confirm=True.
+    erase_flash, erase_region, merge_bin) require confirm=True, or the user's
+    answer when the client can ask; other subcommands run without asking.
 
     Prefer the high-level `pio_flash` / `erase_and_flash` / `update_flash`
     tools where possible — they know board-specific offsets and protocols.
@@ -3193,9 +3213,15 @@ async def nrfutil_dfu(
 ) -> dict[str, Any]:
     """DFU-flash a .zip package to an nRF52840 via `nrfutil dfu serial`.
 
-    Prefer `pio_flash` for flashing firmware built from this repo — pio handles
-    the DFU invocation automatically. Use this tool when flashing a pre-built
-    release zip or a custom bootloader. Requires confirm=True.
+    `port` is the app's serial port; a `/dev/serial/by-id` link works. With
+    adafruit-nrfutil the transfer uses `--singlebank` and fails unless the run
+    printed "Device programmed."; where `/dev/serial/by-id` exists the tool does
+    the 1200 baud touch itself (dropping DTR) and waits for the bootloader,
+    elsewhere it passes `-t 1200`. For a board already sitting in
+    serial DFU, use `nrfutil_raw` with no touch instead. On the Meshtastic
+    bootloader `nrf52_flash_uf2` is several times faster; for firmware built
+    from the tree prefer `pio_flash`. Requires confirm=True, or the user's
+    answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
     """
     return await _confirmed_hw_call(
         ctx, lambda c: hw_tools.nrfutil_dfu(port, package_path, confirm=c), confirm
@@ -3204,7 +3230,12 @@ async def nrfutil_dfu(
 
 @app.tool()
 async def nrfutil_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
-    """Pass-through to `nrfutil`. dfu/settings subcommands require confirm=True.
+    """Pass-through to `nrfutil`. dfu/settings subcommands require confirm=True,
+    or the user's answer when the client can ask.
+
+    Recovers an nRF52 left sitting in serial DFU, with no touch:
+    `args=["dfu", "serial", "--package", "<zip>", "--port", "/dev/ttyACM0",
+    "-b", "115200", "--singlebank"]` (adafruit-nrfutil).
 
     Security: `args` is passed directly to the nrfutil binary. All arguments
     must come from a trusted source — do not allow untrusted content to flow
@@ -3235,7 +3266,8 @@ async def picotool_load(ctx: Context, uf2_path: str, confirm: bool = False) -> d
 
 @app.tool()
 async def picotool_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
-    """Pass-through to `picotool`. load/reboot/save/erase require confirm=True.
+    """Pass-through to `picotool`. load/reboot/save/erase require confirm=True,
+    or the user's answer when the client can ask; other subcommands run without asking.
 
     Security: `args` is passed directly to the picotool binary. All arguments
     must come from a trusted source — do not allow untrusted content to flow
@@ -3303,9 +3335,10 @@ def nrf52_bootloader_info(port: str | None = None) -> dict[str, Any]:
     """Read the mounted nRF52 bootloader UF2 drive(s): bootloader version, board, SoftDevice,
     whether it accepts the factory-erase file, and any recorded fault (`Last-Fault`).
 
-    With `port`, returns the drive for that board (matched by USB serial; the app's by-id path
-    works even though it is gone in UF2 mode). Without it, lists every mounted UF2 drive. The
-    board must already be in UF2 mode: `nrf52_enter_uf2`, or double-press reset.
+    With `port`, returns the drive for that board, matched by USB serial: pass the app port you
+    used before, ideally its `/dev/serial/by-id` path, which still works after the link is gone
+    in UF2 mode. Without it, lists every mounted UF2 drive. The board must already be in UF2
+    mode: `nrf52_enter_uf2`, or double-press reset.
     """
     if port is not None:
         return {"drive": _uf2_drive(port)}
@@ -3318,9 +3351,11 @@ async def nrf52_enter_uf2(
 ) -> dict[str, Any]:
     """Reboot an nRF52 node into its bootloader's UF2 drive and return the drive's info.
 
-    Sends `enter_dfu_mode_request`; the drive appears within a couple of seconds. The node
+    Sends `enter_dfu_mode_request` over the phone API, so the app must be running; for a hung
+    app, double-press reset instead. The drive appears within a couple of seconds. The node
     stays in UF2 mode until a UF2 is written to it or it is power-cycled (`uhubctl_cycle`).
-    Requires confirm=True, or the user's answer when the client can ask.
+    Keep passing the same `port` to the other `nrf52_*` tools. Requires confirm=True, or the
+    user's answer when the client can ask.
     """
     pending = await confirm_mod.gate(
         ctx, f"reboot the node on {port or 'the default port'} into its UF2 bootloader", confirm
@@ -3340,8 +3375,8 @@ async def nrf52_enter_uf2(
 async def nrf52_backup_firmware(port: str | None = None) -> dict[str, Any]:
     """Copy CURRENT.UF2 (the installed application) off a board's UF2 drive into the data dir.
 
-    The dump restores byte-for-byte with `nrf52_flash_uf2`. Reads only; the board stays in UF2
-    mode.
+    The dump restores byte-for-byte with `nrf52_flash_uf2`; take one before flashing. Reads
+    only; the board stays in UF2 mode. Returns the backup's path.
     """
     drive = _uf2_drive(port)
     dest = config.mcp_data_dir() / "uf2-backups"
@@ -3373,7 +3408,9 @@ async def nrf52_flash_uf2(
     Several times faster than serial DFU, and no touch or DFU window is involved. The board
     must be in UF2 mode (`nrf52_enter_uf2`). Refuses a file that is not a UF2 and an image built
     for the other SoftDevice than the one INFO_UF2.TXT reports. Requires confirm=True, or the
-    user's answer when the client can ask.
+    user's answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
+    result and logged before the wait; follow it with `flash_poll` if the call is canceled. A
+    copy the bootloader did not take is a tool error.
     """
     drive = _uf2_drive(port)
     image = _check_softdevice(drive, uf2_path)
@@ -4386,7 +4423,8 @@ async def atak_fleet_down(
 
     `delete_clones=True` also deletes the cloned AVDs and their provisioned
     snapshots — irreversible (next `atak_fleet_up` re-provisions from scratch),
-    so it requires `confirm=True`.
+    so it requires `confirm=True`, or the user's answer when the client can ask
+    (always, with `MESHTASTIC_MCP_CONFIRM=human`).
     """
     from .emulator import atak
 
@@ -4538,8 +4576,9 @@ async def push_fake_nodedb(
       target="portduino" — file copy to ~/.portduino/<portduino_config>/prefs/nodes.proto.
                             Fast, no device connection needed.
       target="hardware"  — XModem upload over serial/BLE to /prefs/nodes.proto.
-                            Requires `port` + `confirm=True`. Triggers a reboot
-                            so loadFromDisk picks up the new file at next boot.
+                            Requires `port` + `confirm=True` (or the user's answer
+                            when the client can ask). Triggers a reboot so
+                            loadFromDisk picks up the new file at next boot.
 
     Compiles a fresh-timestamp proto from the committed JSONL seed under
     test/fixtures/nodedb/seed_v25_<N>.jsonl each invocation, so the loaded
@@ -4653,8 +4692,9 @@ async def vanity_apply(
     NodeInfo, and anything that named the old node (admin keys, another node's
     DM history) has to be re-pointed. Keep the old key if you want a way back.
 
-    Requires `confirm=True`, a clamped key, and a device whose `lora.region` is
-    set — the firmware refuses key derivation while the region is UNSET, which
+    Requires `confirm=True` (or the user's answer when the client can ask; always
+    asks with `MESHTASTIC_MCP_CONFIRM=human`), a clamped key, and a device whose
+    `lora.region` is set: the firmware refuses key derivation while the region is UNSET, which
     would make this a silent no-op. The board reboots itself (~7 s) to commit;
     with `verify` we reconnect and confirm it came back on the expected number,
     which is also the empirical check that this build has PKI keygen at all.

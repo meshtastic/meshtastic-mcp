@@ -8,9 +8,15 @@ issue. We aim to acknowledge within a few days.
 
 ## Scope notes
 
-- Destructive device operations (`reboot`, `shutdown`, `factory_reset`, `erase_and_flash`,
-  `uhubctl_*`) are `confirm`-gated and `destructiveHint`-annotated. Treat any path that
-  bypasses the gate as a security-relevant bug.
+- Every destructive device operation (`reboot`, `shutdown`, `factory_reset`, the flash and
+  `nrf52_*` tools, the destructive `esptool`/`nrfutil`/`picotool` calls, `uhubctl_*` and the
+  rest listed in `docs/confirmations.md`) is `confirm`-gated and `destructiveHint`-annotated.
+  Treat any path that bypasses the gate as a security-relevant bug.
+- `confirm=True` is an argument an agent can pass for itself. The human gate is the
+  elicitation prompt the server sends when the client declared it can ask, and
+  `MESHTASTIC_MCP_CONFIRM=human` makes irreversible tools ask even with `confirm=True`. Over
+  `meshtastic-mcp serve` the client declares its own capabilities, so the prompt is not a
+  human gate there; the bearer token is the boundary.
 - Never log or transmit PII, location, or cryptographic keys.
 
 ## Prompt injection / lethal trifecta
@@ -36,7 +42,9 @@ could exfiltrate the device's channel URL or node list.
   untrusted content has entered the session. (`atak_fleet_status` is also `openWorldHint` — it drives external
   emulators — but returns only fleet/route run-state, no remote-authored content.)
 - `send_text` is `destructiveHint: true` — clients should prompt before broadcasting.
-- The `confirm=True` gate on destructive ops adds a human-in-the-loop layer.
+- Destructive ops ask the human through elicitation when the client supports it, and
+  `MESHTASTIC_MCP_CONFIRM=human` keeps that prompt on irreversible ones even when the agent
+  passes `confirm=True`. See `docs/confirmations.md`.
 
 **Recommended operational posture:**
 - Do not process untrusted mesh content and send text in the same agentic task without
@@ -47,8 +55,8 @@ could exfiltrate the device's channel URL or node list.
 ## Tools with elevated risk
 
 `esptool_raw`, `nrfutil_raw`, `picotool_raw` accept arbitrary argument lists passed
-directly to hardware flashing binaries. The `confirm=True` gate blocks destructive
-subcommands (write-flash, dfu, load, erase), but all arguments should come from a
+directly to hardware flashing binaries. The confirmation gate covers destructive
+subcommands (write-flash, dfu, load, erase) wherever they sit in the list, but all arguments should come from a
 trusted source. Do not allow untrusted content (e.g. from mesh packets) to flow
 into argument lists.
 

@@ -35,7 +35,7 @@ atak_drive_route("emulator-5554", [[41.60,-93.77],[41.61,-93.75]], speed_mps=12)
 atak_fleet_status()                              # drive progress (driving is async too)
 cot_relay_status()                               # peers + per-type event counts
 atak_drive_stop("emulator-5554")
-cot_relay_stop(); atak_fleet_down()              # add confirm=True to also delete clones
+cot_relay_stop(); atak_fleet_down()              # delete_clones=True also deletes the clones (confirm-gated)
 ```
 
 `atak_fleet_up` and `atak_drive_route` run in the background (bring-up is ~15 min

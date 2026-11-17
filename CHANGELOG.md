@@ -5,7 +5,89 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **HTTP serving** - `meshtastic-mcp serve` serves the tools over streamable HTTP from the bench
+  host, so every client shares one owner of the serial ports, the recorder and the jobs. Every
+  request needs a bearer token of at least 32 characters from `MESHTASTIC_MCP_TOKEN` or a `0600`
+  `MESHTASTIC_MCP_TOKEN_FILE`; there is no anonymous mode. See `docs/serve.md`.
+- **Toolsets and read-only mode** - `MESHTASTIC_MCP_TOOLSETS` exposes only the named groups
+  (`core`, `firmware`, `hardware`, `android`, `discord`, `replay`, `rf`, `local-model`) and
+  `MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. A hidden tool cannot be
+  called. `hardware` holds the vendor flash tools, uhubctl, `touch_1200bps` and the `nrf52_*`
+  tools. See `docs/toolsets.md`.
+- **Output schemas** - `list_devices`, `device_info`, `list_nodes`, `logs_window`,
+  `packets_window`, `events_window` and `doctor` advertise a typed `outputSchema`.
+- **Human confirmation** - a destructive tool called without `confirm=True` asks the user
+  through elicitation when the client supports it, and refuses as before when it does not.
+  `MESHTASTIC_MCP_CONFIRM=human` asks before an irreversible tool (`factory_reset`,
+  `erase_and_flash`, `nrf52_factory_erase`, `vanity_apply`, `atak_fleet_down` with
+  `delete_clones`, destructive vendor calls) even when the agent passed `confirm=True`. Every
+  confirm-gated tool takes part, and `esptool_raw`, `nrfutil_raw` and `picotool_raw` ask only
+  for a destructive subcommand. See `docs/confirmations.md`.
+- **Background tasks** - with the new `[tasks]` extra, `build`, `pio_flash`, `erase_and_flash`,
+  `update_flash` and `nrf52_flash_uf2` run as MCP background tasks for clients that support
+  them and inline for the rest. Canceling a `build` task stops the build; a flash keeps
+  writing. See `docs/background-jobs.md`.
+- **nRF52 UF2 bootloader tools** - `nrf52_enter_uf2`, `nrf52_bootloader_info`,
+  `nrf52_backup_firmware`, `nrf52_flash_uf2` and `nrf52_factory_erase` drive the Meshtastic
+  nRF52 bootloader's UF2 drive: enter it over the phone API, read `INFO_UF2.TXT`, back up
+  `CURRENT.UF2`, flash a `.uf2` by copy (refusing an image built for the other SoftDevice), and
+  wipe saved data where the bootloader takes the factory-erase file. A drive is matched to its
+  board by USB serial, so the app's port still finds it in UF2 mode.
+- **iOS Simulator app plane** - `ios_list_simulators`, `ios_boot`, `ios_screenshot` (light or
+  dark, App Store status bar), `ios_open_url` (deep links and the connect link to a
+  `replay_start` node), and with `idb` `ios_ui_dump`, `ios_tap` and `ios_type_text`.
+- **Matching Android and iOS screenshots** - `screenshot_set_start` / `screenshot_set_poll`
+  serve each app a replay node from one seed, connect both, and capture the same screens by
+  deep link in light and dark.
+- **Replay `clock_anchor`** - stamps a capture so its last packet lands at a fixed instant, so
+  apps connected at different moments show the same last-heard times and node order.
+
+### Changed
+- **Failures are tool errors** - a tool that fails raises a tool error, so the result carries
+  `isError`, instead of returning `{"error": ...}` as a success. A nonzero exit or a flash to
+  the wrong port from `build`, `pio_flash`, `erase_and_flash`, `update_flash` and the esptool,
+  nrfutil and picotool tools is a tool error carrying the output tail.
+- **Flash tools run as jobs** - `pio_flash`, `erase_and_flash`, `update_flash` and
+  `nrf52_flash_uf2` run their write as a `flashes` job and return its `job_id`. Before waiting
+  they log the id to the client, so a call that is canceled or times out can follow the write
+  with `flash_poll`. `build` runs the job `build_start` would, and its result carries the id.
+- **A new replay client preempts the previous one** - as firmware's API server does, so an app
+  that opens a second socket for `want_config` gets its node list.
+
 ### Fixed
+- **nRF52 1200 baud touch** - `touch_1200bps` and `nrfutil_dfu` drop DTR while the port is open
+  at 1200 baud. meshtastic-python clears `HUPCL` on every open, so after any session an open and
+  close alone left the board running its app.
+- **`nrfutil_dfu` on nRF52** - it touches the board into serial DFU right before the transfer,
+  resolves a `/dev/serial/by-id` link first (the bootloader shows up under a different by-id
+  name), passes `--singlebank` as PlatformIO does, and fails unless adafruit-nrfutil printed
+  `Device programmed.`, since it exits 0 after "Failed to upgrade target".
+- **`erase_and_flash` on a development build tree** - a factory image without its `.mt.json`
+  manifest is rebuilt with the manifest target, and the current `mt-<mcu>-ota.bin` is staged
+  beside it in place of any stale copy.
+- **A wedged board fails the call** - opening a serial interface is bounded by the call's
+  timeout plus a grace period. A board whose USB serial has wedged fails with a hint to
+  power-cycle it (`uhubctl_cycle`) instead of hanging, and later calls to that port fail fast
+  while the stuck open lasts.
+- **Gated tools stay off the event loop** - the device, subprocess and sleep work of a
+  confirm-gated tool runs on a worker thread, so a DFU or a PA sweep no longer stalls every
+  other request.
+- **Confirmation answers are bound to their prompt** - an answer counts only for the action it
+  was asked about, carried in the sealed `request_state`, and the gate also asks inside a
+  background task.
+- **Flag values cannot hide a destructive subcommand** - `esptool_raw(args=["--port", "/dev/x",
+  "erase_flash"])` is gated like any other destructive call.
+- **Failed flash jobs poll as failed** - with their exit code and output, not as `done` with an
+  empty log.
+- **Builds stop only when asked** - an inline `build` that a client abandons on a timeout keeps
+  building, and only an explicit task cancel stops it. A build that runs out of time is killed
+  with its whole process group.
+- **`android_ui_dump` reads every window** - the `android` CLI now returns one entry per
+  window, and the dump flattens them so `android_find_text`, `tap_text` and the ATAK helpers
+  find elements again.
+- **Replay telemetry comes from the session's node** - a session with a custom node number no
+  longer shows a second node.
 - **Native meshtasticd build needs jsoncpp** - firmware `develop` (#10152) reads
   `<json/json.h>` from the system jsoncpp, so the CI native build installs `libjsoncpp-dev`
   and `doctor` lists it (`jsoncpp` on Homebrew).
