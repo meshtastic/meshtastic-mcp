@@ -579,6 +579,7 @@ def screenshot_set_start(
     settle_s: float = 3.0,
     clean_status_bar: bool = True,
     reset_apps: bool = False,
+    beacon_listen: bool = False,
 ) -> dict[str, Any]:
     """Capture matching Android and iOS screenshots of the apps on one simulated mesh.
 
@@ -606,6 +607,9 @@ def screenshot_set_start(
     data and needs a debug build, which skips onboarding; iOS deletes the app's
     UserDefaults and keeps its stored data. The emulator keeps the mesh's location
     afterwards; the simulator's is cleared.
+
+    `beacon_listen` serves both replay nodes with the mesh beacon module listening, as
+    `replay_start(beacon_listen=True)` does.
     """
     from . import jobs
     from . import screenshot_set as ss
@@ -627,6 +631,7 @@ def screenshot_set_start(
         settle_s=settle_s,
         clean_status_bar=clean_status_bar,
         reset_apps=reset_apps,
+        beacon_listen=beacon_listen,
     )
 
     def _body(state: dict[str, Any], log_path: Path) -> None:
@@ -3886,55 +3891,55 @@ def replay_start(
     Returns the session status (id, listen address, totals). Poll with
     `replay_status`, tear down with `replay_stop`.
     """
-    sim_start = None
-    s_epoch = _parse_iso_epoch(start) if start else None
-    e_epoch = _parse_iso_epoch(end) if end else None
-    is_sim = kind == "sim" or source in ("sim", *replay_sim.PRESETS)
-    if is_sim and s_epoch is None:
-        # default the synthetic capture to end "now" so a fresh app sees recent data
-        import time as _t
-
-        sim_start = int(_t.time()) - sim_days * 86400
-    cap = _load_replay_capture(
-        source,
-        kind=kind,
-        limit_nodes=limit_nodes,
-        sim_nodes=sim_nodes,
-        sim_days=sim_days,
-        sim_seed=sim_seed,
-        sim_start=sim_start,
-        channels=channels,
-        sim_profile=sim_profile,
-    )
-    params = ReplayParams(
-        host=host,
-        port=port,
-        speed=speed,
-        rate=rate,
-        duration=duration,
-        max_gap=max_gap,
-        start=s_epoch,
-        end=e_epoch,
-        loop=loop,
-        limit_nodes=limit_nodes,
-        node_delay=node_delay,
-        announce_interval=announce_interval,
-        stats_interval=stats_interval,
-        dupe_every=dupe_every,
-        modem_preset=modem_preset,
-        firmware_edition=firmware_edition,
-        firmware_version=firmware_version,
-        observer_lat=observer_lat,
-        observer_lon=observer_lon,
-        clock_anchor=clock_anchor,
-        hold=hold,
-        beacon_listen=beacon_listen,
-        observer_num=observer_num if observer_num is not None else replay_engine.OBSERVER_NUM,
-        fuzz=replay_fuzz.from_spec(fuzz, seed=fuzz_seed),
-        mdns=mdns,
-        local_metrics_interval=local_metrics_interval,
-    )
     try:
+        sim_start = None
+        s_epoch = _parse_iso_epoch(start) if start else None
+        e_epoch = _parse_iso_epoch(end) if end else None
+        is_sim = kind == "sim" or source in ("sim", *replay_sim.PRESETS)
+        if is_sim and s_epoch is None:
+            # default the synthetic capture to end "now" so a fresh app sees recent data
+            import time as _t
+
+            sim_start = int(_t.time()) - sim_days * 86400
+        cap = _load_replay_capture(
+            source,
+            kind=kind,
+            limit_nodes=limit_nodes,
+            sim_nodes=sim_nodes,
+            sim_days=sim_days,
+            sim_seed=sim_seed,
+            sim_start=sim_start,
+            channels=channels,
+            sim_profile=sim_profile,
+        )
+        params = ReplayParams(
+            host=host,
+            port=port,
+            speed=speed,
+            rate=rate,
+            duration=duration,
+            max_gap=max_gap,
+            start=s_epoch,
+            end=e_epoch,
+            loop=loop,
+            limit_nodes=limit_nodes,
+            node_delay=node_delay,
+            announce_interval=announce_interval,
+            stats_interval=stats_interval,
+            dupe_every=dupe_every,
+            modem_preset=modem_preset,
+            firmware_edition=firmware_edition,
+            firmware_version=firmware_version,
+            observer_lat=observer_lat,
+            observer_lon=observer_lon,
+            clock_anchor=clock_anchor,
+            hold=hold,
+            beacon_listen=beacon_listen,
+            observer_num=observer_num if observer_num is not None else replay_engine.OBSERVER_NUM,
+            fuzz=replay_fuzz.from_spec(fuzz, seed=fuzz_seed),
+            mdns=mdns,
+            local_metrics_interval=local_metrics_interval,
+        )
         return get_replay_manager().start(cap, params)
     except (replay_engine.PortInUseError, ValueError) as exc:
         raise ToolError(str(exc)) from exc
