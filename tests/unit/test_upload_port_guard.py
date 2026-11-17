@@ -16,12 +16,15 @@ job loudly when the output shows a different port was used.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from meshtastic_mcp import config, flash, pio, port_recovery, registry
+from meshtastic_mcp import flash, pio, port_recovery, registry
+
+pytestmark = pytest.mark.usefixtures("fake_firmware_root")
 
 REQUESTED = "/dev/cu.usbmodem1201"
 WRONG = "/dev/cu.usbmodem13201"
@@ -101,7 +104,6 @@ class _Result:
         self.duration_s = 1.0
 
 
-@pytest.mark.firmware
 def test_flash_pins_port_via_cli_and_env() -> None:
     captured: dict = {}
 
@@ -124,7 +126,6 @@ def test_flash_pins_port_via_cli_and_env() -> None:
     assert "upload_port_mismatch" not in out
 
 
-@pytest.mark.firmware
 def test_flash_fails_loudly_when_wrong_port_was_flashed() -> None:
     with (
         patch.object(port_recovery, "ensure_port_free", return_value=REQUESTED),
@@ -136,7 +137,6 @@ def test_flash_fails_loudly_when_wrong_port_was_flashed() -> None:
     assert WRONG in out["upload_port_mismatch"]
 
 
-@pytest.mark.firmware
 def test_flash_start_job_fails_on_port_mismatch(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("MESHTASTIC_MCP_DATA_DIR", str(tmp_path))
 
@@ -231,7 +231,6 @@ def test_flash_start_fails_fast_when_the_port_is_busy(tmp_path, monkeypatch) -> 
         registry.clear_port_lock(REQUESTED)
 
 
-@pytest.mark.firmware
 def test_flash_releases_the_port_lock_on_both_paths() -> None:
     try:
         with (
@@ -253,7 +252,6 @@ def test_flash_releases_the_port_lock_on_both_paths() -> None:
         registry.clear_port_lock(REQUESTED)
 
 
-@pytest.mark.firmware
 def test_flash_start_releases_the_port_lock_when_the_job_ends(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("MESHTASTIC_MCP_DATA_DIR", str(tmp_path))
     try:
@@ -274,8 +272,9 @@ def test_flash_start_releases_the_port_lock_when_the_job_ends(tmp_path, monkeypa
         registry.clear_port_lock(REQUESTED)
 
 
-@pytest.mark.firmware
-def test_erase_and_flash_holds_the_port_across_the_install_script(tmp_path) -> None:
+def test_erase_and_flash_holds_the_port_across_the_install_script(
+    fake_firmware_root: Path,
+) -> None:
     held: dict[str, bool] = {}
 
     def _stub_script(script, port, binary):
@@ -285,15 +284,19 @@ def test_erase_and_flash_holds_the_port_across_the_install_script(tmp_path) -> N
             probe.release()
         return {"exit_code": 0, "stdout_tail": "", "stderr_tail": "", "duration_s": 0.1}
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "device-install.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    build_dir = fake_firmware_root / ".pio" / "build" / "meshnology_w10"
+    build_dir.mkdir(parents=True)
+    (build_dir / "firmware-meshnology_w10-2.8.0.factory.bin").write_bytes(b"\0")
+    (build_dir / "firmware-meshnology_w10-2.8.0.mt.json").write_text(
+        '{"mcu": "esp32s3"}', encoding="utf-8"
+    )
+    (fake_firmware_root / "mt-esp32s3-ota.bin").write_bytes(b"\0")
+    (fake_firmware_root / "bin").mkdir()
+    (fake_firmware_root / "bin" / "device-install.sh").write_text("#!/bin/sh\n", encoding="utf-8")
 
     try:
         with (
             patch.object(flash, "_check_esp32_env", return_value="esp32"),
-            patch.object(flash, "_factory_bin_for", return_value=tmp_path / "factory.bin"),
-            patch.object(config, "firmware_root", return_value=tmp_path),
             patch.object(flash, "_run_install_script", side_effect=_stub_script),
         ):
             flash.erase_and_flash("meshnology_w10", REQUESTED, confirm=True, skip_build=True)

@@ -12,10 +12,33 @@ an explicit override still wins.
 
 import os
 import tempfile
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
 os.environ.setdefault("MESHTASTIC_MCP_DATA_DIR", tempfile.mkdtemp(prefix="mtmcp-unit-"))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _session_userprefs() -> Iterator[None]:
+    """Replace the root fixture that bakes the test profile into `userPrefs.jsonc`.
+
+    `MESHTASTIC_FIRMWARE_ROOT` names a tree every session builds from, and no unit test
+    builds firmware, so the unit tier never writes it.
+    """
+    yield
+
+
+@pytest.fixture
+def fake_firmware_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An empty firmware tree for code that resolves `config.firmware_root()`."""
+    root = tmp_path / "firmware"
+    root.mkdir()
+    (root / "platformio.ini").write_text("", encoding="utf-8")
+    monkeypatch.setenv("MESHTASTIC_FIRMWARE_ROOT", str(root))
+    return root
+
 
 # Per-test budget for the portable tier. Unit tests never wait on radios or
 # airtime, so anything past this is a hang (a real sleep, an unmocked probe,
