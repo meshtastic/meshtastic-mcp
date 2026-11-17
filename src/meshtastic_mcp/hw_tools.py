@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -183,22 +184,73 @@ def _by_id_names(device: str) -> set[str]:
         return set()
 
 
-def _touch_into_dfu(device: str) -> None:
-    """Drop DTR at 1200 baud, as PlatformIO's touch does, and wait for the bootloader to appear.
+def touch_1200(
+    port: str, *, settle_s: float = 0.1, timeout_s: float = 3.0, drop_dtr: bool = True
+) -> None:
+    """The 1200 baud USB touch that resets a board into its bootloader, bounded by a worker.
 
-    adafruit-nrfutil's own `-t 1200` only opens and closes the port, which a Meshtastic nRF52
-    app on Linux does not treat as a reset request. The bootloader shows up on the same kernel
-    node under a new by-id name; if no new name appears the board may already be in DFU, and
-    the transfer decides.
+    The Adafruit nRF52 core enters DFU on a DTR-low line state while the line coding is 1200
+    baud. A plain close lowers DTR only when the tty has HUPCL set, and meshtastic-python clears
+    HUPCL on every POSIX open, so `drop_dtr` lowers it explicitly, as PlatformIO's touch does.
+    ESP32-S3 native USB resets on the 1200 baud line coding alone.
+
+    The open and the close can both block on a busy CDC device, so the caller returns within
+    `timeout_s` regardless; a worker still blocked in the close has already sent the signal.
+    A port that does not exist raises `serial.SerialException`; other errors during the open
+    are expected while the board resets and are ignored.
+    """
+    import serial
+
+    errors: list[BaseException] = []
+
+    def _inner() -> None:
+        try:
+            s = serial.Serial(port, 1200)
+        except serial.SerialException as exc:
+            if "No such file" in str(exc) or "could not open" in str(exc).lower():
+                raise
+            return
+        try:
+            if drop_dtr:
+                # A line left DTR-low by an earlier session resets the board on the 1200 baud
+                # open, so the ioctl can meet a device that is already gone: the touch worked.
+                try:
+                    s.dtr = False
+                except (OSError, serial.SerialException):
+                    return
+            time.sleep(settle_s)
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    def _runner() -> None:
+        try:
+            _inner()
+        except BaseException as exc:  # re-raised on the caller's thread after the join
+            errors.append(exc)
+
+    worker = threading.Thread(target=_runner, daemon=True)
+    worker.start()
+    worker.join(timeout=timeout_s)
+    if worker.is_alive():
+        return
+    if errors:
+        raise errors[0]
+
+
+def _touch_into_dfu(device: str) -> None:
+    """Touch an nRF52 into serial DFU and wait for its bootloader to appear.
+
+    The bootloader shows up on the same kernel node under a new by-id name; if no new name
+    appears the board may already be in DFU, and the transfer decides.
     """
     import serial
 
     before = _by_id_names(device)
     try:
-        s = serial.Serial(device, 1200)
-        s.dtr = False
-        time.sleep(0.1)
-        s.close()
+        touch_1200(device, drop_dtr=True)
     except serial.SerialException as exc:
         raise ToolError(f"could not touch {device} into DFU: {exc}") from exc
     deadline = time.monotonic() + _DFU_ENTRY_WAIT_S
