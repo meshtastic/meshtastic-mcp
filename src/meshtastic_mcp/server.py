@@ -509,8 +509,8 @@ def ios_screenshot(
 
     `appearance` ("light" or "dark") switches the simulator first, and
     `clean_status_bar=True` pins the status bar to 9:41 with full signal and battery, as
-    in App Store shots; both stay set. To show the Android emulator's mesh, connect both
-    apps to one `replay_start` node (docs/screenshot-set.md).
+    in App Store shots; both stay set. A replay node serves one client at a time, so to show
+    one mesh in both apps use `screenshot_set_start` (docs/screenshot-set.md).
     """
     from .emulator import apple_sim
 
@@ -2491,10 +2491,12 @@ async def pa_sweep(
     confirm=True, or the user's answer when the client can ask. Pick `attenuator_db` so
     the top power minus the pad stays under the meter's +31 dBm maximum; the sweep refuses
     otherwise. `band` defaults to the node's region. `tx_linger_s=None` derives the
-    per-burst linger from the live preset's airtime. `tx_power` and the EU_868 duty-cycle
-    override are restored unless `restore_config=False`; a failed restore is listed in
-    `restore_errors`. A step in `silent_steps_dbm` may be a dead PA or a late TX, so rerun
-    it spaced out. An uncalibrated bench check (about ±0.5 dB). See docs/power-meter.md.
+    per-burst linger from the live preset's airtime. `override_duty_cycle=True` (default)
+    lifts the duty-cycle limit in every region. `tx_power` and the override are restored
+    unless `restore_config=False`; a failed restore is listed in `restore_errors`, or named
+    in the error when the sweep itself fails. A step in `silent_steps_dbm` may be a dead PA
+    or a late TX, so rerun it spaced out. An uncalibrated bench check (about ±0.5 dB).
+    See docs/power-meter.md.
 
     Returns:
         {band, region, requested_center_mhz, meter_cal_mhz, attenuator_db,

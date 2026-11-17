@@ -10,7 +10,7 @@ Returns `{center_hz, sample_rate_hz, duration_s, active_windows: [{start_s, dura
 
 ## `rf_confirm_tx`
 
-Sends a text message while the SDR captures the frequency the device's own configured region, preset and channel predict it should transmit on. That is ground truth, not the device's self-reported packet log.
+Sends a text message while the SDR captures the frequency the device's own configured region, preset and channel predict it should transmit on, independent of the device's self-reported packet log. A burst is matched by timing and duration, not packet identity, so a match is evidence of RF on that channel near the send; when other nodes may be transmitting, confirm on a second device.
 
 It catches the bug class firmware can never report: a TX reported as queued (`send_result.ok`) with no RF leaving the antenna, from a dead PA, a disconnected antenna, or a region or frequency miscalculation. It also flags off-frequency or off-region emission, and reports the measured occupied bandwidth beside the region's regulatory duty-cycle and power limits.
 

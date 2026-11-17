@@ -44,7 +44,7 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 - **apple capability** (needs `xcrun`; `idb` for UI): `emulator/apple_sim.py` iOS-Sim/macOS
   app-plane orchestration, plus `ios_list_simulators`, `ios_boot`, `ios_screenshot`
   (light/dark, App Store status bar), `ios_open_url` (deep links, and the connect link to a
-  `replay_start` node so iOS and the Android emulator show one simulated mesh),
+  `replay_start` node, which serves one client at a time),
   `ios_ui_dump`, `ios_tap` and `ios_type_text` (the last three need idb).
   `screenshot_set_start`/`_poll` (`screenshot_set.py`, registered with either capability,
   in the `apple` toolset) serves each app a replay node from one seed, connects both, and

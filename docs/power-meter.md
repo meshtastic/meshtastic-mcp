@@ -153,12 +153,13 @@ meter_cal_mhz, kind, attenuator_db, samples, min_dbm, mean_dbm, max_dbm}`.
 For each value in `powers` the sweep writes `lora.tx_power`, keys `burst_repeat` broadcast
 bursts, and samples the meter. It captures the meter's noise floor first and keeps only the
 TX-active samples (above floor + margin) at each step. `band` defaults to the node's configured
-region. On EU_868, `override_duty_cycle=True` (the default) lifts the duty-cycle limit for the
-run.
+region. `override_duty_cycle=True` (the default) lifts the node's duty-cycle limit for the run
+in every region, not only EU_868; pass `False` to keep the limit.
 
 On exit it restores the original `tx_power` and duty-cycle override unless
 `restore_config=False`. Each restore runs on its own, and one that fails (a busy port, say) is
-listed in `restore_errors` rather than leaving the node changed without a word.
+listed in `restore_errors` rather than leaving the node changed without a word. If a step fails
+and a restore fails too, the sweep raises a `PaSweepError` naming both.
 
 A step with no TX-active sample lands in `silent_steps_dbm`. That can be a dead PA, but under
 airtime pressure a queued packet can also transmit after the sampling window closes, so re-run
