@@ -386,10 +386,10 @@ until `dropped == 0`, then sweep forward:
 
 ```python
 # dropped > 0 → narrow the window
-logs_window(port=P, start="-1h",   end="now",   max_lines=200)   # 5000 dropped
-logs_window(port=P, start="-30m",  end="now",   max_lines=200)   # 800 dropped
-logs_window(port=P, start="-10m",  end="now",   max_lines=200)   # 0 dropped → read it
-logs_window(port=P, start="-30m",  end="-10m",  max_lines=200)   # sweep the earlier half
+logs_window(port=P, start="-1h", end="now", max_lines=200)  # 5000 dropped
+logs_window(port=P, start="-30m", end="now", max_lines=200)  # 800 dropped
+logs_window(port=P, start="-10m", end="now", max_lines=200)  # 0 dropped → read it
+logs_window(port=P, start="-30m", end="-10m", max_lines=200)  # sweep the earlier half
 ```
 
 `list_nodes` is unbounded (returns all peers). On large meshes (80+ nodes) this can be
@@ -408,8 +408,8 @@ from meshtastic_mcp.emulator import avd
 
 # works for both — finds first ready device
 serial = avd.find_device_serial()
-serial = avd.find_device_serial(physical_only=True)   # USB phone only
-serial = avd.find_device_serial(emulator_only=True)   # AVD only
+serial = avd.find_device_serial(physical_only=True)  # USB phone only
+serial = avd.find_device_serial(emulator_only=True)  # AVD only
 
 # TCP address — branches automatically:
 #   emulator → "10.0.2.2:<port>"  (no tunnel needed)

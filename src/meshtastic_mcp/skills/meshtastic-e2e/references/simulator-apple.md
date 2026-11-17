@@ -92,24 +92,28 @@ from pathlib import Path
 from meshtastic_mcp.emulator import native_node, apple_sim
 
 # 1. Device plane — two native nodes mesh over UDP (Linux/macOS host; see topology.md)
-nodes = native_node.build_lab(Path(".pio/build/native-macos/meshtasticd"), Path("/tmp/lab"), count=2)
-for n in nodes: n.start()
+nodes = native_node.build_lab(
+    Path(".pio/build/native-macos/meshtasticd"), Path("/tmp/lab"), count=2
+)
+for n in nodes:
+    n.start()
 time.sleep(10)
-for n in nodes: n.configure()           # region + EnableUDP via admin, under a restart supervisor
+for n in nodes:
+    n.configure()  # region + EnableUDP via admin, under a restart supervisor
 
 # 2. App plane — boot sim, install, launch Meshtastic-Apple
 udid = apple_sim.ensure_booted("iPhone 17 Pro")
 apple_sim.install_app("…/Meshtastic.app", udid=udid)
-apple_sim.launch("gvh.MeshtasticClient", udid=udid)   # confirm the bundle id from the build
+apple_sim.launch("gvh.MeshtasticClient", udid=udid)  # confirm the bundle id from the build
 
 # 3. Connect the app to the DUT over TCP (UI-driven: add device → TCP/IP)
-dut = apple_sim.tcp_dut_address(4403)    # "127.0.0.1:4403"
+dut = apple_sim.tcp_dut_address(4403)  # "127.0.0.1:4403"
 #   drive the connect sheet with apple_sim.ui_dump()/tap()/type_text(dut)
 
 # 4. Inbound loop (device → app):
 TOKEN = f"E2E-{int(time.time())}"
 # tester (:4404) sends via mesh_e2e.py / send_text ...
-assert apple_sim.poll_for_text(TOKEN, udid=udid, timeout=30)   # app rendered it → PASS
+assert apple_sim.poll_for_text(TOKEN, udid=udid, timeout=30)  # app rendered it → PASS
 ```
 
 ## macOS app variant (no simulator) — recommended, proven live
