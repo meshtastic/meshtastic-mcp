@@ -223,7 +223,7 @@ jobs:
       - run: chmod +x bin/meshtasticd
       - name: Set up JDK (for building the app from source)
         if: inputs.android_ref != ''
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
         with:
           distribution: temurin
           java-version: "21"
