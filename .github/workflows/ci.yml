@@ -65,6 +65,9 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov OIDC upload; master is protected, so a tokenless upload is refused
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +94,7 @@ jobs:
         if: matrix.python-version == '3.12'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
+          use_oidc: true
           fail_ci_if_error: false
 
   build:
@@ -270,7 +274,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     env:
-      SIM_NAME: "iPhone 16 Pro"
+      SIM_NAME: "iPhone 17 Pro"
       BUNDLE_ID: gvh.MeshtasticClient
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
