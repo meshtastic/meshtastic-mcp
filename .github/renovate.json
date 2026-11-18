@@ -24,6 +24,10 @@
     "minimumReleaseAge": null,
     "schedule": ["before 6am on monday"]
   },
+  "npm": {
+    "description": "Renovate's npm refuses to fetch @tailwindcss/oxide-wasm32-wasi (EALLOWREMOTE), so a full web-ui lock refresh always fails. The weekly web-ui group updates the lock only alongside a direct dependency bump, so transitive-only updates wait for one; re-enable this once the fetch works.",
+    "lockFileMaintenance": { "enabled": false }
+  },
   "packageRules": [
     {
       "description": "Automerge non-major updates once CI passes, as the org's KMP preset does. Keep this rule first: packageRules apply in order and the last match wins. `pin` is left out because Renovate does not apply minimumReleaseAge to pin updates.",
@@ -53,6 +57,18 @@
       "matchDatasources": ["docker"],
       "matchPackageNames": ["python"],
       "allowedVersions": "<3.14"
+    },
+    {
+      "description": "Keep the workflows' setup-python version below 3.13: meshtasticd-native builds firmware with PlatformIO and SCons, which do not support newer Pythons, and PR CI never runs that job.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["python"],
+      "allowedVersions": "<3.13"
+    },
+    {
+      "description": "vite and its @vitejs plugins move together on a major; @vitejs/plugin-vue pins the vite majors it accepts.",
+      "groupName": "vite",
+      "matchPackageNames": ["vite", "/^@vitejs\\//"],
+      "matchUpdateTypes": ["major"]
     }
   ]
 }
