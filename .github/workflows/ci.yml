@@ -268,7 +268,7 @@ jobs:
   # this runs as soon as those land (pin a fork via build_meshtasticd.sh --repo/--ref meanwhile).
   apple-e2e:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: macos-14
+    runs-on: macos-26
     env:
       SIM_NAME: "iPhone 16 Pro"
       BUNDLE_ID: gvh.MeshtasticClient
