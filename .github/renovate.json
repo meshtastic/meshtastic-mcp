@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "One weekly PR per ecosystem for non-major updates, so bumps never pile up as one PR per package rewriting the same lockfile. Majors stay separate PRs. A 3-day soak matches the org's KMP preset, timestamp-optional as there, so digest and lockfile-maintenance updates, which carry no release timestamp, are not held forever. Vulnerability fixes skip the schedule and the soak.",
+  "description": "One weekly PR per ecosystem for non-major updates, so bumps never pile up as one PR per package rewriting the same lockfile. Majors stay separate PRs. A 3-day soak matches the org's KMP preset, timestamp-optional as there, so digest and lockfile-maintenance updates, which carry no release timestamp, are not held forever. Vulnerability fixes skip the schedule and the soak. Minor, patch and digest updates and lockfile maintenance automerge through the merge queue once CI passes; majors and pins wait for review.",
   "extends": [
     "config:recommended",
     ":semanticCommitTypeAll(build)",
@@ -20,10 +20,16 @@
   },
   "lockFileMaintenance": {
     "enabled": true,
+    "automerge": true,
     "minimumReleaseAge": null,
     "schedule": ["before 6am on monday"]
   },
   "packageRules": [
+    {
+      "description": "Automerge non-major updates once CI passes, as the org's KMP preset does. Keep this rule first: packageRules apply in order and the last match wins. `pin` is left out because Renovate does not apply minimumReleaseAge to pin updates.",
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "automerge": true
+    },
     {
       "groupName": "python non-major",
       "matchManagers": ["pep621"],
