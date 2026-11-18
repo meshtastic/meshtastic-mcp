@@ -41,6 +41,12 @@
       "matchManagers": ["github-actions"],
       "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
       "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "Keep the Docker image's Python within what ci.yml's test matrix covers (3.11 to 3.13); meshtastic itself requires <3.15. Raise this with the matrix.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": "<3.14"
     }
   ]
 }
