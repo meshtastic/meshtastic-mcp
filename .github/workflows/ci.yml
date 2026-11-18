@@ -226,7 +226,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
       - name: Provide the APK (build from source if android_ref set, else a release)
         run: |
           if [ -n "${{ inputs.android_ref }}" ]; then
