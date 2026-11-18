@@ -132,9 +132,9 @@ Beyond tools, the server exposes MCP **resources** (`meshtastic://doctor`,
 and **prompts** (`triage_e2e_failure`, `bringup_device`, `inbound_loop`). The `android_docs_search`/
 `android_docs_fetch` tools answer Android/Compose questions grounded in the official Knowledge Base.
 
-`list_devices`, `device_info`, `list_nodes`, `logs_window`, `packets_window`, `events_window` and
-`doctor` advertise an output schema. A device, flash or hardware tool that fails returns a tool
-error (`isError`) carrying the cause and the tail of any command output.
+Tools with a result type in `schemas.py` advertise it as an output schema. A device, flash or
+hardware tool that fails returns a tool error (`isError`) carrying the cause and the tail of any
+command output.
 
 ### Source repos — two modes
 

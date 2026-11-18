@@ -24,7 +24,8 @@ def reboots(monkeypatch):
         admin,
         "reboot",
         lambda port=None, confirm=False, seconds=10: (
-            calls.append({"port": port, "confirm": confirm}) or {"ok": True}
+            calls.append({"port": port, "confirm": confirm})
+            or {"ok": True, "rebooting_in_s": seconds}
         ),
     )
     monkeypatch.delenv(confirm_env(), raising=False)
@@ -117,7 +118,7 @@ def resets(monkeypatch):
         admin,
         "factory_reset",
         lambda port=None, confirm=False, full=False: (
-            calls.append({"confirm": confirm, "full": full}) or {"ok": True}
+            calls.append({"confirm": confirm, "full": full}) or {"ok": True, "full": full}
         ),
     )
     monkeypatch.delenv(confirm.POLICY_ENV, raising=False)

@@ -17,6 +17,7 @@ from .. import boards, fixtures, flash, jobs
 from .. import confirm as confirm_mod
 from .. import tasks as tasks_mod
 from .. import userprefs as userprefs_mod
+from ..schemas import FlashStartResult
 from ._app import firmware_tool
 from ._shared import _off_loop, _output_tail, _run_job, _to_markdown_table
 
@@ -31,13 +32,16 @@ def list_boards(
 ) -> list[dict[str, Any]] | str:
     """Enumerate PlatformIO envs (boards) with Meshtastic metadata.
 
-    Filters: `architecture` ("esp32", "esp32s3", "nrf52840", "rp2040", "stm32", "native"),
-    `actively_supported_only` (`custom_meshtastic_actively_supported=true`), `query`
-    (case-insensitive substring of display_name, env or hw_model_slug), `board_level`
-    ("release" default-track, "pr" for PR CI, "extra" opt-in). `format="table"` gives a
-    compact Markdown summary. JSON entries have env, architecture, hw_model,
-    hw_model_slug, display_name, actively_supported, support_level, board_level, tags and
-    images.
+    JSON entries have env, architecture, hw_model, hw_model_slug, display_name,
+    actively_supported, support_level, board_level, tags and images.
+
+    Args:
+        architecture: Only this architecture: "esp32", "esp32s3", "nrf52840", "rp2040",
+            "stm32" or "native".
+        actively_supported_only: Only envs with `custom_meshtastic_actively_supported=true`.
+        query: Case-insensitive substring of display_name, env or hw_model_slug.
+        board_level: "release" (default track), "pr" (PR CI) or "extra" (opt-in).
+        format: `json` (default) or `table`, a compact Markdown summary.
     """
     result = boards.list_boards(
         architecture=architecture,
@@ -61,7 +65,11 @@ def list_boards(
 
 @firmware_tool()
 def get_board(env: str) -> dict[str, Any]:
-    """Full metadata for one PlatformIO env, including raw pio config fields."""
+    """Full metadata for one PlatformIO env, including raw pio config fields.
+
+    Args:
+        env: The PlatformIO env name, as `list_boards` reports it.
+    """
     return boards.get_board(env)
 
 
@@ -78,10 +86,15 @@ def build_start(
     """Start a firmware build in the background and return immediately.
 
     Returns a `build_id` (also as `job_id`) within ~1 second. Poll with
-    `build_poll(build_id=...)` to check progress and retrieve output. Use this
-    instead of `build` when your client does not run MCP tasks: an inline
-    `build` blocks for the whole compile, past most client timeouts. Arguments as for
-    `build`.
+    `build_poll(build_id=...)` to check progress and retrieve output. Use this instead of
+    `build` when your client does not run MCP tasks: an inline `build` blocks for the whole
+    compile, past most client timeouts.
+
+    Args:
+        env: The PlatformIO env to build, as for `build`.
+        with_manifest: Also write the `.mt.json` manifest.
+        userprefs: `USERPREFS_*` values baked into this build only.
+        build_flags: `-D` macros for this build, such as `{"DEBUG_HEAP": 1}`.
     """
     return flash.build_start(
         env,
@@ -95,12 +108,14 @@ def build_start(
 def build_poll(build_id: str, tail_lines: int = 50) -> dict[str, Any]:
     """Poll the status of a background build.
 
-    `build_id` is the id `build_start` returned, or the `job_id` from `build`.
-    Returns status (running/done/failed/cancelled), elapsed_s, artifacts, and
-    the last `tail_lines` lines of build output. Call every few seconds until
-    the status is no longer 'running'. Ids do not survive a server restart. A `done` build
-    is perishable: another session's build in the shared tree can delete it, so flash it
-    at once.
+    Returns status (running/done/failed/cancelled), elapsed_s, artifacts, and the last
+    `tail_lines` lines of build output. Call every few seconds until the status is no
+    longer 'running'. Ids do not survive a server restart. A `done` build is perishable:
+    another session's build in the shared tree can delete it, so flash it at once.
+
+    Args:
+        build_id: The id `build_start` returned, or the `job_id` from `build`.
+        tail_lines: How many trailing log lines to return.
     """
     return flash.build_poll(build_id, tail_lines=tail_lines)
 
@@ -118,13 +133,19 @@ async def build(
     Runs as an MCP background task when the client supports them (`[tasks]` extra);
     otherwise the call blocks for the whole compile, so use `build_start` + `build_poll`
     there. Canceling the task stops the build; an abandoned call keeps building, and
-    `build_poll(build_id=<job_id>)` reads it. Returns `job_id`, exit code, duration,
-    artifacts under `.pio/build/<env>/` and the last 200 log lines; a failed build is a
-    tool error. `with_manifest` adds the `.mt.json` manifest. `userprefs` bakes
-    `USERPREFS_*` values into this build only, and `build_flags` adds `-D` macros for it,
-    such as `{"DEBUG_HEAP": 1}` for a heap timeline. A finished build is perishable:
-    another session's build in the shared tree can delete it, so flash it at once. See
-    docs/firmware-builds.md.
+    `build_poll(build_id=<job_id>)` reads it. A failed build is a tool error. A finished
+    build is perishable: another session's build in the shared tree can delete it, so flash
+    it at once. See docs/firmware-builds.md.
+
+    Returns `{job_id, status, exit_code, artifacts, duration_s, log_tail, worker_error,
+    build_flags}`, with artifacts under `.pio/build/<env>/` and the last 200 log lines.
+
+    Args:
+        env: The PlatformIO env to build, as `list_boards` reports it.
+        with_manifest: Also write the `.mt.json` manifest.
+        userprefs: `USERPREFS_*` values baked into this build only.
+        build_flags: `-D` macros for this build only, such as `{"DEBUG_HEAP": 1}` for a heap
+            timeline.
     """
     started = flash.build_start(
         env,
@@ -160,7 +181,13 @@ async def build(
 @firmware_tool()
 def clean(env: str) -> dict[str, Any]:
     """Clean one env's build output via `pio run -e <env> -t clean`, for a branch switch or
-    a stale-cache build failure."""
+    a stale-cache build failure.
+
+    Returns `{exit_code, stdout_tail, stderr_tail, duration_s}`.
+
+    Args:
+        env: The PlatformIO env to clean.
+    """
     return flash.clean(env)
 
 
@@ -175,14 +202,23 @@ async def pio_flash(
 ) -> dict[str, Any]:
     """Flash firmware with `pio run -e <env> -t upload --upload-port <port>`, any arch.
 
-    `port` is the board's serial port as `list_devices` reports it. Requires confirm=True,
-    or the user's answer when the client can ask. Runs as a background task where
-    supported (`[tasks]` extra), else blocks: use `flash_start` + `flash_poll` there. A
-    flash cannot be canceled mid-write, so after a cancel or timeout follow its `job_id`
-    (in the result, and logged first) with `flash_poll`. A failed upload is a tool error.
-    For a blank ESP32 prefer `erase_and_flash`, for an ESP32 OTA update `update_flash`.
-    `userprefs` and `build_flags` apply to the rebuild before upload; pass `build_flags`
-    here or that rebuild drops them. See docs/firmware-builds.md.
+    Requires confirm=True, or the user's answer when the client can ask. Runs as a
+    background task where supported (`[tasks]` extra), else blocks: use `flash_start` +
+    `flash_poll` there. A flash cannot be canceled mid-write, so after a cancel or timeout
+    follow its `job_id` (in the result, and logged first) with `flash_poll`. A failed upload
+    is a tool error. For a blank ESP32 prefer `erase_and_flash`, for an ESP32 OTA update
+    `update_flash`. See docs/firmware-builds.md.
+
+    Returns `{job_id, exit_code, stdout_tail, stderr_tail, duration_s, ...}`.
+
+    Args:
+        env: The PlatformIO env to flash.
+        port: The board's serial port as `list_devices` reports it.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+        userprefs: `USERPREFS_*` values for the rebuild before upload.
+        build_flags: `-D` macros for the rebuild before upload; pass them here or that
+            rebuild drops them.
     """
     pending = await confirm_mod.gate(ctx, f"flash {env} onto {port}", confirm)
     if pending is not None:
@@ -209,21 +245,26 @@ async def flash_start(
     confirm: bool = False,
     userprefs: dict[str, Any] | None = None,
     build_flags: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> FlashStartResult:
     """Start a firmware flash in the background and return immediately.
 
-    Returns a `job_id` within ~1 second. Poll with `flash_poll(job_id=...)` until
-    status is 'done' or 'failed'. Use this instead of `pio_flash` when your client
-    does not run MCP tasks, since the upload routinely exceeds a 60 s call timeout.
-    Requires confirm=True, or the user's answer when the client can ask. A busy
-    port fails here, not on the first poll.
+    Returns `{job_id, status, log_path}` within ~1 second, with status "running". Poll
+    with `flash_poll(job_id=...)` until status is 'done' or 'failed'. Use this instead of
+    `pio_flash` when your client does not run MCP tasks, since the upload routinely exceeds
+    a 60 s call timeout. Requires confirm=True, or the user's answer when the client can
+    ask. A busy port fails here, not on the first poll.
 
-    Returns:
-        {job_id: str, status: "running", log_path: str}
+    Args:
+        env: The PlatformIO env to flash.
+        port: The board's serial port as `list_devices` reports it.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+        userprefs: `USERPREFS_*` values for the rebuild before upload.
+        build_flags: `-D` macros for the rebuild before upload.
     """
     pending = await confirm_mod.gate(ctx, f"flash {env} onto {port}", confirm)
     if pending is not None:
-        return cast(dict[str, Any], pending)
+        return cast(FlashStartResult, pending)
     return await _off_loop(
         lambda: flash.flash_start(
             env,
@@ -239,13 +280,16 @@ async def flash_start(
 def flash_poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
     """Poll the status of a flash job.
 
-    `job_id` comes from `flash_start`, or from the result or the logged
-    "flashes job <id> started" line of `pio_flash`, `erase_and_flash`,
-    `update_flash` and `nrf52_flash_uf2`. A flash keeps running after its call
-    is canceled, so poll it to the end before touching the board.
-    Returns status (running/done/failed), elapsed_s, exit_code, `error` when the
-    cause is known, and the last `tail_lines` lines of output. Call every few seconds
-    until terminal. Ids do not survive a server restart.
+    A flash keeps running after its call is canceled, so poll it to the end before
+    touching the board. Returns status (running/done/failed), elapsed_s, exit_code, `error`
+    when the cause is known, and the last `tail_lines` lines of output. Call every few
+    seconds until terminal. Ids do not survive a server restart.
+
+    Args:
+        job_id: Id from `flash_start`, or from the result or the logged
+            "flashes job <id> started" line of `pio_flash`, `erase_and_flash`,
+            `update_flash` and `nrf52_flash_uf2`.
+        tail_lines: How many trailing log lines to return.
     """
     return flash.flash_poll(job_id, tail_lines=tail_lines)
 
@@ -262,11 +306,21 @@ async def erase_and_flash(
     """ESP32 only: erase the whole flash and write the factory image (bin/device-install.sh).
 
     Writes bootloader, app, OTA and LittleFS from the factory.bin, building it first if it
-    is missing (`skip_build=True` requires a prior build). Requires confirm=True, or the
-    user's answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
-    Runs as a background task where supported; the flash cannot be canceled mid-write,
-    so after a cancel or timeout follow its `job_id` with `flash_poll`. `userprefs` bakes
-    values in and forces a rebuild. See docs/firmware-builds.md.
+    is missing. Requires confirm=True, or the user's answer when the client can ask
+    (always, with `MESHTASTIC_MCP_CONFIRM=human`). Runs as a background task where
+    supported; the flash cannot be canceled mid-write, so after a cancel or timeout follow
+    its `job_id` with `flash_poll`. See docs/firmware-builds.md.
+
+    Returns `{job_id, exit_code, stdout_tail, stderr_tail, duration_s, ...}`.
+
+    Args:
+        env: The PlatformIO env to flash.
+        port: The board's serial port as `list_devices` reports it.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+        skip_build: `skip_build=True` requires a prior build instead of building a missing
+            image; it cannot combine with `userprefs`.
+        userprefs: `USERPREFS_*` values to bake in; forces a rebuild.
     """
     pending = await confirm_mod.gate(
         ctx, f"erase the whole flash of {port} and flash {env}", confirm, irreversible=True
@@ -298,8 +352,19 @@ async def update_flash(
     Faster than `erase_and_flash`, but cannot recover a broken bootloader. Requires
     confirm=True, or the user's answer when the client can ask. Runs as a background task
     where supported; the flash cannot be canceled mid-write, so after a cancel or timeout
-    follow its `job_id` with `flash_poll`. Builds first if needed; `userprefs` bakes values
-    into the firmware.bin and forces a rebuild. See docs/firmware-builds.md.
+    follow its `job_id` with `flash_poll`. Builds first if needed. See
+    docs/firmware-builds.md.
+
+    Returns `{job_id, exit_code, stdout_tail, stderr_tail, duration_s, ...}`.
+
+    Args:
+        env: The PlatformIO env to flash.
+        port: The board's serial port as `list_devices` reports it.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+        skip_build: Require a prior build instead of building a missing image; it cannot
+            combine with `userprefs`.
+        userprefs: `USERPREFS_*` values to bake into the firmware.bin; forces a rebuild.
     """
     pending = await confirm_mod.gate(ctx, f"OTA-update {port} with {env}", confirm)
     if pending is not None:
@@ -319,8 +384,10 @@ async def update_flash(
 
 @firmware_tool()
 def userprefs_manifest() -> dict[str, Any]:
-    """Full manifest of the `USERPREFS_*` keys the firmware knows: `userPrefs.jsonc` (active
-    and commented examples) plus every key `src/**` consumes.
+    """Full manifest of the `USERPREFS_*` keys the firmware knows.
+
+    Covers `userPrefs.jsonc` (active and commented examples) plus every key `src/**`
+    consumes.
 
     Each entry has key, active, value, example, declared_in_jsonc, consumed_by and
     inferred_type (brace|number|bool|enum|string|unknown), which mirrors how
@@ -350,10 +417,14 @@ def userprefs_get() -> dict[str, Any]:
 def userprefs_set(prefs: dict[str, Any]) -> dict[str, Any]:
     """Merge `prefs` into userPrefs.jsonc persistently (uncommenting keys).
 
-    Existing active values not in `prefs` are kept. To remove a key from the
-    active set, call `userprefs_reset` (restores the MCP backup if present)
-    or edit the jsonc manually. Values are stringified the way
-    platformio-custom.py expects (bool → "true"/"false", int → "42", etc.).
+    Existing active values not in `prefs` are kept. To remove a key from the active set,
+    call `userprefs_reset` (restores the MCP backup if present) or edit the jsonc manually.
+
+    Returns `{before_active, after_active, path}`.
+
+    Args:
+        prefs: `USERPREFS_*` keys to values, stringified the way platformio-custom.py
+            expects (bool → "true"/"false", int → "42", etc.).
     """
     return userprefs_mod.merge_active(prefs)
 
@@ -362,10 +433,10 @@ def userprefs_set(prefs: dict[str, Any]) -> dict[str, Any]:
 def userprefs_reset() -> dict[str, Any]:
     """Restore userPrefs.jsonc from the most recent MCP backup (if any).
 
-    The backup is only created by the legacy `userprefs_set` workflow (not
-    currently written automatically). Returns `{restored: bool, ...}` — false
-    when no backup is present, in which case the caller should edit the
-    jsonc directly.
+    The backup is only created by the legacy `userprefs_set` workflow (not currently
+    written automatically). Returns `{restored, path, backup_path}`; `restored` is a `bool`,
+    false when no backup is present, in which case the caller should edit the jsonc
+    directly.
     """
     return userprefs_mod.reset()
 
@@ -384,41 +455,33 @@ def userprefs_testing_profile(
 ) -> dict[str, Any]:
     """Generate a USERPREFS dict for provisioning an isolated test-mesh device.
 
-    Baking this into firmware produces devices that:
-      - Run on a deterministic non-default LoRa slot (default 88 on US LONG_FAST,
-        well off the `hash("LongFast")` slot a stock production device uses)
-      - Join a private channel with a name and PSK that differ from public
-        defaults — so no accidental mesh-with-production-devices
-      - Have MQTT disabled (no uplink/downlink bridge), so test traffic never
-        leaks to a public broker
-      - Optionally disable GPS for bench-test conditions
+    Baking this into firmware produces devices that run on a deterministic non-default
+    LoRa slot (default 88 on US LONG_FAST, well off the `hash("LongFast")` slot a stock
+    production device uses), join a private channel with a name and PSK that differ from
+    public defaults (so no accidental mesh with production devices), have MQTT disabled
+    (no uplink/downlink bridge, so test traffic never leaks to a public broker), and can
+    disable GPS for bench-test conditions.
 
-    For a multi-device test cluster, pass the same `psk_seed` to every call so
-    every device shares the same PSK and lands on the same isolated mesh.
-
-    Returned dict is ready to pass straight to `build`, `pio_flash`,
-    `erase_and_flash`, or `update_flash` via their `userprefs` parameter.
-
-    Example:
-        profile = userprefs_testing_profile(psk_seed="ci-run-2026-04-16")
-        erase_and_flash(env="tbeam", port="/dev/cu.usbmodem...", confirm=True,
-                        userprefs=profile)
+    For a multi-device test cluster, pass the same `psk_seed` to every call so every device
+    shares the same PSK and lands on the same isolated mesh. The returned dict is ready to
+    pass straight to `build`, `pio_flash`, `erase_and_flash`, or `update_flash` via their
+    `userprefs` parameter, e.g. `userprefs_testing_profile(psk_seed="ci-run-2026-04-16")`
+    then `erase_and_flash(env="tbeam", port=..., confirm=True, userprefs=profile)`.
 
     Args:
-        psk_seed: seed for deterministic 32-byte PSK via SHA-256. None = random
-            (fine one-off, useless for multi-device clusters).
-        channel_name: primary channel name (≤11 chars). Default "McpTest".
-        channel_num: 1-indexed LoRa slot (0 = fall back to name-hash). Default
-            88 — mid-upper US band, unlikely to collide with production slots.
-        region: short code — one of US, EU_433, EU_868, CN, JP, ANZ, KR, TW,
-            RU, IN, NZ_865, TH, UA_433, UA_868, MY_433, MY_919, SG_923, LORA_24.
-        modem_preset: one of LONG_FAST, LONG_SLOW, LONG_MODERATE, VERY_LONG_SLOW,
+        psk_seed: Seed for a deterministic 32-byte PSK via SHA-256. None = random (fine
+            one-off, useless for multi-device clusters).
+        channel_name: Primary channel name (≤11 chars). Default "McpTest".
+        channel_num: 1-indexed LoRa slot (0 = fall back to name-hash). Default 88: mid-upper
+            US band, unlikely to collide with production slots.
+        region: Short code, one of US, EU_433, EU_868, CN, JP, ANZ, KR, TW, RU, IN, NZ_865,
+            TH, UA_433, UA_868, MY_433, MY_919, SG_923, LORA_24.
+        modem_preset: One of LONG_FAST, LONG_SLOW, LONG_MODERATE, VERY_LONG_SLOW,
             MEDIUM_SLOW, MEDIUM_FAST, SHORT_SLOW, SHORT_FAST, SHORT_TURBO.
-        short_name: optional owner short name (≤4 chars) stamped into the build.
-        long_name: optional owner long name stamped into the build.
-        disable_mqtt: disable MQTT module + uplink/downlink (default True).
-        disable_position: disable GPS + smart-position broadcasts (default False).
-
+        short_name: Optional owner short name (≤4 chars) stamped into the build.
+        long_name: Optional owner long name stamped into the build.
+        disable_mqtt: Disable the MQTT module + uplink/downlink (default True).
+        disable_position: Disable GPS + smart-position broadcasts (default False).
     """
     return userprefs_mod.build_testing_profile(
         psk_seed=psk_seed,
@@ -448,13 +511,26 @@ async def push_fake_nodedb(
     reboot_after: bool = True,
     custom_seed_jsonl: str | None = None,
 ) -> dict[str, Any]:
-    """Push a fake-NodeDB v25 fixture (250/500/1000/2000 nodes) onto a device.
+    """Push a fake-NodeDB v25 fixture onto a device.
 
     `target="portduino"` copies it to `~/.portduino/<portduino_config>/prefs/nodes.proto`
     with no device connection. `target="hardware"` uploads it over XModem to
     `/prefs/nodes.proto` and reboots the device; that needs `port` and confirm=True, or the
     user's answer when the client can ask. Each call stamps fresh timestamps onto the
     committed seed, or onto `custom_seed_jsonl`. See docs/firmware-builds.md.
+
+    Args:
+        size: Node count: 250, 500, 1000 or 2000.
+        target: `portduino` or `hardware`.
+        port: The device's serial port, needed for `hardware`; TCP endpoints are rejected.
+        portduino_config: The portduino instance dir under `~/.portduino/`.
+        backup_existing: `portduino` only: move an existing nodes.proto to
+            nodes.proto.bak.<ts> first, for a rollback.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human. Only `hardware` asks.
+        reboot_after: `hardware` only: reboot after the upload so the node loads the file.
+        custom_seed_jsonl: Path to a hand-edited JSONL seed to use instead of the committed
+            one.
     """
     if target == "hardware":
         pending = await confirm_mod.gate(

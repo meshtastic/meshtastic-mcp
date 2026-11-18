@@ -24,10 +24,16 @@ def summarize_window(
     """Distill a recorder window into a short summary via a **local** model (offload).
 
     Sends the window's logs, packets and events to the local model instead of the agent's
-    context and asks for a terse summary focused on `focus` (e.g. "errors", "reboots",
-    "who talked to whom"); `lane` picks the model (`fast`/`default`). Returns `{summary,
-    model, counts}`. The summary is an untrusted draft: verify it against the raw windows
-    before acting on anything correctness-critical. See docs/local-models.md.
+    context and asks for a terse summary. The summary is an untrusted draft: verify it against
+    the raw windows before acting on anything correctness-critical. See docs/local-models.md.
+
+    Returns `{summary, model, counts}`.
+
+    Args:
+        start: Window start, e.g. `-5m`, `now`, or epoch/ISO.
+        end: Window end, in the same forms.
+        focus: What to focus the summary on, e.g. "errors", "reboots", "who talked to whom".
+        lane: Model lane, `fast` or `default`.
     """
     import json
 
@@ -73,8 +79,14 @@ def vision_oracle(image_path: str, question: str) -> dict[str, Any]:
     The `vision-oracle.md` fallback for when the a11y tree is empty (WebView, Canvas, map,
     mid-animation): ask a yes/no question, e.g. `vision_oracle("/tmp/shot.png", "Does a
     message bubble containing 'E2E-1782' appear?")`. The image never leaves the host.
-    Returns `{match: bool, answer, evidence, model}`. A draft oracle: prefer the a11y tree
-    when it works. Needs a multimodal local model (`MESHTASTIC_MCP_LOCAL_VISION`).
+    A draft oracle: prefer the a11y tree when it works. Needs a multimodal local model
+    (`MESHTASTIC_MCP_LOCAL_VISION`).
+
+    Returns `{match: bool, answer, evidence, model}`.
+
+    Args:
+        image_path: Path to the screenshot image on this host.
+        question: A yes/no question about the screenshot.
     """
     from .. import local_model
 
@@ -92,10 +104,16 @@ def triage_window(
 
     Asks the local model to put the device-plane window (logs, packets, events) in one
     bucket, `never_sent`, `sent_not_received`, `received_not_rendered` or
-    `rendered_not_asserted`, with one line of evidence, as `triage.md` does. `token`
-    scopes it to a marker; `screenshot` folds in a local vision read of the app. Returns
-    `{bucket, reasoning, vision, counts}`. **The agent owns the PASS/FAIL verdict**: this
-    is a draft hypothesis to confirm against the raw artifacts.
+    `rendered_not_asserted`, with one line of evidence, as `triage.md` does. **The agent owns
+    the PASS/FAIL verdict**: this is a draft hypothesis to confirm against the raw artifacts.
+
+    Returns `{bucket, reasoning, vision, counts}`.
+
+    Args:
+        start: Window start, e.g. `-2m`, `now`, or epoch/ISO.
+        end: Window end, in the same forms.
+        token: Marker token that scopes the triage, such as the message the test sent.
+        screenshot: Path to an app screenshot; folds in a local vision read of the app.
     """
     import json
 
@@ -153,9 +171,11 @@ def triage_window(
 def local_model_status() -> dict[str, Any]:
     """Report the local-model backend: which one, reachability, and models.
 
-    Shows the active backend (``ollama`` or ``openai``), its URL, whether it
-    answers, the model lanes in use, and — if a llama.cpp server is managed here —
+    Shows the active backend (`ollama` or `openai`), its URL, whether it
+    answers, the model lanes in use, and, if a llama.cpp server is managed here,
     its pid/url. Registered when a backend is reachable or a `llama` binary exists.
+
+    Returns `{backend, url, reachable, models, lanes, llama_server}`.
     """
     from .. import llama_server, local_model
 
@@ -178,10 +198,17 @@ def local_model_serve(
     """Start a self-contained llama.cpp server (the Gemma 4 one-liner) as the backend.
 
     Runs `llama serve -hf <model_ref> --port <port>` detached, waits for its
-    OpenAI-compatible `/v1`, and points this process at it (backend=openai).
-    `install=True` fetches the llama.cpp binary first (networked). The offload tools
-    register at startup, so to get them against a fresh llama-server, set the env and
+    OpenAI-compatible `/v1`, and points this process at it (backend=openai). The offload
+    tools register at startup, so to get them against a fresh llama-server, set the env and
     start it before the MCP server. See docs/local-models.md.
+
+    Returns `{ok, url, log, pid, port, model}`, or `{ok: false, error}` with `stage` set to
+    `install` when the install failed.
+
+    Args:
+        model_ref: Hugging Face GGUF repo to serve.
+        port: Local port for the server.
+        install: Set `install=True` to fetch the llama.cpp binary first (networked).
     """
     import os
 
@@ -203,7 +230,10 @@ def local_model_serve(
 
 @local_serve_tool()
 def local_model_serve_stop() -> dict[str, Any]:
-    """Stop the llama.cpp server started by ``local_model_serve`` (if any)."""
+    """Stop the llama.cpp server started by `local_model_serve` (if any).
+
+    Returns `{ok, stopped, pid}`, or `{ok, stopped: false, reason}` when none is tracked.
+    """
     from .. import llama_server
 
     return llama_server.stop()

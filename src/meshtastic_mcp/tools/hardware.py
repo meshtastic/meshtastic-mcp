@@ -27,6 +27,7 @@ from .. import (
 )
 from .. import confirm as confirm_mod
 from .. import tasks as tasks_mod
+from ..schemas import SerialCloseResult
 from ._app import app
 from ._shared import _confirmed_hw_call, _off_loop, _run_job
 
@@ -40,6 +41,12 @@ def touch_1200bps(port: str, settle_ms: int = 250) -> dict[str, Any]:
     Then reports the bootloader's port: a new one, or the same node under a new PID (Linux
     keeps the /dev/ttyACM node and renames the /dev/serial/by-id link). Erases nothing; it
     is annotated destructive because it reboots the device.
+
+    Returns `{ok, former_port, new_port, new_port_vid_pid, ...}`.
+
+    Args:
+        port: The board's serial port.
+        settle_ms: Milliseconds to hold the port open at 1200 baud before closing it.
     """
     return flash.touch_1200bps(port, settle_ms=settle_ms)
 
@@ -56,12 +63,19 @@ def serial_open(
 ) -> dict[str, Any]:
     """Open a `pio device monitor` session reading from `port`.
 
-    Needs PlatformIO and `MESHTASTIC_FIRMWARE_ROOT`. With `env`, pio takes
-    `monitor_speed` and `monitor_filters` from platformio.ini, which turns on the ESP32
-    exception decoders for firmware debugging. Without it, `baud` and `filters` apply
-    (default ["direct"]; others: time, hexlify, esp32_exception_decoder,
-    esp32_c3_exception_decoder, log2file). Returns a `session_id` for `serial_read` /
+    Needs PlatformIO and `MESHTASTIC_FIRMWARE_ROOT`. The session holds the port until
+    `serial_close`, so the admin tools cannot use it meanwhile. Returns `{session_id,
+    resolved_baud, resolved_filters, env}`: the `session_id` for `serial_read` /
     `serial_close`, plus the baud and filters pio resolved.
+
+    Args:
+        port: The serial port to read.
+        baud: Line speed, used without `env`.
+        env: A PlatformIO env whose `monitor_speed` and `monitor_filters` pio takes from
+            platformio.ini, which turns on the ESP32 exception decoders for firmware
+            debugging.
+        filters: Monitor filters, used without `env`: default ["direct"]; others are time,
+            hexlify, esp32_exception_decoder, esp32_c3_exception_decoder, log2file.
     """
     # Enforce the exclusive-port invariant atomically. The admin path
     # (connection.connect) already checks active_session_for_port + holds
@@ -100,12 +114,15 @@ def serial_read(
 ) -> dict[str, Any]:
     """Read buffered lines from a serial monitor session.
 
-    Default: returns everything since your last call to serial_read (uses an
-    advancing cursor). Pass `since_cursor=N` to re-read from a specific point,
-    or `since_cursor=0` to read from the start of the in-memory buffer.
+    Returns `{lines, new_cursor, eof, dropped}`. `dropped` counts lines that aged out of
+    the 10k-line ring buffer between reads, so a value > 0 means you missed data.
 
-    Returns `dropped` = count of lines that aged out of the 10k-line ring
-    buffer between reads — so a value > 0 means you missed data.
+    Args:
+        session_id: Id from `serial_open`.
+        max_lines: Cap on the lines returned.
+        since_cursor: Omit to get everything since your last `serial_read` (an advancing
+            cursor). Pass `since_cursor=N` to re-read from a specific point, or
+            `since_cursor=0` to read from the start of the in-memory buffer.
     """
     session = registry.get_session(session_id)
     return serial_session.read_session(session, max_lines=max_lines, since_cursor=since_cursor)
@@ -118,11 +135,13 @@ def serial_list() -> list[dict[str, Any]]:
 
 
 @app.tool()
-def serial_close(session_id: str) -> dict[str, Any]:
+def serial_close(session_id: str) -> SerialCloseResult:
     """Terminate a serial monitor session and free its port.
 
-    Returns:
-        {ok: true} on success, or {ok: false, reason: str} if session unknown.
+    Returns `{ok: true}` on success, or `{ok: false, reason}` if the session is unknown.
+
+    Args:
+        session_id: Id from `serial_open`.
     """
     session = registry.remove_session(session_id)
     if session is None:
@@ -135,10 +154,16 @@ def serial_close(session_id: str) -> dict[str, Any]:
 def capture_screen(role: str | None = None, ocr: bool = True) -> dict[str, Any]:
     """Grab a frame from the USB webcam pointed at the device screen.
 
-    Returns PNG bytes (base64), optional OCR text, and backend metadata.
-    Requires the `[ui]` extras (opencv-python-headless) and a camera
-    configured via `MESHTASTIC_UI_CAMERA_DEVICE[_<ROLE>]`. Falls back to a
-    1×1 black PNG from the null backend when no camera is configured.
+    Returns `{backend, bytes, image_base64, ocr_backend?, ocr_text?}`: PNG bytes (base64),
+    optional OCR text, and backend metadata. Requires the `[ui]` extras
+    (opencv-python-headless) and a camera configured via
+    `MESHTASTIC_UI_CAMERA_DEVICE[_<ROLE>]`. Falls back to a 1×1 black PNG from the null
+    backend when no camera is configured. The screen can show mesh-sourced text.
+
+    Args:
+        role: Which camera, picking `MESHTASTIC_UI_CAMERA_DEVICE_<ROLE>`; omit for the
+            default one.
+        ocr: Also run OCR on the frame.
     """
     import base64
 
@@ -194,14 +219,23 @@ async def uhubctl_power(
     """Power a USB hub port on or off (`uhubctl -a on|off`, or `vhfilter
     --switch-port` on Windows).
 
-    Target the port by either (`location`, `port`) — e.g. `location="1-1.3",
-    port=2`, or a PnP device path on Windows, as `uhubctl_list` reports it —
-    OR by `role` ("nrf52", "esp32s3"). Role lookup honors
-    `MESHTASTIC_UHUBCTL_LOCATION_<ROLE>` + `_PORT_<ROLE>` env vars first,
-    falls back to VID auto-detection.
+    Target the port by either (`location`, `port`), e.g. `location="1-1.3", port=2` as
+    `uhubctl_list` reports it, OR by `role`, never both. `action="off"` requires
+    `confirm=True`, or the user's answer when the client can ask: the attached device
+    disappears from the OS at once. `on` never asks.
 
-    `action="off"` requires `confirm=True`, or the user's answer when the client
-    can ask: the attached device disappears from the OS at once. `on` never asks.
+    Returns `{action, location, port, delay_s, duration_s, ...}`.
+
+    Args:
+        action: `on` or `off`.
+        location: The hub location from `uhubctl_list`: uhubctl notation, or a PnP device
+            path on Windows.
+        port: The port number on that hub.
+        role: A device role ("nrf52", "esp32s3"). Role lookup honors
+            `MESHTASTIC_UHUBCTL_LOCATION_<ROLE>` + `_PORT_<ROLE>` env vars first, then
+            falls back to VID auto-detection.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human. Only `off` asks.
     """
     from .. import uhubctl as uhubctl_mod
 
@@ -229,11 +263,21 @@ async def uhubctl_cycle(
 ) -> dict[str, Any]:
     """Power a USB hub port off, wait `delay_s` seconds, then on.
 
-    The hard reset for a board whose USB serial has wedged (calls to it fail
-    with "Power-cycle it (uhubctl_cycle)"). One call instead of off+on, with the
-    timing handled in-process. Target by (location, port) from `uhubctl_list`,
-    or by role (see `uhubctl_power`). Requires `confirm=True`, or the user's
-    answer when the client can ask.
+    The hard reset for a board whose USB serial has wedged (calls to it fail with
+    "Power-cycle it (uhubctl_cycle)"). One call instead of off+on, with the timing handled
+    in-process. Target by (location, port) from `uhubctl_list`, or by role (see
+    `uhubctl_power`). Requires `confirm=True`, or the user's answer when the client can
+    ask.
+
+    Returns `{action, location, port, delay_s, duration_s, ...}`.
+
+    Args:
+        location: The hub location from `uhubctl_list`.
+        port: The port number on that hub.
+        role: A device role, resolved as in `uhubctl_power`; not with `location`/`port`.
+        delay_s: Seconds the port stays off, 0..60.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
     """
     from .. import uhubctl as uhubctl_mod
 
@@ -268,8 +312,11 @@ def _resolve_uhubctl_target(
 def esptool_chip_info(port: str) -> dict[str, Any]:
     """Run `esptool flash_id` and return chip, MAC, crystal, and flash size.
 
-    Read-only — no confirm required. Prefer this over parsing pio upload logs
-    when you just want to identify the chip.
+    Read-only, so no confirm is required. Prefer this over parsing pio upload logs when you
+    just want to identify the chip.
+
+    Args:
+        port: The ESP32's serial port.
     """
     return hw_tools.esptool_chip_info(port)
 
@@ -278,9 +325,14 @@ def esptool_chip_info(port: str) -> dict[str, Any]:
 async def esptool_erase_flash(ctx: Context, port: str, confirm: bool = False) -> dict[str, Any]:
     """Full-chip erase via `esptool erase_flash`. Leaves the device unbootable.
 
-    Prefer `erase_and_flash` which also writes firmware. Use this only for
-    recovery when a device is in a weird state. Requires confirm=True, or the user's answer when
-    the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
+    Prefer `erase_and_flash` which also writes firmware. Use this only for recovery when a
+    device is in a weird state. Requires confirm=True, or the user's answer when the client
+    can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
+
+    Args:
+        port: The ESP32's serial port.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
     """
     return await _confirmed_hw_call(
         ctx, lambda c: hw_tools.esptool_erase_flash(port, confirm=c), confirm
@@ -291,16 +343,24 @@ async def esptool_erase_flash(ctx: Context, port: str, confirm: bool = False) ->
 async def esptool_raw(
     ctx: Context, args: list[str], port: str | None = None, confirm: bool = False
 ) -> dict[str, Any]:
-    """Pass-through to `esptool`. Destructive subcommands (write_flash,
-    erase_flash, erase_region, merge_bin) require confirm=True, or the user's
-    answer when the client can ask; other subcommands run without asking.
+    """Pass-through to `esptool`.
 
-    Prefer the high-level `pio_flash` / `erase_and_flash` / `update_flash`
-    tools where possible — they know board-specific offsets and protocols.
+    Destructive subcommands (write_flash, erase_flash, erase_region, merge_bin) require
+    confirm=True, or the user's answer when the client can ask; other subcommands run
+    without asking. Prefer the high-level `pio_flash` / `erase_and_flash` / `update_flash`
+    tools where possible; they know board-specific offsets and protocols.
 
-    Security: `args` is passed directly to the esptool binary. All arguments
-    must come from a trusted source — do not allow untrusted content (e.g.
-    mesh packet payloads) to flow into argument lists.
+    Security: `args` is passed directly to the esptool binary. All arguments must come from
+    a trusted source; do not allow untrusted content (e.g. mesh packet payloads) to flow
+    into argument lists.
+
+    Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
+
+    Args:
+        args: The esptool arguments, from a trusted source only.
+        port: Serial port, passed as `--port`; omit to leave it to `args` or esptool.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human. Only destructive subcommands ask.
     """
     return await _confirmed_hw_call(
         ctx, lambda c: hw_tools.esptool_raw(args, port=port, confirm=c), confirm
@@ -313,15 +373,19 @@ async def nrfutil_dfu(
 ) -> dict[str, Any]:
     """DFU-flash a .zip package to an nRF52840 via `nrfutil dfu serial`.
 
-    `port` is the app's serial port; a `/dev/serial/by-id` link works. With
-    adafruit-nrfutil the transfer uses `--singlebank` and fails unless the run
-    printed "Device programmed."; where `/dev/serial/by-id` exists the tool does
-    the 1200 baud touch itself (dropping DTR) and waits for the bootloader,
-    elsewhere it passes `-t 1200`. For a board already sitting in
-    serial DFU, use `nrfutil_raw` with no touch instead. On the Meshtastic
-    bootloader `nrf52_flash_uf2` is several times faster; for firmware built
-    from the tree prefer `pio_flash`. Requires confirm=True, or the user's
+    With adafruit-nrfutil the transfer uses `--singlebank` and fails unless the run printed
+    "Device programmed."; where `/dev/serial/by-id` exists the tool does the 1200 baud
+    touch itself (dropping DTR) and waits for the bootloader, elsewhere it passes
+    `-t 1200`. For a board already sitting in serial DFU, use `nrfutil_raw` with no touch
+    instead. On the Meshtastic bootloader `nrf52_flash_uf2` is several times faster; for
+    firmware built from the tree prefer `pio_flash`. Requires confirm=True, or the user's
     answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
+
+    Args:
+        port: The app's serial port; a `/dev/serial/by-id` link works.
+        package_path: The DFU .zip package.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
     """
     return await _confirmed_hw_call(
         ctx, lambda c: hw_tools.nrfutil_dfu(port, package_path, confirm=c), confirm
@@ -330,25 +394,36 @@ async def nrfutil_dfu(
 
 @app.tool()
 async def nrfutil_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
-    """Pass-through to `nrfutil`. dfu/settings subcommands require confirm=True,
-    or the user's answer when the client can ask.
+    """Pass-through to `nrfutil`.
 
-    Recovers an nRF52 left sitting in serial DFU, with no touch:
+    dfu/settings subcommands require confirm=True, or the user's answer when the client can
+    ask. Recovers an nRF52 left sitting in serial DFU, with no touch, as
     `args=["dfu", "serial", "--package", "<zip>", "--port", "/dev/ttyACM0",
     "-b", "115200", "--singlebank"]` (adafruit-nrfutil).
 
-    Security: `args` is passed directly to the nrfutil binary. All arguments
-    must come from a trusted source — do not allow untrusted content to flow
-    into argument lists.
+    Security: `args` is passed directly to the nrfutil binary. All arguments must come from
+    a trusted source; do not allow untrusted content to flow into argument lists.
+
+    Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
+
+    Args:
+        args: The nrfutil arguments, from a trusted source only.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human. Only dfu/settings subcommands ask.
     """
     return await _confirmed_hw_call(ctx, lambda c: hw_tools.nrfutil_raw(args, confirm=c), confirm)
 
 
 @app.tool()
 def picotool_info(port: str | None = None) -> dict[str, Any]:
-    """Run `picotool info -a`. Requires the RP2040 to be in BOOTSEL mode
-    (hold BOOTSEL button while plugging in, or call `touch_1200bps` if the
-    firmware supports 1200bps-reset)."""
+    """Run `picotool info -a`.
+
+    Requires the RP2040 to be in BOOTSEL mode (hold BOOTSEL button while plugging in, or
+    call `touch_1200bps` if the firmware supports 1200bps-reset).
+
+    Args:
+        port: Informational only; picotool finds the device itself.
+    """
     return hw_tools.picotool_info(port=port)
 
 
@@ -356,8 +431,13 @@ def picotool_info(port: str | None = None) -> dict[str, Any]:
 async def picotool_load(ctx: Context, uf2_path: str, confirm: bool = False) -> dict[str, Any]:
     """Load a UF2 to a Pico in BOOTSEL mode via `picotool load -x -t uf2`.
 
-    Prefer `pio_flash` for flashing firmware built from this repo.
-    Requires confirm=True, or the user's answer when the client can ask.
+    Prefer `pio_flash` for flashing firmware built from this repo. Requires confirm=True,
+    or the user's answer when the client can ask.
+
+    Args:
+        uf2_path: The .uf2 file to load.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
     """
     return await _confirmed_hw_call(
         ctx, lambda c: hw_tools.picotool_load(uf2_path, confirm=c), confirm
@@ -366,12 +446,20 @@ async def picotool_load(ctx: Context, uf2_path: str, confirm: bool = False) -> d
 
 @app.tool()
 async def picotool_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
-    """Pass-through to `picotool`. load/reboot/save/erase require confirm=True,
-    or the user's answer when the client can ask; other subcommands run without asking.
+    """Pass-through to `picotool`.
 
-    Security: `args` is passed directly to the picotool binary. All arguments
-    must come from a trusted source — do not allow untrusted content to flow
-    into argument lists.
+    load/reboot/save/erase require confirm=True, or the user's answer when the client can
+    ask; other subcommands run without asking.
+
+    Security: `args` is passed directly to the picotool binary. All arguments must come
+    from a trusted source; do not allow untrusted content to flow into argument lists.
+
+    Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
+
+    Args:
+        args: The picotool arguments, from a trusted source only.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human. Only load/reboot/save/erase ask.
     """
     return await _confirmed_hw_call(ctx, lambda c: hw_tools.picotool_raw(args, confirm=c), confirm)
 
@@ -435,10 +523,13 @@ def nrf52_bootloader_info(port: str | None = None) -> dict[str, Any]:
     """Read the mounted nRF52 bootloader UF2 drive(s): bootloader version, board, SoftDevice,
     whether it accepts the factory-erase file, and any recorded fault (`Last-Fault`).
 
-    With `port`, returns the drive for that board, matched by USB serial: pass the app port you
-    used before, ideally its `/dev/serial/by-id` path, which still works after the link is gone
-    in UF2 mode. Without it, lists every mounted UF2 drive. The board must already be in UF2
-    mode: `nrf52_enter_uf2`, or double-press reset.
+    The board must already be in UF2 mode: `nrf52_enter_uf2`, or double-press reset.
+    Returns `{drive}` for one board, or `{ok, count, drives, searched_roots, ...}`.
+
+    Args:
+        port: Returns the drive for that board, matched by USB serial: pass the app port you
+            used before, ideally its `/dev/serial/by-id` path, which still works after the
+            link is gone in UF2 mode. Without it, lists every mounted UF2 drive.
     """
     if port is not None:
         return {"drive": _uf2_drive(port)}
@@ -454,8 +545,16 @@ async def nrf52_enter_uf2(
     Sends `enter_dfu_mode_request` over the phone API, so the app must be running; for a hung
     app, double-press reset instead. The drive appears within a couple of seconds. The node
     stays in UF2 mode until a UF2 is written to it or it is power-cycled (`uhubctl_cycle`).
-    Keep passing the same `port` to the other `nrf52_*` tools. Requires confirm=True, or the
-    user's answer when the client can ask.
+    Requires confirm=True, or the user's answer when the client can ask.
+
+    Returns `{ok, requested, drive}`.
+
+    Args:
+        port: The serial port of a board attached to this host by USB (the UF2 drive mounts
+            here, so `tcp://` cannot work); omit to auto-select the one likely Meshtastic
+            device. Keep passing the same `port` to the other `nrf52_*` tools.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
     """
     pending = await confirm_mod.gate(
         ctx, f"reboot the node on {port or 'the default port'} into its UF2 bootloader", confirm
@@ -477,6 +576,10 @@ async def nrf52_backup_firmware(port: str | None = None) -> dict[str, Any]:
 
     The dump restores byte-for-byte with `nrf52_flash_uf2`; take one before flashing. Reads
     only; the board stays in UF2 mode. Returns the backup's path.
+
+    Args:
+        port: The board's app port, ideally its `/dev/serial/by-id` path; omit when only one
+            UF2 drive is mounted.
     """
     drive = await _off_loop(lambda: _uf2_drive(port))
     dest = config.mcp_data_dir() / "uf2-backups"
@@ -511,6 +614,13 @@ async def nrf52_flash_uf2(
     user's answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
     result and logged before the wait; follow it with `flash_poll` if the call is canceled. A
     copy the bootloader did not take is a tool error.
+
+    Args:
+        uf2_path: The .uf2 file to copy.
+        port: The board's app port, ideally its `/dev/serial/by-id` path; omit when only one
+            UF2 drive is mounted.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
     """
     drive = await _off_loop(lambda: _uf2_drive(port))
     image = await _off_loop(lambda: _check_softdevice(drive, uf2_path))
@@ -549,6 +659,12 @@ async def nrf52_factory_erase(
     0.9.2-OTAFIX2.4 and later); older ones silently ignore the file, so this refuses them. The
     board must be in UF2 mode and returns to it after the erase. Requires confirm=True, or the
     user's answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
+
+    Args:
+        port: The board's app port, ideally its `/dev/serial/by-id` path; omit when only one
+            UF2 drive is mounted.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
     """
     drive = await _off_loop(lambda: _uf2_drive(port))
     if not ((drive.get("info") or {}).get("factory_erase") or {}).get("supported"):
