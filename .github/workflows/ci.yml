@@ -37,7 +37,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0 # hatch-vcs needs tags
       - uses: astral-sh/setup-uv@v5
@@ -54,7 +54,7 @@ jobs:
   types:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
@@ -70,7 +70,7 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
@@ -96,7 +96,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       # Same steps as release.yml's build, so a broken SPA or wheel fails here, not at the tag.
@@ -133,7 +133,7 @@ jobs:
     # Audit against the published specs: MCP registry server.json schema + Agent Skills SKILL.md.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -155,9 +155,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4 # this repo, for scripts/build_meshtasticd.sh
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 # this repo, for scripts/build_meshtasticd.sh
       - name: Checkout firmware${{ inputs.firmware_ref && format(' @ {0}', inputs.firmware_ref) || '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: meshtastic/firmware
           ref: ${{ inputs.firmware_ref }}
@@ -192,7 +192,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -212,7 +212,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -273,7 +273,7 @@ jobs:
       SIM_NAME: "iPhone 16 Pro"
       BUNDLE_ID: gvh.MeshtasticClient
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -291,7 +291,7 @@ jobs:
 
       # --- App plane: build the iOS-Simulator app via the shared build script ---
       - name: Checkout Meshtastic-Apple${{ inputs.apple_ref && format(' @ {0}', inputs.apple_ref) || '' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: meshtastic/Meshtastic-Apple
           ref: ${{ inputs.apple_ref }}

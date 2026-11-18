@@ -12,7 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0 # hatch-vcs derives the version from the tag
       - uses: actions/setup-node@v4
@@ -71,7 +71,7 @@ jobs:
       contents: read
       id-token: write # registry login via GitHub OIDC, which grants io.github.meshtastic/*
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Install mcp-publisher
