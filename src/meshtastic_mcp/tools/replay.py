@@ -410,8 +410,9 @@ def replay_inject_traceroute(
 ) -> dict[str, Any]:
     """Inject a TRACEROUTE_APP RouteDiscovery reply into a running replay session.
 
-    The engine answers a client's live traceroute requests itself; this pushes an
-    unsolicited reply. See docs/replay.md.
+    The reply references no request, so an app records it as an observed traceroute, not as
+    the answer to one it sent; to test the request UI, send a traceroute from the app, which
+    the engine answers itself. See docs/replay.md.
 
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 

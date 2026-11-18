@@ -550,8 +550,9 @@ async def nrf52_enter_uf2(
     Returns `{ok, requested, drive}`.
 
     Args:
-        port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
-            Meshtastic device. Keep passing the same `port` to the other `nrf52_*` tools.
+        port: The serial port of a board attached to this host by USB (the UF2 drive mounts
+            here, so `tcp://` cannot work); omit to auto-select the one likely Meshtastic
+            device. Keep passing the same `port` to the other `nrf52_*` tools.
         confirm: `True` once the user agreed; omitted, a client that can ask prompts the
             human.
     """

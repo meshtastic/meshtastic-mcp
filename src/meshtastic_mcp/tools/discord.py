@@ -114,7 +114,8 @@ def discord_search(
         has: `image`, `link`, `file`, `embed` or `poll`, or a list of them.
         since: Only messages since this ISO timestamp.
         until: Only messages until this ISO timestamp.
-        pinned: True for pinned messages only, false for unpinned only.
+        pinned: True for pinned messages only, false for unpinned only. `pinned=False` alone
+            is not a filter; give another one with it.
         sort: Result sort order, `timestamp` or `relevance`.
         limit: Hits per page, <=25.
         offset: Hits to skip; pass the previous page's `next_offset`.
