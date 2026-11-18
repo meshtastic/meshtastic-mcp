@@ -17,7 +17,7 @@ jobs:
           fetch-depth: 0 # hatch-vcs derives the version from the tag
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "26"
       # Build the FleetSuite SPA first — the wheel ships it (hatch `artifacts`).
       - run: npm ci && npm run build
         working-directory: web-ui
