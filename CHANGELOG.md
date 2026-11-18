@@ -5,7 +5,14 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-17
+
 ### Added
+- **Typed results and parameter docs** - 17 more tools return typed results, so their
+  `outputSchema` describes the result (38 tools in all), and every tool parameter carries a
+  description in its input schema. Each tool's description also names its result fields,
+  because Claude Code shows the model a tool's description and input schema but not its
+  `outputSchema`. A test keeps tool docstrings free of `Returns:` sections, which fastmcp drops.
 - **Progress notifications** - `build`, the flash tools and the esptool, nrfutil and picotool
   tools report MCP progress while they wait: esptool bytes, UF2 bytes copied, nrfutil packets,
   picotool percent, and the latest build line. A client running them as MCP background tasks
@@ -28,16 +35,19 @@ All notable changes are documented here. Format loosely follows
   pins `core` to an allowlist, so a new tool cannot land there by accident.
 
 ### Changed
-- **Leaner tool list** - tool descriptions are 28% shorter, with the detail in new docs pages
+- **Tool docs reorganized** - descriptions are 28% shorter, with the detail in new docs pages
   (`docs/replay.md`, `docs/firmware-builds.md`, `docs/display-mirror.md`,
-  `docs/screenshot-set.md`, `docs/rf-oracle.md`). The whole list is about 13% smaller, and
-  `MESHTASTIC_MCP_TOOLSETS=core` about 24% smaller.
+  `docs/screenshot-set.md`, `docs/rf-oracle.md`). The new per-parameter descriptions add more
+  than that saves, so the tool list is larger than in 0.3.0; `MESHTASTIC_MCP_TOOLSETS` trims it,
+  and `core` alone is 32 tools.
 - **Tools live in `tools/`** - each toolset's tools are in `src/meshtastic_mcp/tools/<group>.py`
   and `server.py` assembles the app. Every name importable from `meshtastic_mcp.server` still
   is. `tools/list` returns the same tools in a different order.
 - **Dependencies** - every locked package with an open security alert is upgraded, Pillow 13
-  and filelock 4 among them. Renovate is configured for one weekly PR per ecosystem, and CI's
-  build job builds the web UI and smoke-installs the wheel the way a release does.
+  and filelock 4 among them, and `pydantic` is a declared dependency. Renovate is configured for
+  one weekly PR per ecosystem for non-major updates, separate PRs for majors and vulnerability
+  fixes at any time. CI's build job builds the web UI and smoke-installs the wheel the way a
+  release does.
 
 ### Fixed
 - **Replay answers want_config as firmware does** - 69420 (`SPECIAL_NONCE_ONLY_CONFIG`) gets
