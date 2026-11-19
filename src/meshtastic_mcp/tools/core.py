@@ -205,8 +205,11 @@ def get_config(section: str | None = None, port: str | None = None) -> dict[str,
 def set_config(path: str, value: Any, port: str | None = None) -> SetConfigResult:
     """Set one config field via dot-path and write it to the device.
 
-    Idempotent: calling with the same path+value twice leaves identical state. Call
-    `reboot()` afterwards to commit the change to NVS.
+    Idempotent: calling with the same path+value twice leaves identical state. The
+    firmware saves the change itself, and most sections (such as network) restart the
+    radio on their own, so the device may drop off the port for a few seconds. The
+    `lora` section applies live without a restart. No `reboot()` call is needed to
+    commit.
 
     Returns `{ok, path, section, parent, old_value, new_value}`.
 

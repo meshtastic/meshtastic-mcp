@@ -457,7 +457,7 @@ use `want_ack=True` on a direct message, or observe on a second node.
 ```
 get_config(port=<port>, section="lora")     # read — safe, no side effects
 set_config(path="lora.region", value="US", port=<port>)  # write one field by dot-path
-reboot(port=<port>, confirm=True)           # commit NVS — needed after set_config
+# most sections restart the radio themselves; lora applies live. No reboot() needed.
 get_config(port=<port>, section="lora")     # verify round-trip
 ```
 
