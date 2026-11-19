@@ -47,6 +47,7 @@ from . import fixtures as fixtures
 from . import flash as flash
 from . import hw_tools as hw_tools
 from . import jobs as jobs
+from . import leases as leases
 from . import log_query as log_query
 from . import nrf52_bootloader as nrf52_bootloader
 from . import recorder_query as recorder_query
@@ -125,6 +126,7 @@ from .tools.core import _DISPLAY_CAPTURE_DIR as _DISPLAY_CAPTURE_DIR
 from .tools.core import _capture_target as _capture_target
 from .tools.core import _confirm_tx as _confirm_tx
 from .tools.core import capture_display as capture_display
+from .tools.core import claim as claim
 from .tools.core import config_diff as config_diff
 from .tools.core import config_snapshot as config_snapshot
 from .tools.core import config_snapshot_mod as config_snapshot_mod
@@ -150,6 +152,7 @@ from .tools.core import recorder_export as recorder_export
 from .tools.core import recorder_pause as recorder_pause
 from .tools.core import recorder_resume as recorder_resume
 from .tools.core import recorder_status as recorder_status
+from .tools.core import release as release
 from .tools.core import send_input_event as send_input_event
 from .tools.core import send_text as send_text
 from .tools.core import set_channel_url as set_channel_url
@@ -599,6 +602,12 @@ _DESTRUCTIVE = {
     "local_model_serve_stop",  # terminates the managed llama-server process
     "sdk_send_text",  # injects a mesh packet via the Kotlin SDK CLI; cannot be recalled
 }
+# Writes that are neither read-only nor destructive: they change host state another call
+# can undo, and touch no device.
+_ADDITIVE_WRITES = {
+    "claim",  # takes a device lease; `release` or the TTL ends it
+    "release",  # ends the caller's own lease
+}
 # Idempotent writes: calling with identical args leaves the device in identical
 # state. Clients can safely retry these on timeout without side-effects.
 _IDEMPOTENT_WRITES = {
@@ -792,6 +801,79 @@ class _AnnotationTransform(Transform):
         return tool.model_copy(update={"annotations": _annotations_for(tool.name)})
 
 
+# Tools whose `port` is not a device: a recorder filter, a listen port, a hub port, or the
+# device a lease is being taken on.
+_PORT_NOT_A_DEVICE = frozenset(
+    {
+        "claim",
+        "cot_relay_start",
+        "ios_open_url",
+        "logs_window",
+        "replay_start",
+        "telemetry_timeline",
+        "uhubctl_cycle",
+        "uhubctl_power",
+    }
+)
+
+
+def _takes_device_port(tool: Tool) -> bool:
+    props = (tool.parameters or {}).get("properties", {})
+    return "port" in props and tool.name not in _PORT_NOT_A_DEVICE
+
+
+async def _with_lease(lease: str | None = None, **kwargs: Any) -> Any:
+    from fastmcp.tools.tool_transform import forward
+
+    port = kwargs.get("port")
+    try:
+        resolved = connection.resolve_port(port)
+    except connection.ConnectionError:
+        resolved = None  # the tool reports the missing or ambiguous port itself
+    if resolved is not None:
+        try:
+            await anyio.to_thread.run_sync(leases.check, resolved, lease)
+        except leases.LeaseError as exc:
+            raise ToolError(str(exc)) from exc
+    token = leases.CURRENT.set(lease)
+    try:
+        return await forward(**kwargs)
+    finally:
+        leases.CURRENT.reset(token)
+
+
+_LEASE_ARG_DOC = (
+    "The handle from `claim` while you hold this device; omit for a device nobody has claimed."
+)
+
+
+def _lease_aware(tool: Tool) -> Tool:
+    if not _takes_device_port(tool):
+        return tool
+    wrapped = Tool.from_tool(tool, transform_fn=_with_lease)
+    props = dict(wrapped.parameters.get("properties", {}))
+    if "lease" in props:
+        props["lease"] = {**props["lease"], "description": _LEASE_ARG_DOC}
+        wrapped = wrapped.model_copy(
+            update={"parameters": {**wrapped.parameters, "properties": props}}
+        )
+    return wrapped
+
+
+class _LeaseTransform(Transform):
+    """Give every device tool a `lease` argument and refuse a call on someone else's lease."""
+
+    async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
+        return [_lease_aware(t) for t in tools]
+
+    async def get_tool(
+        self, name: str, call_next: GetToolNext, *, version: VersionSpec | None = None
+    ) -> Tool | None:
+        tool = await call_next(name, version=version)
+        return None if tool is None else _lease_aware(tool)
+
+
+app.add_transform(_LeaseTransform())
 app.add_transform(_AnnotationTransform())
 
 

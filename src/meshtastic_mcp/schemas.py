@@ -89,6 +89,19 @@ class LogsWindow(TypedDict, total=False):
     window: QueryWindow
 
 
+class LeaseInfo(TypedDict):
+    device: str
+    port: str
+    holder: str
+    host: str
+    claimed_at: float
+    expires_at: float
+
+
+class ClaimResult(LeaseInfo):
+    lease: str
+
+
 class QueryResult(TypedDict):
     columns: list[str]
     rows: list[list[Any]]
