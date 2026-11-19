@@ -47,6 +47,11 @@ class SerialSession:
     # child (it's holding the controlling terminal via the slave fd). None on
     # platforms without pty support (Windows) or if pty setup failed.
     _stdin_master_fd: int | None = None
+    # Master side of the pty the subprocess writes stdout/stderr to. pio's
+    # `is_terminal()` checks that STDOUT is a tty, so a piped stdout makes it
+    # exit at once. None when pty support is missing (stdout is then a pipe).
+    _stdout_master_fd: int | None = None
+    _stdout_file: Any = None
     buffer: collections.deque = field(
         default_factory=lambda: collections.deque(maxlen=_BUFFER_MAX_LINES)
     )
@@ -77,9 +82,10 @@ def _drain(session: SerialSession) -> None:
     except Exception:  # pragma: no cover - defensive
         pub = None  # type: ignore[assignment]
 
-    assert session.proc.stdout is not None
+    source = session._stdout_file if session._stdout_file is not None else session.proc.stdout
+    assert source is not None
     try:
-        for line in session.proc.stdout:
+        for line in source:
             line_stripped = line.rstrip("\r\n")
             with session.lock:
                 session.buffer.append(line_stripped)
@@ -98,6 +104,55 @@ def _drain(session: SerialSession) -> None:
         pass
     finally:
         session.stopped_at = time.time()
+
+
+def _spawn_monitor(argv: list[str], cwd: str) -> tuple[subprocess.Popen, int | None, int | None]:
+    """Spawn the monitor child on ptys; return `(proc, stdin_master, stdout_master)`.
+
+    `pio device monitor` needs a terminal on both ends. pyserial miniterm's
+    `Console()` calls termios.tcgetattr() on stdin, and pio's `is_terminal()`
+    requires STDOUT to be a tty (despite its "stdin" error message). This MCP
+    server has no controlling tty (it is driven over stdio JSON-RPC), so each
+    end gets a pty slave. stderr shares stdout. The child owns the slave as its
+    controlling terminal (`start_new_session`), so the masters must stay open
+    for the session lifetime: closing one early sends SIGHUP to the child.
+    Callers close the masters (close_session does). Without pty support (Windows)
+    stdin is DEVNULL and stdout a pipe, returned as `None` masters.
+    """
+    if pty is None:
+        proc = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        return proc, None, None
+
+    opened: list[int] = []
+    try:
+        stdin_master, stdin_slave = pty.openpty()
+        opened += [stdin_master, stdin_slave]
+        stdout_master, stdout_slave = pty.openpty()
+        opened += [stdout_master, stdout_slave]
+        proc = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            stdin=stdin_slave,
+            stdout=stdout_slave,
+            stderr=stdout_slave,
+            start_new_session=True,
+        )
+    except BaseException:
+        for fd in opened:
+            os.close(fd)
+        raise
+    # The child holds its own dup of each slave.
+    os.close(stdin_slave)
+    os.close(stdout_slave)
+    return proc, stdin_master, stdout_master
 
 
 def open_session(
@@ -166,44 +221,7 @@ def open_session(
     binary = str(config.pio_bin())
     work_dir = str(config.firmware_root())
 
-    # `pio device monitor` -> pyserial miniterm builds a `Console()` that calls
-    # termios.tcgetattr() on its stdin unconditionally (even though we never
-    # send it keystrokes). When this MCP server itself has no controlling tty
-    # (the normal case — it's driven over stdio JSON-RPC, not a terminal), the
-    # inherited stdin is a pipe/socket and tcgetattr raises
-    # `termios.error: (25, 'Inappropriate ioctl for device')`, crashing pio
-    # before it ever opens the serial port. Fix: hand the child a pty slave as
-    # stdin instead of inheriting ours — it satisfies tcgetattr without
-    # requiring a real interactive terminal. The master fd is kept open for
-    # the session's lifetime (closing it early delivers SIGHUP to the child,
-    # which owns the slave as its controlling terminal via start_new_session).
-    stdin_master_fd: int | None = None
-    popen_kwargs: dict[str, Any] = {}
-    if pty is not None:
-        try:
-            stdin_master_fd, slave_fd = pty.openpty()
-        except OSError:
-            stdin_master_fd = None
-    if stdin_master_fd is not None:
-        popen_kwargs["stdin"] = slave_fd
-        popen_kwargs["start_new_session"] = True  # slave becomes the child's controlling tty
-    else:
-        popen_kwargs["stdin"] = subprocess.DEVNULL
-
-    try:
-        proc = subprocess.Popen(
-            [binary, *args],
-            cwd=work_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,  # line-buffered
-            **popen_kwargs,
-        )
-    finally:
-        if stdin_master_fd is not None:
-            # Parent doesn't need the slave once the child has dup'd it onto fd 0.
-            os.close(slave_fd)
+    proc, stdin_master_fd, stdout_master_fd = _spawn_monitor([binary, *args], work_dir)
 
     session = SerialSession(
         id=uuid.uuid4().hex,
@@ -213,7 +231,13 @@ def open_session(
         env=env,
         proc=proc,
         _stdin_master_fd=stdin_master_fd,
+        _stdout_master_fd=stdout_master_fd,
     )
+    if stdout_master_fd is not None:
+        # closefd=False: close_session owns the fd, so the file object never double-closes.
+        session._stdout_file = open(  # noqa: SIM115 - lifetime is the session's
+            stdout_master_fd, buffering=1, errors="replace", closefd=False
+        )
     t = threading.Thread(target=_drain, args=(session,), daemon=True)
     t.start()
     session._thread = t
@@ -277,12 +301,15 @@ def close_session(session: SerialSession) -> bool:
                 pass  # already SIGKILLed; reap will happen eventually
     if session._thread is not None:
         session._thread.join(timeout=3)
-    if session._stdin_master_fd is not None:
-        try:
-            os.close(session._stdin_master_fd)
-        except OSError:
-            pass
-        session._stdin_master_fd = None
+    session._stdout_file = None  # closefd=False; the fd is closed below
+    for attr in ("_stdin_master_fd", "_stdout_master_fd"):
+        fd = getattr(session, attr)
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            setattr(session, attr, None)
     session.stopped_at = session.stopped_at or time.time()
     return True
 
