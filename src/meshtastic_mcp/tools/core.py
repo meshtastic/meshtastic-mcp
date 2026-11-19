@@ -207,9 +207,9 @@ def set_config(path: str, value: Any, port: str | None = None) -> SetConfigResul
 
     Idempotent: calling with the same path+value twice leaves identical state. The
     firmware saves the change itself, and most sections (such as network) restart the
-    radio on their own, so the device may drop off the port for a few seconds. The
-    `lora` section applies live without a restart. No `reboot()` call is needed to
-    commit.
+    radio on their own, so the device may drop off the port for a few seconds. On
+    firmware 2.8.0 and later the `lora` section applies live without a restart;
+    older firmware restarts for it too. No `reboot()` call is needed to commit.
 
     Returns `{ok, path, section, parent, old_value, new_value}`.
 
