@@ -34,5 +34,17 @@ python -m evals.runner --devices devices.json --mcp-config bench.mcp.json --labe
 run on the james-pc bench. The bench is shared, so check for other sessions' servers first, and
 resolve ports by `/dev/serial/by-id/`.
 
-Results go to `evals/results/<label>.json` (not committed). Copy the run for `master` to
-`baseline.json` once it has run against the full fleet.
+Results go to `evals/results/<label>.json` (not committed). Each result keeps the first 2,000
+characters of the agent's answer, so a failed check can be judged by hand.
+
+## Baseline
+
+`baseline.json` is `master` at `3b3792d` on the james-pc bench: 10 of 11 scored tasks pass, at
+$1.34 and 88 tool calls for the 12 tasks run. The destructive tasks and the emulator-dependent
+waypoint task were not run. `telemetry-last-hour` fails because `telemetry_timeline` does not
+say which node a reading came from, so the agent cannot separate the radio's own battery from
+relayed ones.
+
+It is one run per task. The same task can pass in one run and fail the next: earlier runs gave
+`telemetry-last-hour` both outcomes. Compare a change against the baseline task by task, and
+rerun a task before calling a single flip a regression.

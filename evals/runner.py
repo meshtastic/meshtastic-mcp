@@ -35,7 +35,9 @@ TASKS_PATH = Path(__file__).with_name("tasks.json")
 RISKS = ("read-only", "mutating", "destructive")
 ANSWER_CHARS = 2000  # enough of the final answer to judge a failed check by hand
 # An answer that says it could not do the task fails even when it also matches the pattern.
-DEFAULT_REJECT = r"(?i)\b(couldn't|could not|unable to|wasn't able to|was not able to|can't tell)\b"
+DEFAULT_REJECT = (
+    r"(?i)\b(couldn't|could not|can't|cannot|unable to|wasn't able to|was not able to)\b"
+)
 
 
 @dataclass

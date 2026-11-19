@@ -104,6 +104,7 @@ def test_an_answer_admitting_failure_fails_even_when_the_pattern_matches() -> No
     task = next(t for t in runner.load_tasks() if t.id == "telemetry-last-hour")
     assert runner.check_answer(task, "Lowest 83%, highest 101%.")
     assert not runner.check_answer(task, "I couldn't get a clean answer. Lowest 83%, highest 101%.")
+    assert not runner.check_answer(task, "I can't give you a reliable range: min 83, max 101.")
 
 
 def test_ble_task_needs_the_transport_named_and_rejects_a_serial_fallback() -> None:
