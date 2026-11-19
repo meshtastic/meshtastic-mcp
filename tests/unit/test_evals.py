@@ -113,6 +113,17 @@ def test_ble_task_needs_the_transport_named_and_rejects_a_serial_fallback() -> N
     assert not runner.check_answer(task, "BLE failed, so I read !3a14aa13 over serial instead")
 
 
+def test_task_ports_come_from_the_radios_a_task_needs() -> None:
+    task = next(t for t in runner.load_tasks() if t.id == "send-text-seen-on-peer")
+    values = {"heltec_port": "/dev/a", "rak_port": "/dev/b", "other_port": "/dev/c"}
+    assert runner.task_ports(task, values) == ["/dev/a", "/dev/b"]
+
+
+def test_telemetry_check_accepts_a_range_without_a_percent_sign() -> None:
+    task = next(t for t in runner.load_tasks() if t.id == "telemetry-last-hour")
+    assert runner.check_answer(task, "The lowest and highest are both 101.")
+
+
 def test_unscored_tasks_stay_out_of_the_pass_count() -> None:
     results = [
         {

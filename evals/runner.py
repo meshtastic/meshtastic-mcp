@@ -20,8 +20,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from collections import Counter
@@ -177,6 +179,37 @@ def verify_outcome(task: Task, values: dict[str, str]) -> tuple[bool, str]:
     return ok, "" if ok else f"verify did not match {task.verify['regex']!r}"
 
 
+def task_ports(task: Task, values: dict[str, str]) -> list[str]:
+    """Serial ports of the radios a task names in ``needs``, from ``<name>_port`` values."""
+    return [values[f"{name}_port"] for name in task.needs if f"{name}_port" in values]
+
+
+def backup_configs(ports: list[str], workdir: Path) -> dict[str, Path]:
+    """Export each radio's whole config, so a mutating task's side effects can be undone."""
+    saved = {}
+    for i, port in enumerate(ports):
+        path = workdir / f"radio-{i}.bin"
+        argv = [
+            "meshtastic",
+            "--port",
+            port,
+            "--export-config",
+            str(path),
+            "--export-format",
+            "binary",
+        ]
+        subprocess.run(argv, capture_output=True, timeout=120, check=False)
+        if path.exists() and path.stat().st_size > 0:
+            saved[port] = path
+    return saved
+
+
+def restore_configs(saved: dict[str, Path]) -> None:
+    for port, path in saved.items():
+        argv = ["meshtastic", "--port", port, "--configure", str(path)]
+        subprocess.run(argv, capture_output=True, timeout=180, check=False)
+
+
 def run_task(
     task: Task, values: dict[str, str], mcp_config: Path, server: str, max_turns: int
 ) -> dict[str, Any]:
@@ -186,6 +219,8 @@ def run_task(
     stats = RunStats()
     detail = ""
     passed = False
+    workdir = Path(tempfile.mkdtemp(prefix=f"eval-{task.id}-"))
+    saved = backup_configs(task_ports(task, values), workdir) if task.risk == "mutating" else {}
     try:
         proc = subprocess.run(
             build_command(prompt, mcp_config, server, max_turns),
@@ -210,6 +245,8 @@ def run_task(
                 timeout=60,
                 check=False,
             )
+        restore_configs(saved)
+        shutil.rmtree(workdir, ignore_errors=True)
     return {
         "id": task.id,
         "split": task.split,

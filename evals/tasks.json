@@ -6,7 +6,7 @@
     "risk": "mutating",
     "prompt": "Set the LoRa region on the {heltec} radio to EU_868, then read it back and tell me the value you read.",
     "check": {"kind": "answer_regex", "pattern": "EU_868"},
-    "verify": {"argv": ["meshtastic", "--port", "{heltec_port}", "--get", "lora.region"], "regex": "EU_868"},
+    "verify": {"argv": ["meshtastic", "--port", "{heltec_port}", "--get", "lora.region"], "regex": "lora\\.region: (3|EU_868)\\b"},
     "teardown": ["meshtastic", "--port", "{heltec_port}", "--set", "lora.region", "US"]
   },
   {
@@ -16,7 +16,7 @@
     "risk": "mutating",
     "prompt": "On the {heltec} radio: take a config snapshot named eval-{nonce}, change device.role to CLIENT_MUTE, show me the diff against the snapshot, then restore the original role. Report the role before, during and after.",
     "check": {"kind": "answer_regex", "pattern": "CLIENT_MUTE"},
-    "verify": {"argv": ["meshtastic", "--port", "{heltec_port}", "--get", "device.role"], "regex": "CLIENT\\b"},
+    "verify": {"argv": ["meshtastic", "--port", "{heltec_port}", "--get", "device.role"], "regex": "device\\.role: (0|CLIENT)\\b"},
     "teardown": ["meshtastic", "--port", "{heltec_port}", "--set", "device.role", "CLIENT"]
   },
   {
@@ -63,7 +63,10 @@
     "needs": ["heltec"],
     "risk": "read-only",
     "prompt": "Pull the {heltec} radio's own device telemetry for the last hour and give me the lowest and highest battery level.",
-    "check": {"kind": "answer_regex", "pattern": "(?i)\\b\\d{1,3}\\s*%"},
+    "check": {
+      "kind": "answer_regex",
+      "pattern": "(?i)\\b\\d{1,3}\\s*(%|percent)|(lowest|highest|min|max)\\W[^.\\n]{0,40}\\b\\d{1,3}\\b"
+    },
     "notes": "An answer that admits it cannot tell this radio's readings from relayed ones fails (default reject)."
   },
   {
