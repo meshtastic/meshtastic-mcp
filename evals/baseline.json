@@ -1,0 +1,290 @@
+{
+  "label": "master-baseline",
+  "split": "all",
+  "summary": {
+    "tasks": 12,
+    "scored": 11,
+    "passed": 10,
+    "tool_calls": 88,
+    "tool_errors": 3,
+    "input_tokens": 1078478,
+    "output_tokens": 17947,
+    "cost_usd": 1.3371,
+    "wall_s": 543.3
+  },
+  "results": [
+    {
+      "id": "region-readback",
+      "split": "dev",
+      "scored": true,
+      "passed": true,
+      "detail": "",
+      "wall_s": 54.2,
+      "turns": 7,
+      "tool_calls": {
+        "ToolSearch": 2,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__device_info": 1,
+        "mcp__meshtastic__set_config": 1,
+        "mcp__meshtastic__get_config": 1
+      },
+      "tool_call_total": 6,
+      "tool_errors": 0,
+      "input_tokens": 45455,
+      "output_tokens": 1043,
+      "cost_usd": 0.042874,
+      "answer": "The region on the Heltec V3 (`/dev/ttyUSB0`, node \"Meshtastic 18c4\") is now set, and reading it back returns **`lora.region` = `EU_868`**. It was `US` before.\n\nThe change isn't saved to the device's permanent storage yet. The tool says it only commits after a reboot, and I didn't reboot without asking you first. Until then, the change could be lost if the device loses power. Do you want me to reboot it now? I'd read the region back again afterwards to confirm it stayed.\n\nThe device has three other Meshtastic radios plugged in: a T1000-E, a Tracker L1 and a RAK4631. I didn't touch them."
+    },
+    {
+      "id": "snapshot-change-restore-diff",
+      "split": "dev",
+      "scored": true,
+      "passed": true,
+      "detail": "",
+      "wall_s": 74.4,
+      "turns": 12,
+      "tool_calls": {
+        "ToolSearch": 2,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__device_info": 1,
+        "mcp__meshtastic__get_config": 2,
+        "mcp__meshtastic__config_snapshot": 1,
+        "mcp__meshtastic__set_config": 2,
+        "mcp__meshtastic__config_diff": 2
+      },
+      "tool_call_total": 11,
+      "tool_errors": 1,
+      "input_tokens": 87808,
+      "output_tokens": 1912,
+      "cost_usd": 0.1165534,
+      "answer": "The Heltec V3 (`/dev/ttyUSB0`, node `!3a14\u2026` / \"Meshtastic 18c4\", firmware 2.8.3) is back on its original role, `CLIENT`. The live config now matches the snapshot exactly.\n\n| Stage | `device.role` | How I know |\n|---|---|---|\n| Before | `CLIENT` | The `old_value` returned by the first set call |\n| During | `CLIENT_MUTE` | The set call and the diff against the snapshot |\n| After | `CLIENT` | The restore call, and a final diff showing `identical: true` |\n\n**Diff against `eval-2e5e37f1` while the role was changed:**\n```\nadded:   localConfig.device.role = \"CLIENT_MUTE\"\nchanged: {}   removed: {}\n```\nIt shows up as \"added\" rather than \"changed\" because `CLIENT` is the default value. The radio doesn't send fields that are at their default, so the snapshot has no `role` entry at all. That's also why my first read of the device config showed no role.\n\n- **Snapshot:** saved as `eval-2e5e37f1` in `~/.local/share/meshtastic-mcp/snapshots/eval-2e5e37f1.json`, and kept after the restore.\n- **No reboot:** the tool says a reboot is what saves a change permanently. Since the role ended up where it started, nothing needs saving, so I left the radio running.\n- **Skipped check:** I tried one extra read of the device config while the role was `CLIENT_MUTE`, but it failed because the port was still busy. The set call and the diff already confirmed that value, so I didn't retry."
+    },
+    {
+      "id": "send-text-seen-on-peer",
+      "split": "dev",
+      "scored": true,
+      "passed": true,
+      "detail": "",
+      "wall_s": 127.3,
+      "turns": 22,
+      "tool_calls": {
+        "ToolSearch": 4,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__send_text": 2,
+        "mcp__meshtastic__packets_window": 3,
+        "mcp__meshtastic__recorder_status": 1,
+        "mcp__meshtastic__serial_list": 3,
+        "mcp__meshtastic__serial_open": 2,
+        "mcp__meshtastic__serial_read": 2,
+        "mcp__meshtastic__logs_window": 1,
+        "mcp__meshtastic__events_window": 1,
+        "mcp__meshtastic__device_info": 1
+      },
+      "tool_call_total": 21,
+      "tool_errors": 1,
+      "input_tokens": 526330,
+      "output_tokens": 3721,
+      "cost_usd": 0.5219842,
+      "answer": "The RAK4631 received the broadcast. Its packet id is **672373052** (hex `0x2813993c`).\n\n| Field | Value |\n|---|---|\n| Received on | RAK4631 (`/dev/ttyACM2`, node \"eval-7078dafb\") |\n| From | `!3a14aa13` (the Heltec V3) \u2192 `^all` |\n| Port | TEXT_MESSAGE_APP |\n| Payload | `6576616c2d6536323433363561`, which decodes to `eval-e624365a` |\n| Signal | RSSI \u221263, SNR 5.5, hop_limit 3 |\n\nThis id matches the one the Heltec reported when it sent the message.\n\n**I sent the broadcast twice.** On the first try, nothing showed up because the recorder only logs a radio while a tool is connected to it, and nothing was connected to the RAK. I tried to start a log monitor on the RAK, then sent the message again to catch it live. That monitor failed: `pio device monitor` needs an interactive terminal and won't run here. What finally worked was connecting to the RAK, which made it hand over the messages it had stored. Both copies were there. The second one has id **562797057** (`0x218b9a01`) and should be ignored. Anyone else on the default LongFast channel would have seen the text twice."
+    },
+    {
+      "id": "ble-connect-list-nodes",
+      "split": "dev",
+      "scored": true,
+      "passed": true,
+      "detail": "",
+      "wall_s": 40.9,
+      "turns": 6,
+      "tool_calls": {
+        "ToolSearch": 2,
+        "mcp__meshtastic__sdk_status": 1,
+        "mcp__meshtastic__sdk_list_nodes": 2
+      },
+      "tool_call_total": 5,
+      "tool_errors": 0,
+      "input_tokens": 50450,
+      "output_tokens": 1430,
+      "cost_usd": 0.15131280000000003,
+      "answer": "I used **Bluetooth LE**, through the Kotlin SDK CLI with transport `ble:Meshtastic`. No serial port was opened.\n\nMy first attempt used `ble:Heltec` and found nothing within 8 s, because the radio advertises as `Meshtastic_xxxx` rather than by board name. The scan with `ble:Meshtastic` connected to the first device whose name matched. The node database it returned points to the Heltec V3: the entry **\"Meshtastic 18c4\" (`!3a14aa13`, HELTEC_V3)** is the only one with a real MAC address and live device data (76 s uptime, 4.24 V). That's what you'd expect from the radio you're connected to.\n\n**First five nodes in the node database** (22 total, in the order the device returned them):\n\n| # | Node ID | Long name | Short | Hardware | Hops | SNR |\n|---|---|---|---|---|---|---|\n| 1 | `!5264ff52` | olm3c seeed T-1000e | \ud83e\udd98 | TRACKER_T1000_E | 0 | 6.5 |\n| 2 | `!8c7bbaf8` | JesterPark-West | Jstr | RAK4631 | 2 | 6.25 |\n| 3 | `!49b79aa0` | reidmefirst | reid | HELTEC_V4 | 4 | 5.5 |\n| 4 | `!a696444c` | 404 Not Found | 404 | HELTEC_V4 | 4 (via MQTT) | 6.5 |\n| 5 | `!44331576` | MeshPoint HeronsPointe | MPHP | PORTDUINO | 5 | 7.5 |\n\nThe `Meshtastic` name filter would also match other Meshtastic radios advertising nearby. If you have more than one, use `ble:18c4` next time so it always picks this board."
+    },
+    {
+      "id": "telemetry-last-hour",
+      "split": "dev",
+      "scored": true,
+      "passed": false,
+      "detail": "answer admits it could not tell (rescored)",
+      "wall_s": 39.0,
+      "turns": 9,
+      "tool_calls": {
+        "ToolSearch": 3,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__telemetry_timeline": 1,
+        "mcp__meshtastic__device_info": 1,
+        "mcp__meshtastic__list_nodes": 2
+      },
+      "tool_call_total": 8,
+      "tool_errors": 0,
+      "input_tokens": 92326,
+      "output_tokens": 1998,
+      "cost_usd": 0.12816260000000002,
+      "answer": "I can't give you a reliable lowest and highest for the Heltec alone, because the telemetry tool doesn't separate its readings from other nodes'.\n\n**What I pulled:** device telemetry for `battery_level` on `/dev/ttyUSB0` over the last hour: 137 samples, min **83**, max **101**. Those are not the Heltec's own numbers.\n\n**Why:** the port filter only selects packets that arrived through the Heltec's serial port. It doesn't filter by which node sent them. The data shows values 92, 100, 101 and 83 arriving within milliseconds of each other several times, which looks like a dump of other nodes' telemetry. After about the first minute, the data settles into a steady repeating pair of 92 and 101. That suggests two nodes reporting, not one battery swinging back and forth.\n\n**What I could confirm:**\n- `/dev/ttyUSB0` is the HELTEC_V3, \"Meshtastic 18c4\" (node 974432787), on firmware 2.8.3.\n- Its current battery level in the node list is **101**, which in Meshtastic means it's running on external/USB power.\n- Every other node in its list shows no battery value, so none of the other numbers (92, 100, 83) can be tied to a specific node.\n\n**Best guess:** the Heltec is probably the 101 in that repeating pair, which would mean it stayed at 101 all hour with no real low. I haven't verified that, and I can't rule out that the 92 readings are also from it.\n\nTo get a definite answer I'd need to watch its own reports directly, either on the serial log or by reading its telemetry live for a few minutes. Want me to do that?"
+    },
+    {
+      "id": "boot-panic-in-logs",
+      "split": "dev",
+      "scored": false,
+      "passed": true,
+      "detail": "",
+      "wall_s": 30.5,
+      "turns": 8,
+      "tool_calls": {
+        "ToolSearch": 1,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__recorder_status": 1,
+        "mcp__meshtastic__logs_window": 4
+      },
+      "tool_call_total": 7,
+      "tool_errors": 0,
+      "input_tokens": 57215,
+      "output_tokens": 1673,
+      "cost_usd": 0.10493040000000001,
+      "answer": "**No panic.**\n\nI searched the recorder's last 24 hours of logs for panic signatures: `panic`, `Guru Meditation`, `abort()`, `Backtrace`, `rst:0x`, reset reason and brownout. Nothing matched on any port.\n\nSome limits on that answer:\n\n- **Which port is the Heltec:** I'm treating `/dev/ttyUSB0` as the Heltec V3. It's the only ESP32-style device attached (a CP2102 USB bridge, SX1262 radio and NimBLE Bluetooth). But nothing in the logs names the board, so I couldn't confirm it.\n- **How much was recorded:** That port has only about 290 log lines for the whole day. They come from at least two short boots, roughly 17 and 4 minutes before I checked, and both start up normally (\"SX1262 init success\", \"BLE Advertising started\"). Anything that happened while the recorder wasn't capturing wouldn't show up.\n- **Early boot output:** The recorded boots don't include the ESP32's earliest startup messages, where a reset reason would usually appear. So if a panic caused one of those reboots, its trace may not have been recorded.\n\nTo rule it out properly, I can open the serial port live and reboot the device to catch a full boot log."
+    },
+    {
+      "id": "device-summary",
+      "split": "dev",
+      "scored": true,
+      "passed": true,
+      "detail": "",
+      "wall_s": 13.4,
+      "turns": 4,
+      "tool_calls": {
+        "ToolSearch": 1,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__device_info": 1
+      },
+      "tool_call_total": 3,
+      "tool_errors": 0,
+      "input_tokens": 26792,
+      "output_tokens": 429,
+      "cost_usd": 0.029319000000000005,
+      "answer": "I found the Heltec V3 on `/dev/ttyUSB0`, connected to it and read these values back from the radio:\n\n| Field | Value |\n|---|---|\n| Firmware version | **2.8.3.68f47ef** |\n| Hardware model | **HELTEC_V3** |\n| LoRa region | **US** |\n\nOther details: the node is \"Meshtastic 18c4\" (node number 974432787). It's on the default primary channel using the LONG_FAST preset, and it currently knows of 23 nodes."
+    },
+    {
+      "id": "channel-url-readback",
+      "split": "holdout",
+      "scored": true,
+      "passed": true,
+      "detail": "",
+      "wall_s": 32.1,
+      "turns": 7,
+      "tool_calls": {
+        "ToolSearch": 2,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__device_info": 1,
+        "mcp__meshtastic__get_channel_url": 2
+      },
+      "tool_call_total": 6,
+      "tool_errors": 1,
+      "input_tokens": 41220,
+      "output_tokens": 799,
+      "cost_usd": 0.0336448,
+      "answer": "The Heltec V3's primary channel URL is:\n\n**https://meshtastic.org/e/#CgUSAQE6ABITCAEgCygFOAFAA0gBUB5oAdAGAg**\n\nThe radio is on `/dev/ttyUSB0`, node \"Meshtastic 18c4\", running firmware 2.8.3. Its primary channel is the stock default: region US, LONG_FAST preset, with the standard public key. Anyone who joins with this URL will be on the public default mesh, not a private channel.\n\nThe URL includes only the primary channel. Ask if you want the full URL with any secondary channels."
+    },
+    {
+      "id": "attached-radios",
+      "split": "holdout",
+      "scored": true,
+      "passed": true,
+      "detail": "",
+      "wall_s": 19.1,
+      "turns": 7,
+      "tool_calls": {
+        "ToolSearch": 1,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__device_info": 4
+      },
+      "tool_call_total": 6,
+      "tool_errors": 0,
+      "input_tokens": 26406,
+      "output_tokens": 972,
+      "cost_usd": 0.0329414,
+      "answer": "Four Meshtastic radios are attached. I connected to each one, and every one answered with its hardware model:\n\n| Port | Hardware model | Node name | Firmware |\n|---|---|---|---|\n| `/dev/ttyACM0` | **Seeed T1000-E** (`TRACKER_T1000_E`) | olm3c seeed T-1000e | 2.8.2 |\n| `/dev/ttyACM1` | **Seeed Wio Tracker L1** (`SEEED_WIO_TRACKER_L1`) | olm3c seeed l1pro | 2.8.0 |\n| `/dev/ttyACM2` | **RAKwireless RAK4631** (`RAK4631`) | eval-7078dafb | 2.8.3 |\n| `/dev/ttyUSB0` | **Heltec V3** (`HELTEC_V3`) | Meshtastic 18c4 | 2.8.3 |\n\n- The USB label for the T1000-E says \"T1000-E-BOOT\", but the device is running normal Meshtastic firmware, not sitting in its bootloader.\n- The Heltec V3 connects through a generic CP2102 USB-to-serial chip, so its USB info doesn't name the board. I only got the model by asking the device itself.\n- All four are set to the US region. The Wio Tracker L1 is on the SHORT_TURBO preset, and the T1000-E uses a named primary channel called \"olm3sh\". The other two use the default LONG_FAST setup."
+    },
+    {
+      "id": "owner-name-roundtrip",
+      "split": "holdout",
+      "scored": true,
+      "passed": true,
+      "detail": "",
+      "wall_s": 21.2,
+      "turns": 5,
+      "tool_calls": {
+        "ToolSearch": 1,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__set_owner": 1,
+        "mcp__meshtastic__device_info": 1
+      },
+      "tool_call_total": 4,
+      "tool_errors": 0,
+      "input_tokens": 26698,
+      "output_tokens": 678,
+      "cost_usd": 0.0576724,
+      "answer": "I set the RAK4631's long name and read it back: the radio now reports **`eval-0ce0ce9d`**.\n\nThe RAK4631 is on `/dev/ttyACM2`. Here's the rest of what it reported:\n\n| Field | Value |\n|---|---|\n| Long name | `eval-0ce0ce9d` |\n| Short name | `\u26c5` (unchanged) |\n| Node number | 3267957622 |\n| Hardware | RAK4631 |\n| Firmware | 2.8.3.68f47ef |\n| Region / preset | US / LONG_FAST |\n| Nodes known | 5 |\n\nI sent the set and the read at the same time rather than one after the other. Since the read shows the new name, the change had already been applied. Other devices are plugged in too (T1000-E, Tracker L1 and a CP2102), but I didn't change any of them."
+    },
+    {
+      "id": "reboot-and-reconnect",
+      "split": "holdout",
+      "scored": true,
+      "passed": true,
+      "detail": "",
+      "wall_s": 63.3,
+      "turns": 9,
+      "tool_calls": {
+        "ToolSearch": 2,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__device_info": 3,
+        "mcp__meshtastic__reboot": 1,
+        "mcp__meshtastic__logs_window": 1
+      },
+      "tool_call_total": 8,
+      "tool_errors": 0,
+      "input_tokens": 71118,
+      "output_tokens": 1634,
+      "cost_usd": 0.0696696,
+      "answer": "The Heltec V3 rebooted, came back up, and is answering again.\n\n- **Device:** \"Meshtastic 18c4\" (node 974432787) on `/dev/ttyUSB0`. I checked it was the HELTEC_V3 before rebooting, since four radios are plugged in.\n- **Reboot:** I sent the reboot command with a 5-second delay. The firmware log then showed a fresh start: uptime 0 and the reboot counter at 71.\n- **After the reboot:** the node answers queries and reports the same settings as before: firmware 2.8.3.68f47ef, region US, LONG_FAST preset, default primary channel, and 23 nodes in its list.\n\nNone of the other connected radios were touched."
+    },
+    {
+      "id": "node-db-lookup",
+      "split": "holdout",
+      "scored": true,
+      "passed": true,
+      "detail": "",
+      "wall_s": 27.9,
+      "turns": 4,
+      "tool_calls": {
+        "ToolSearch": 1,
+        "mcp__meshtastic__list_devices": 1,
+        "mcp__meshtastic__list_nodes": 1
+      },
+      "tool_call_total": 3,
+      "tool_errors": 0,
+      "input_tokens": 26660,
+      "output_tokens": 1658,
+      "cost_usd": 0.0480772,
+      "answer": "You asked for one node, but five nodes on the Heltec V3 (`/dev/ttyUSB0`) have 'olm3c' in their long name:\n\n| Long name | Short name | Node num | Node ID |\n| --- | --- | --- | --- |\n| olm3c seeed T-1000e | \ud83e\udd98 | 1382350674 | `!5264ff52` |\n| olm3c uConsole | \ud83d\udcdf | 1260072140 | `!4b1b2ccc` |\n| olm3c bighat | \ud83c\udfa9 | 3273905334 | `!c323d4b6` |\n| olm3c seeed solar 2 | \ud83d\uded6 | 3710750098 | `!dd2d8d92` |\n| olm3c littlehat | \ud83e\udde2 | 3956775107 | `!ebd798c3` |\n\nThe radio only returned decimal node numbers. I converted them to the usual `!hex` ID format by hand.\n\n\"olm3sh seeed Solar\" (\ud83c\udf73, `!f1d5e47e`) is close, but it doesn't contain 'olm3c', so I left it out.\n\nIf you meant just one of these, \"olm3c seeed T-1000e\" was heard most recently. Its short name is \ud83e\udd98 and its ID is **`!5264ff52`**."
+    }
+  ],
+  "run": {
+    "server": "meshtastic-mcp master 3b3792d",
+    "bench": "james-pc: Heltec V3 (2.8.3), RAK4631 (2.8.3), Tracker L1, T1000-E attached",
+    "client": "Claude Code 2.1.328, claude -p --restricted --tools ToolSearch",
+    "runs_per_task": 1,
+    "date": "2026-11-19",
+    "skipped": [
+      "flash-given-build",
+      "recover-wedged-nrf52",
+      "waypoint-in-replay-sim"
+    ]
+  }
+}

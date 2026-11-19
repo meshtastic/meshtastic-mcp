@@ -20,8 +20,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from collections import Counter
@@ -32,6 +34,10 @@ from typing import Any
 TASKS_PATH = Path(__file__).with_name("tasks.json")
 RISKS = ("read-only", "mutating", "destructive")
 ANSWER_CHARS = 2000  # enough of the final answer to judge a failed check by hand
+# An answer that says it could not do the task fails even when it also matches the pattern.
+DEFAULT_REJECT = (
+    r"(?i)\b(couldn't|could not|can't|cannot|unable to|wasn't able to|was not able to)\b"
+)
 
 
 @dataclass
@@ -45,6 +51,7 @@ class Task:
     verify: dict[str, Any] | None = None
     teardown: list[str] | None = None
     notes: str = ""
+    scored: bool = True
 
 
 @dataclass
@@ -157,6 +164,10 @@ def parse_stream(lines: list[str]) -> RunStats:
 
 
 def check_answer(task: Task, result_text: str) -> bool:
+    """Matches ``pattern`` and not ``reject`` (default: the agent saying it failed)."""
+    reject = task.check.get("reject", DEFAULT_REJECT)
+    if reject and re.search(reject, result_text):
+        return False
     return re.search(task.check["pattern"], result_text) is not None
 
 
@@ -170,6 +181,37 @@ def verify_outcome(task: Task, values: dict[str, str]) -> tuple[bool, str]:
     return ok, "" if ok else f"verify did not match {task.verify['regex']!r}"
 
 
+def task_ports(task: Task, values: dict[str, str]) -> list[str]:
+    """Serial ports of the radios a task names in ``needs``, from ``<name>_port`` values."""
+    return [values[f"{name}_port"] for name in task.needs if f"{name}_port" in values]
+
+
+def backup_configs(ports: list[str], workdir: Path) -> dict[str, Path]:
+    """Export each radio's whole config, so a mutating task's side effects can be undone."""
+    saved = {}
+    for i, port in enumerate(ports):
+        path = workdir / f"radio-{i}.bin"
+        argv = [
+            "meshtastic",
+            "--port",
+            port,
+            "--export-config",
+            str(path),
+            "--export-format",
+            "binary",
+        ]
+        subprocess.run(argv, capture_output=True, timeout=120, check=False)
+        if path.exists() and path.stat().st_size > 0:
+            saved[port] = path
+    return saved
+
+
+def restore_configs(saved: dict[str, Path]) -> None:
+    for port, path in saved.items():
+        argv = ["meshtastic", "--port", port, "--configure", str(path)]
+        subprocess.run(argv, capture_output=True, timeout=180, check=False)
+
+
 def run_task(
     task: Task, values: dict[str, str], mcp_config: Path, server: str, max_turns: int
 ) -> dict[str, Any]:
@@ -179,6 +221,8 @@ def run_task(
     stats = RunStats()
     detail = ""
     passed = False
+    workdir = Path(tempfile.mkdtemp(prefix=f"eval-{task.id}-"))
+    saved = backup_configs(task_ports(task, values), workdir) if task.risk == "mutating" else {}
     try:
         proc = subprocess.run(
             build_command(prompt, mcp_config, server, max_turns),
@@ -203,9 +247,12 @@ def run_task(
                 timeout=60,
                 check=False,
             )
+        restore_configs(saved)
+        shutil.rmtree(workdir, ignore_errors=True)
     return {
         "id": task.id,
         "split": task.split,
+        "scored": task.scored,
         "passed": passed,
         "detail": detail,
         "wall_s": round(time.monotonic() - started, 1),
@@ -236,10 +283,12 @@ def select(
 
 
 def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
-    n = len(results)
+    """Totals over every task; ``scored`` and ``passed`` count only trusted checks."""
+    scored = [r for r in results if r.get("scored", True)]
     return {
-        "tasks": n,
-        "passed": sum(1 for r in results if r["passed"]),
+        "tasks": len(results),
+        "scored": len(scored),
+        "passed": sum(1 for r in scored if r["passed"]),
         "tool_calls": sum(r["tool_call_total"] for r in results),
         "tool_errors": sum(r["tool_errors"] for r in results),
         "input_tokens": sum(r["input_tokens"] for r in results),
@@ -299,6 +348,7 @@ def _skipped(task: Task) -> dict[str, Any]:
     return {
         "id": task.id,
         "split": task.split,
+        "scored": task.scored,
         "passed": False,
         "detail": "skipped",
         "wall_s": 0.0,
