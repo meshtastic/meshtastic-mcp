@@ -123,6 +123,7 @@ def test_task_ports_come_from_the_radios_a_task_needs() -> None:
 def test_telemetry_check_accepts_a_range_without_a_percent_sign() -> None:
     task = next(t for t in runner.load_tasks() if t.id == "telemetry-last-hour")
     assert runner.check_answer(task, "The lowest and highest are both 101.")
+    assert runner.check_answer(task, "The battery level is 101 at both the lowest and the highest.")
 
 
 def test_unscored_tasks_stay_out_of_the_pass_count() -> None:
