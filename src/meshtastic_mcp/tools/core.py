@@ -14,7 +14,7 @@ from typing import Any, cast
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
-from .. import admin, devices, info, jobs, log_query, recorder_query
+from .. import admin, connection, devices, info, jobs, leases, log_query, recorder_query
 from .. import config_snapshot as config_snapshot_mod
 from .. import confirm as confirm_mod
 from .. import doctor as doctor_mod
@@ -22,6 +22,7 @@ from .. import inject as inject_mod
 from ..recorder import get_recorder
 from ..schemas import (
     CaptureDisplayResult,
+    ClaimResult,
     ConfigDiffResult,
     ConfigSnapshotResult,
     DeviceEntry,
@@ -29,6 +30,7 @@ from ..schemas import (
     DoctorReport,
     EventsWindow,
     FactoryResetResult,
+    LeaseInfo,
     LogsWindow,
     NodeEntry,
     PacketsWindow,
@@ -914,6 +916,49 @@ def telemetry_timeline(
         port=port,
         max_points=max_points,
     )
+
+
+@app.tool()
+def claim(
+    port: str | None = None,
+    ttl_s: int = leases.DEFAULT_TTL_S,
+    holder: str | None = None,
+    lease: str | None = None,
+) -> ClaimResult:
+    """Take a device for yourself so other sessions' device calls on it are refused.
+
+    The bench is shared: claim a radio before a run that changes it or depends on its
+    state, pass the returned `lease` to every device tool on it, and `release` it when done.
+    A job started under the lease keeps it until the job ends. Returns `{lease, device, port,
+    holder, host, claimed_at, expires_at}`; a device another session holds fails with who
+    holds it and for how long.
+
+    Args:
+        port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
+            Meshtastic device.
+        ttl_s: Seconds the lease lasts, up to 3600; claim again with `lease` to extend it.
+        holder: A short label for who holds it, shown to sessions that are refused.
+        lease: Your current handle on this device, to renew it instead of taking a new one.
+    """
+    try:
+        resolved = connection.resolve_port(port)
+        record = leases.claim(resolved, ttl_s=ttl_s, holder=holder, lease=lease)
+    except (connection.ConnectionError, leases.LeaseError) as exc:
+        raise ToolError(str(exc)) from exc
+    return cast(ClaimResult, record)
+
+
+@app.tool()
+def release(lease: str) -> LeaseInfo:
+    """Give back a device taken with `claim`. Returns the lease that ended, without its handle.
+
+    Args:
+        lease: The handle `claim` returned.
+    """
+    try:
+        return cast(LeaseInfo, leases.release(lease))
+    except leases.LeaseError as exc:
+        raise ToolError(str(exc)) from exc
 
 
 @app.tool()

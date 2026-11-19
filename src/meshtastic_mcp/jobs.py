@@ -21,6 +21,7 @@ with `wait(on_progress=...)` forwards it as MCP progress notifications.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import math
 import os
@@ -34,7 +35,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from . import config
+from . import config, leases
 
 log = logging.getLogger(__name__)
 
@@ -231,8 +232,28 @@ def start(
                     state["status"] = "cancelled"
                 state["settled"] = True
 
-    threading.Thread(target=_run, daemon=True, name=f"{kind}-{job_id}").start()
+    # The job runs in the caller's context, so the lease it was started under goes with it,
+    # and that lease is renewed until the job ends: a flash must not outlive its lease.
+    ctx = contextvars.copy_context()
+    threading.Thread(target=ctx.run, args=(_run,), daemon=True, name=f"{kind}-{job_id}").start()
+    lease = ctx.get(leases.CURRENT)
+    if lease is not None:
+        threading.Thread(
+            target=_hold_lease, args=(state, lease), daemon=True, name=f"lease-{job_id}"
+        ).start()
     return {"job_id": job_id, "status": "running", "log_path": str(log_path)}
+
+
+_LEASE_RENEW_S = 60.0
+
+
+def _hold_lease(state: dict[str, Any], lease: str) -> None:
+    while not state.get("settled"):
+        try:
+            leases.renew(lease, _LEASE_RENEW_S * 3)
+        except Exception:
+            log.exception("renewing lease for job %s", state["job_id"])
+        time.sleep(_LEASE_RENEW_S)
 
 
 def poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:

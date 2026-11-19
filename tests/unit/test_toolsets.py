@@ -19,6 +19,7 @@ from meshtastic_mcp import toolsets
 _CORE = frozenset(
     {
         "capture_display",
+        "claim",
         "config_diff",
         "config_snapshot",
         "config_snapshots_list",
@@ -39,6 +40,7 @@ _CORE = frozenset(
         "query",
         "reboot",
         "recorder_export",
+        "release",
         "recorder_pause",
         "recorder_resume",
         "recorder_status",

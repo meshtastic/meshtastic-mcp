@@ -646,6 +646,31 @@ compdef _meshtastic_mcp meshtastic-mcp""")
     return 0
 
 
+def _cmd_leases(args) -> int:
+    import json
+    import time
+
+    from meshtastic_mcp import leases
+
+    if args.break_target:
+        dropped = leases.break_lease(args.break_target)
+        if dropped is None:
+            print(f"no lease on {args.break_target}")
+            return 1
+        print(f"broke the lease {dropped['holder'] or 'unnamed'} held on {dropped['port']}")
+        return 0
+    rows = leases.active()
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    if not rows:
+        print("no live leases")
+    for r in rows:
+        left = int(r["expires_at"] - time.time())
+        print(f"{r['port']}  {r['device']}  {r['holder'] or '-'}@{r['host']}  {left}s left")
+    return 0
+
+
 def main(argv=None) -> None:
     _load_env_files()
     p = argparse.ArgumentParser(
@@ -710,6 +735,10 @@ def main(argv=None) -> None:
         metavar="DIR",
         help=f"base directory for cloned repos (default: {_default_provision_dir()})",
     )
+
+    lea = sub.add_parser("leases", help="list device leases on this host, or break one")
+    lea.add_argument("--break", dest="break_target", metavar="PORT_OR_DEVICE", default=None)
+    lea.add_argument("--json", action="store_true", help="emit JSON")
 
     # --- read-only device / hardware queries ---
     dev = sub.add_parser("devices", help="list connected Meshtastic devices")
@@ -905,6 +934,9 @@ def main(argv=None) -> None:
 
     if args.cmd == "completion":
         raise SystemExit(_cmd_completion(args))
+
+    if args.cmd == "leases":
+        raise SystemExit(_cmd_leases(args))
 
     # default: run the MCP server
     from meshtastic_mcp.server import app

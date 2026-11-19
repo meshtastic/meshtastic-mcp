@@ -97,13 +97,12 @@ def test_applied_annotations_match_classification_maps(server):
 
 
 def test_no_unannotated_tools(server):
-    # Every tool must be in at least _READ_ONLY or _DESTRUCTIVE.
-    # Tools in neither fall through to worst-case defaults (destructive,
-    # non-idempotent, open-world) which is wrong for most of them.
-    all_classified = server._READ_ONLY | server._DESTRUCTIVE
+    # Every tool must be in _READ_ONLY, _DESTRUCTIVE or _ADDITIVE_WRITES, so none is
+    # classified by accident.
+    all_classified = server._READ_ONLY | server._DESTRUCTIVE | server._ADDITIVE_WRITES
     for name in _tools(server):
         assert name in all_classified, (
-            f"{name} is not in _READ_ONLY or _DESTRUCTIVE — add it to the correct set in server.py"
+            f"{name} is not classified - add it to the correct set in server.py"
         )
 
 
