@@ -32,6 +32,8 @@ from typing import Any
 TASKS_PATH = Path(__file__).with_name("tasks.json")
 RISKS = ("read-only", "mutating", "destructive")
 ANSWER_CHARS = 2000  # enough of the final answer to judge a failed check by hand
+# An answer that says it could not do the task fails even when it also matches the pattern.
+DEFAULT_REJECT = r"(?i)\b(couldn't|could not|unable to|wasn't able to|was not able to|can't tell)\b"
 
 
 @dataclass
@@ -45,6 +47,7 @@ class Task:
     verify: dict[str, Any] | None = None
     teardown: list[str] | None = None
     notes: str = ""
+    scored: bool = True
 
 
 @dataclass
@@ -157,6 +160,10 @@ def parse_stream(lines: list[str]) -> RunStats:
 
 
 def check_answer(task: Task, result_text: str) -> bool:
+    """Matches ``pattern`` and not ``reject`` (default: the agent saying it failed)."""
+    reject = task.check.get("reject", DEFAULT_REJECT)
+    if reject and re.search(reject, result_text):
+        return False
     return re.search(task.check["pattern"], result_text) is not None
 
 
@@ -206,6 +213,7 @@ def run_task(
     return {
         "id": task.id,
         "split": task.split,
+        "scored": task.scored,
         "passed": passed,
         "detail": detail,
         "wall_s": round(time.monotonic() - started, 1),
@@ -236,10 +244,12 @@ def select(
 
 
 def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
-    n = len(results)
+    """Totals over every task; ``scored`` and ``passed`` count only trusted checks."""
+    scored = [r for r in results if r.get("scored", True)]
     return {
-        "tasks": n,
-        "passed": sum(1 for r in results if r["passed"]),
+        "tasks": len(results),
+        "scored": len(scored),
+        "passed": sum(1 for r in scored if r["passed"]),
         "tool_calls": sum(r["tool_call_total"] for r in results),
         "tool_errors": sum(r["tool_errors"] for r in results),
         "input_tokens": sum(r["input_tokens"] for r in results),
@@ -299,6 +309,7 @@ def _skipped(task: Task) -> dict[str, Any]:
     return {
         "id": task.id,
         "split": task.split,
+        "scored": task.scored,
         "passed": False,
         "detail": "skipped",
         "wall_s": 0.0,

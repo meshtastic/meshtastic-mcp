@@ -100,6 +100,46 @@ def test_check_answer_matches_the_task_pattern() -> None:
     assert not runner.check_answer(task, "I could not reach the radio")
 
 
+def test_an_answer_admitting_failure_fails_even_when_the_pattern_matches() -> None:
+    task = next(t for t in runner.load_tasks() if t.id == "telemetry-last-hour")
+    assert runner.check_answer(task, "Lowest 83%, highest 101%.")
+    assert not runner.check_answer(task, "I couldn't get a clean answer. Lowest 83%, highest 101%.")
+
+
+def test_ble_task_needs_the_transport_named_and_rejects_a_serial_fallback() -> None:
+    task = next(t for t in runner.load_tasks() if t.id == "ble-connect-list-nodes")
+    assert runner.check_answer(task, "Connected over BLE. Nodes: !3a14aa13 Meshtastic 18c4")
+    assert not runner.check_answer(task, "Nodes: !3a14aa13 Meshtastic 18c4")
+    assert not runner.check_answer(task, "BLE failed, so I read !3a14aa13 over serial instead")
+
+
+def test_unscored_tasks_stay_out_of_the_pass_count() -> None:
+    results = [
+        {
+            "scored": True,
+            "passed": True,
+            "tool_call_total": 1,
+            "tool_errors": 0,
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cost_usd": 0.0,
+            "wall_s": 1.0,
+        },
+        {
+            "scored": False,
+            "passed": True,
+            "tool_call_total": 1,
+            "tool_errors": 0,
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cost_usd": 0.0,
+            "wall_s": 1.0,
+        },
+    ]
+    summary = runner.summarize(results)
+    assert (summary["tasks"], summary["scored"], summary["passed"]) == (2, 1, 1)
+
+
 def test_select_filters_by_split_and_risk() -> None:
     tasks = runner.load_tasks()
     safe = runner.select(tasks, "dev", [], allow_mutating=False, allow_destructive=False)
