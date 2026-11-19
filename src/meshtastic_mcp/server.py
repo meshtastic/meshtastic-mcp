@@ -49,6 +49,7 @@ from . import hw_tools as hw_tools
 from . import jobs as jobs
 from . import log_query as log_query
 from . import nrf52_bootloader as nrf52_bootloader
+from . import recorder_query as recorder_query
 from . import registry as registry
 from . import rf_oracle as rf_oracle
 from . import serial_session as serial_session
@@ -143,6 +144,7 @@ from .tools.core import list_nodes as list_nodes
 from .tools.core import logs_window as logs_window
 from .tools.core import mark_event as mark_event
 from .tools.core import packets_window as packets_window
+from .tools.core import query as query
 from .tools.core import reboot as reboot
 from .tools.core import recorder_export as recorder_export
 from .tools.core import recorder_pause as recorder_pause
@@ -473,6 +475,7 @@ _READ_ONLY: set[str] = {
     "telemetry_timeline",
     "packets_window",
     "events_window",
+    "query",
     "recorder_status",
     "replay_status",  # reads replay-session run-state; never mutates
     "cot_relay_status",  # reads relay run-state (peers/counts); never mutates
@@ -692,6 +695,7 @@ _OPEN_WORLD = {
     # that can carry prompt-injection payloads (lethal-trifecta leg 2).
     "logs_window",
     "packets_window",
+    "query",
     # UI/log content sourced from the running app, which can echo remote
     # mesh-node data (node names, text messages) — same lethal-trifecta
     # concern as logs_window/packets_window.
@@ -812,6 +816,18 @@ def _resource_doctor() -> str:
 def _resource_capabilities() -> str:
     """One-line summary of which capability groups are active on this host."""
     return capabilities.detect().summary()
+
+
+@app.resource(
+    "meshtastic://recorder/schema",
+    name="Recorder query schema",
+    mime_type="application/json",
+)
+def _resource_recorder_schema() -> str:
+    """The views the `query` tool reads, with each column's DuckDB type."""
+    import json
+
+    return json.dumps(recorder_query.schema(), indent=2)
 
 
 @app.resource(

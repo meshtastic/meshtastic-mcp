@@ -11,7 +11,8 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 ## Architecture: portable core + gated capabilities
 
 - **core** (always registered): `devices`, `serial_session`, `registry`, `connection`
-  (serial + TCP), `info`, `admin`, `recorder/` + `log_query`, `replay/` (simulated-device
+  (serial + TCP), `info`, `admin`, `recorder/` + `log_query` + `recorder_query` (`query`, read-only DuckDB SQL over the
+  recorder's streams), `replay/` (simulated-device
   streaming + `sim` synthetic mesh + `fuzz` adversary layer), `inject` (frame injection into
   real hardware — see below), `input_events`, `camera`/`ocr`, `display_mirror`
   (`capture_display` — the device's own framebuffer over the phone API, the on-device
@@ -177,7 +178,8 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
 ## Rules
 
 - **JDK/Python:** Python ≥ 3.11. Keep the core dependency-light (`fastmcp`, `mcp`,
-  `pyserial`, `meshtastic`, `platformdirs`); heavy deps go in extras (`[test]`, `[ui]`,
+  `pyserial`, `meshtastic`, `platformdirs`, plus `duckdb` and `pytz` for `query`, the core
+  read path); heavy deps go in extras (`[test]`, `[ui]`,
   `[tasks]`). Code that uses an extra imports it behind a guard, as `tasks.py` does. A dependency
   that exists only on git goes in a `[dependency-groups]` group, never an extra: PyPI rejects a
   package whose metadata names a URL, and `uv build` refuses one, as `tak` shows.
@@ -251,7 +253,7 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   when they refuse, so a harmless subcommand never prompts. `pio_flash`, `erase_and_flash`,
   `update_flash` and `nrf52_flash_uf2` run their blocking function as a `flashes` job through
   `_run_job`.
-- **Prompt injection / lethal trifecta:** `logs_window` and `packets_window` return
+- **Prompt injection / lethal trifecta:** `logs_window`, `packets_window` and `query` return
   user-authored content from remote mesh nodes (untrusted). `android_ui_dump`,
   `android_screenshot`, and `android_read_logcat` carry the same risk one hop removed —
   a malicious node's long_name/text can appear in the app UI or logcat that these tools
