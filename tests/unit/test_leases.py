@@ -74,6 +74,25 @@ def test_a_symlink_and_its_target_are_one_device(tmp_path: Path) -> None:
     leases.check(str(target), held["lease"])
 
 
+def _port(device: str, serial: str | None, location: str, vid: int = 0x10C4) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        device=device, vid=vid, pid=0xEA60, serial_number=serial, location=location
+    )
+
+
+def test_usb_key_is_the_serial_and_adds_the_hub_path_only_when_the_serial_is_generic() -> None:
+    rak = _port("/dev/ttyACM2", "7885014CB2C5B186", "1-2.3.3:1.0", vid=0x239A)
+    cp1 = _port("/dev/ttyUSB0", "0001", "1-2.3.1")
+    cp2 = _port("/dev/ttyUSB1", "0001", "1-2.4")
+    ports = [rak, cp1, cp2]
+    assert leases._usb_key("/dev/ttyACM2", ports) == "usb:239a:ea60:7885014CB2C5B186"
+    assert leases._usb_key("/dev/ttyUSB0", ports) == "usb:10c4:ea60:0001@1-2.3.1"
+    assert leases._usb_key("/dev/ttyUSB1", ports) == "usb:10c4:ea60:0001@1-2.4"
+    assert leases._usb_key("/dev/ttyUSB9", ports) is None
+
+
 def test_break_lease_drops_another_holder() -> None:
     leases.claim(PORT, holder="stuck")
     assert leases.break_lease(PORT)["holder"] == "stuck"

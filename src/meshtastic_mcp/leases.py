@@ -83,12 +83,27 @@ def device_key(port: str) -> str:
     try:
         from serial.tools import list_ports
 
-        for info in list_ports.comports():
-            if os.path.realpath(info.device) == real and info.serial_number:
-                return f"usb:{info.vid or 0:04x}:{info.pid or 0:04x}:{info.serial_number}"
+        ports = list(list_ports.comports())
     except Exception:
-        pass
-    return "dev:" + real
+        ports = []
+    return _usb_key(real, ports) or "dev:" + real
+
+
+def _usb_key(real: str, ports: list[Any]) -> str | None:
+    def ident(info: Any) -> str:
+        return f"{info.vid or 0:04x}:{info.pid or 0:04x}:{info.serial_number}"
+
+    for info in ports:
+        if os.path.realpath(info.device) != real or not info.serial_number:
+            continue
+        key = "usb:" + ident(info)
+        # USB-UART bridges often share a placeholder serial such as `0001`; the hub path
+        # (without the interface suffix) tells those boards apart.
+        twins = sum(1 for p in ports if p.serial_number and ident(p) == ident(info))
+        if (len(info.serial_number) < 8 or twins > 1) and info.location:
+            key += "@" + str(info.location).split(":")[0]
+        return key
+    return None
 
 
 def _path(key: str) -> Path:
