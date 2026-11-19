@@ -36,6 +36,7 @@ _CORE = frozenset(
         "logs_window",
         "mark_event",
         "packets_window",
+        "query",
         "reboot",
         "recorder_export",
         "recorder_pause",

@@ -89,6 +89,13 @@ class LogsWindow(TypedDict, total=False):
     window: QueryWindow
 
 
+class QueryResult(TypedDict):
+    columns: list[str]
+    rows: list[list[Any]]
+    row_count: int
+    truncated: bool
+
+
 class PacketsWindow(TypedDict, total=False):
     packets: list[dict[str, Any]]
     total_matched: int

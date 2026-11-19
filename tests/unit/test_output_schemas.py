@@ -58,6 +58,15 @@ def test_typed_tools_advertise_named_properties(server) -> None:
         assert "'properties'" in flat, f"{name} schema names no fields: {schema}"
 
 
+def test_query_result_satisfies_its_schema(server, monkeypatch, tmp_path) -> None:
+    from meshtastic_mcp.tools import core
+
+    monkeypatch.setattr(core, "get_recorder", lambda: SimpleNamespace(base_dir=tmp_path))
+    result = _call(server, "query", {"sql": "SELECT 1 AS n, now() AS t, NULL AS x"})
+    assert result.is_error is False, result.content
+    assert result.structured_content["rows"][0][0] == 1
+
+
 def test_doctor_result_satisfies_its_schema(server) -> None:
     result = _call(server, "doctor")
     assert result.is_error is False, result.content
