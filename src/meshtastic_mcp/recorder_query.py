@@ -74,10 +74,13 @@ class QueryError(ValueError):
     """The statement was rejected or failed; the message says why."""
 
 
-def _stream_files(base: Path, stream: str) -> list[Path]:
+def _stream_files(base: Path, stream: str, since: float | None = None) -> list[Path]:
     # Archive names sort chronologically; the live file is newest. Empty files are skipped
-    # because DuckDB cannot infer anything from them and the columns are fixed anyway.
+    # because DuckDB cannot infer anything from them and the columns are fixed anyway, and
+    # with `since`, so is an archive last written before it.
     files = sorted(base.glob(f"{stream}.*.jsonl.gz"))
+    if since is not None:
+        files = [f for f in files if f.stat().st_mtime >= since]
     live = base / f"{stream}.jsonl"
     if live.exists():
         files.append(live)
@@ -88,9 +91,9 @@ def _sql_str(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _view_sql(base: Path, stream: str) -> str:
+def _view_sql(base: Path, stream: str, since: float | None = None) -> str:
     columns = STREAMS[stream]
-    files = _stream_files(base, stream)
+    files = _stream_files(base, stream, since)
     if not files:
         nulls = ", ".join(f"CAST(NULL AS {t}) AS {c}" for c, t in columns.items())
         return f"SELECT {nulls}, CAST(NULL AS TIMESTAMPTZ) AS time WHERE false"
@@ -130,11 +133,13 @@ def run(
     base: Path,
     max_rows: int = DEFAULT_MAX_ROWS,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    since: float | None = None,
 ) -> dict[str, Any]:
     """Run one read-only SELECT over the recorder views at `base`.
 
     Returns `{columns, rows, row_count, truncated}`. `rows` holds at most `max_rows` rows;
-    `truncated` is true when the statement produced more.
+    `truncated` is true when the statement produced more. `since` (epoch seconds) leaves
+    out archives written before it, so a caller polling for new rows stays cheap.
     """
     import duckdb
 
@@ -157,7 +162,7 @@ def run(
         con.execute(f"SET memory_limit='{MEMORY_LIMIT}'")
         con.execute(f"SET threads={THREADS}")
         for stream in STREAMS:
-            con.execute(f"CREATE TEMP VIEW {stream} AS {_view_sql(base, stream)}")
+            con.execute(f"CREATE TEMP VIEW {stream} AS {_view_sql(base, stream, since)}")
         con.execute(f"SET allowed_directories=[{_sql_str(str(base))}]")
         con.execute("SET enable_external_access=false")
         con.execute("SET autoinstall_known_extensions=false")
@@ -183,3 +188,45 @@ def run(
     truncated = len(fetched) > max_rows
     rows = [[_jsonable(v) for v in row] for row in fetched[:max_rows]]
     return {"columns": columns, "rows": rows, "row_count": len(rows), "truncated": truncated}
+
+
+WAIT_MAX_S = 55.0
+
+
+def wait_for(
+    stream: str,
+    where: str,
+    *,
+    base: Path,
+    since: float,
+    port: str | None = None,
+    timeout_s: float = 30.0,
+    max_rows: int = 20,
+    poll_s: float = 0.5,
+) -> dict[str, Any]:
+    """Poll `stream` until a row at or after `since` matches `where`, or `timeout_s` passes.
+
+    Returns `{matched, rows, columns, waited_s}`; `port` keeps only rows that radio recorded.
+    """
+    import time
+
+    if stream not in STREAMS:
+        raise QueryError(f"stream must be one of {', '.join(STREAMS)}")
+    if not 0 < timeout_s <= WAIT_MAX_S:
+        raise QueryError(f"timeout_s must be between 1 and {WAIT_MAX_S:g}")
+    clauses = [f"ts >= {since!r}", f"({where})"]
+    if port is not None:
+        clauses.append(f"port = {_sql_str(port)}")
+    sql = f"SELECT * FROM {stream} WHERE {' AND '.join(clauses)} ORDER BY ts"
+    start = time.monotonic()
+    while True:
+        out = run(sql, base=base, max_rows=max_rows, since=since)
+        waited = round(time.monotonic() - start, 2)
+        if out["rows"] or waited >= timeout_s:
+            return {
+                "matched": bool(out["rows"]),
+                "rows": out["rows"],
+                "columns": out["columns"],
+                "waited_s": waited,
+            }
+        time.sleep(min(poll_s, max(0.0, timeout_s - waited)))

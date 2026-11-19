@@ -109,6 +109,14 @@ class QueryResult(TypedDict):
     truncated: bool
 
 
+class WaitForResult(TypedDict):
+    matched: bool
+    rows: list[list[Any]]
+    columns: list[str]
+    waited_s: float
+    port: str
+
+
 class PacketsWindow(TypedDict, total=False):
     packets: list[dict[str, Any]]
     total_matched: int
