@@ -8,6 +8,32 @@ named.
 
 ## core
 
+### `admin`
+
+Destructive, idempotent.
+
+Restart, power off or reset a radio, or edit its node DB.
+
+`reboot`, `shutdown`, `factory_reset`, `factory_reset_full` and `reset_nodedb` need
+`confirm=True` or the user's answer; the three resets are irreversible. `favorite`,
+`unfavorite`, `ignore`, `unignore` and `remove_node` act on `node_id` in the radio's node
+DB and need no confirmation. After a restart, `wait_back` waits until the radio answers
+again: `back` says it did, and `restarted` is read from its uptime. `factory_reset` keeps
+the identity and keys; `factory_reset_full` replaces them.
+
+Returns `{target, action, ok, node_id?, back?, restarted?, uptime_s?, error?}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `action` | `reboot` \| `shutdown` \| `factory_reset` \| `factory_reset_full` \| `reset_nodedb` \| `favorite` \| `unfavorite` \| `ignore` \| `unignore` \| `remove_node` | required | What to do. |
+| `node` | string | `null` | The radio: a device name from `devices`, a serial port or `tcp://host[:port]`; omit for the one attached radio. |
+| `node_id` | string \| integer | `null` | The node in this radio's DB that a node-DB action names (`!c2c91376`). |
+| `seconds` | integer | `3` | Delay before a `reboot` or `shutdown`. |
+| `wait_back` | boolean | `true` | After a restart, wait until the radio answers again. |
+| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
+| `timeout_s` | number | `45.0` | Seconds the whole call may take, the wait included. |
+
 ### `capture_display`
 
 Destructive, open world.
@@ -190,25 +216,6 @@ Returns `{events, total_matched, dropped, window}`.
 | `kind` | string | `null` | One of recorder_start, recorder_pause, recorder_resume, connection_established, connection_lost, node_updated, mark. Pipe-separated sets ("connection_lost\|connection_established") work. |
 | `max` | integer | `200` | Cap on the events returned. |
 
-### `factory_reset`
-
-Destructive, open world.
-
-Factory-reset the connected node.
-
-Requires confirm=True, or the user's answer when the client can ask (always, with
-`MESHTASTIC_MCP_CONFIRM=human`). An nRF52 in UF2 mode, with no app running to take this
-call, is wiped by `nrf52_factory_erase`.
-
-Returns `{ok, full}`.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
-| `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
-| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
-| `full` | boolean | `false` | `full=True` also wipes device identity/keys, not just config. |
-
 ### `inject_frame`
 
 Destructive, open world.
@@ -389,23 +396,6 @@ data.
 | `sql` | string | required | One SELECT statement. |
 | `max_rows` | integer | `200` | Cap on the rows returned, 1 to 5000; `truncated` says more matched. |
 
-### `reboot`
-
-Destructive, open world.
-
-Reboot the connected node in `seconds` seconds.
-
-Requires confirm=True, or the user's answer when the client can ask.
-
-Returns `{ok, rebooting_in_s}`.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
-| `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
-| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
-| `seconds` | integer | `10` | Delay before the node reboots. |
-
 ### `recorder_export`
 
 Destructive.
@@ -532,23 +522,6 @@ Returns `{ok, channels_imported}`.
 | `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
 | `url` | string | required | A Meshtastic channel URL, such as `inspect(what="url")` returns. |
 | `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
-
-### `shutdown`
-
-Destructive, open world.
-
-Shut down the connected node in `seconds` seconds.
-
-Requires confirm=True, or the user's answer when the client can ask.
-
-Returns `{ok, shutting_down_in_s}`.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
-| `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
-| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
-| `seconds` | integer | `10` | Delay before the node shuts down. |
 
 ### `telemetry_timeline`
 
@@ -2669,6 +2642,25 @@ num_nodes, primary_channel, modem_preset, channel_num, display}`.
 | `port` | string | `null` | Serial port or `tcp://host[:port]`. Omitted, the one likely-Meshtastic device is auto-selected; otherwise the tool errors with the candidate list. |
 | `timeout_s` | number | `8.0` | Seconds to wait for the node to answer. |
 
+### `factory_reset`
+
+Destructive, open world.
+
+Factory-reset the connected node.
+
+Requires confirm=True, or the user's answer when the client can ask (always, with
+`MESHTASTIC_MCP_CONFIRM=human`). An nRF52 in UF2 mode, with no app running to take this
+call, is wiped by `nrf52_factory_erase`.
+
+Returns `{ok, full}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
+| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
+| `full` | boolean | `false` | `full=True` also wipes device identity/keys, not just config. |
+
 ### `get_channel_url`
 
 Read-only, idempotent, open world.
@@ -2712,6 +2704,23 @@ last_heard, battery_level, is_favorite}]` as JSON.
 | `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
 | `timeout_s` | number | `8.0` | Seconds to wait for the node to answer. |
 | `format` | string | `"json"` | `json` (default) or `table` (Markdown). Use `table` when there are many nodes: repeating every field name per row in JSON costs ~7k tokens for 100 nodes, and a table header appears once. |
+
+### `reboot`
+
+Destructive, open world.
+
+Reboot the connected node in `seconds` seconds.
+
+Requires confirm=True, or the user's answer when the client can ask.
+
+Returns `{ok, rebooting_in_s}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
+| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
+| `seconds` | integer | `10` | Delay before the node reboots. |
 
 ### `send_text`
 
@@ -2797,3 +2806,20 @@ Returns `{ok, long_name, short_name}`.
 | `long_name` | string | required | The owner's long name. |
 | `short_name` | string | `null` | The owner's short name, at most 4 characters; omit to keep the current one. |
 | `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
+
+### `shutdown`
+
+Destructive, open world.
+
+Shut down the connected node in `seconds` seconds.
+
+Requires confirm=True, or the user's answer when the client can ask.
+
+Returns `{ok, shutting_down_in_s}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
+| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
+| `seconds` | integer | `10` | Delay before the node shuts down. |

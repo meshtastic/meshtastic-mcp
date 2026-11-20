@@ -71,6 +71,7 @@ class Backend(Protocol):
         timeout_s: float,
     ) -> dict[str, Any]:
         """Run a radio-level `action`; `wait_back` waits for a restarted radio to answer."""
+
     def send(
         self,
         target: str | None,

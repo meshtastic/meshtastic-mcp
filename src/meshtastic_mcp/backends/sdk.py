@@ -110,6 +110,7 @@ class SdkBackend:
         timeout_s: float,
     ) -> dict[str, Any]:
         raise BackendError("the SDK backend has no admin actions yet; use a serial or TCP target")
+
     def send(
         self,
         target: str | None,
