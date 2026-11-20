@@ -16,8 +16,10 @@ from typing import Any, Protocol
 
 BACKEND_ENV = "MESHTASTIC_MCP_BACKEND"
 
-# The parts a read can ask for. Config sections are read through `config`.
-PARTS = ("summary", "config", "channels", "nodes", "network")
+# The parts a read can ask for. Config sections are read through `config`. `url` carries the
+# channel keys, so only a read that names it gets it.
+PARTS = ("summary", "config", "channels", "nodes", "network", "url")
+UNSECRET_PARTS = tuple(p for p in PARTS if p != "url")
 
 
 class BackendError(RuntimeError):

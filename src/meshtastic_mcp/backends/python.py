@@ -145,7 +145,7 @@ def _network(iface: Any, timeout_s: float) -> dict[str, Any]:
 
 class PythonBackend:
     name = "python"
-    parts = frozenset({"summary", "config", "channels", "nodes", "network"})
+    parts = frozenset({"summary", "config", "channels", "nodes", "network", "url"})
 
     def read(
         self,
@@ -165,6 +165,10 @@ class PythonBackend:
                 "channels": lambda: _channels(iface),
                 "nodes": lambda: _nodes(iface, detail),
                 "network": lambda: _network(iface, timeout_s),
+                "url": lambda: {
+                    "primary": iface.localNode.getURL(includeAll=False),
+                    "all": iface.localNode.getURL(includeAll=True),
+                },
             }
             for part in parts:
                 try:

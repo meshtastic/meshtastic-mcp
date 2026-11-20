@@ -32,6 +32,9 @@ class _Node:
         self._status = status
         self.admin_requests: list[admin_pb2.AdminMessage] = []
 
+    def getURL(self, includeAll: bool = True) -> str:
+        return "https://meshtastic.org/e/#all" if includeAll else "https://meshtastic.org/e/#one"
+
     def _sendAdmin(self, msg, wantResponse=True, onResponse=None):
         self.admin_requests.append(msg)
         if self._status is None:
@@ -85,6 +88,7 @@ def test_every_part_comes_over_one_connection(radio) -> None:
     result = core.inspect(what="all")
     assert radio.connects == [None]
     assert {"summary", "config", "channels", "nodes", "network"} <= set(result)
+    assert "url" not in result  # the channel keys come only when asked for
     assert result["backend"] == "python" and result["target"] == "/dev/ttyUSB0"
     assert "errors" not in result
 
@@ -192,3 +196,11 @@ def test_a_ble_target_without_the_sdk_says_how_to_get_it(radio, monkeypatch) -> 
     monkeypatch.setattr(sdk_cli, "available", lambda: False)
     with pytest.raises(ToolError, match=sdk_cli.CLI_ENV):
         core.inspect(node="ble:Heltec")
+
+
+def test_the_channel_url_comes_when_named(radio) -> None:
+    url = core.inspect(what="url")["url"]
+    assert url == {
+        "primary": "https://meshtastic.org/e/#one",
+        "all": "https://meshtastic.org/e/#all",
+    }

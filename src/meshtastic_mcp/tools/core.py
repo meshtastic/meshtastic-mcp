@@ -189,24 +189,26 @@ def inspect(
     detail: Literal["brief", "full"] = "brief",
     timeout_s: float = 8.0,
 ) -> InspectResult:
-    """Read a radio: its summary, config, channels, node database and network state.
+    """Read a radio: summary, config, channels, channel URL, node database, network state.
 
     Everything asked for comes over one connection. Config fields at their default value are
     reported with that value (`region: UNSET`), and a section the radio never sent is null.
-    Sensitive values (keys, PSKs, passwords, PINs) read `<redacted>` when set.
+    Sensitive values (keys, PSKs, passwords, PINs) read `<redacted>` when set; `url` is the
+    shareable channel URL, keys included, and is returned only when named.
     `network` is the radio's own report: WiFi, Ethernet, Bluetooth and serial link state,
     with the IP address; firmware gives no reason for a failed WiFi association.
     A part that fails is named in `errors` while the others still return.
 
-    Returns `{target, backend, summary?, config?, channels?, nodes?, network?, errors?}`.
+    Returns `{target, backend, summary?, config?, channels?, url?: {primary, all}, nodes?,
+    network?, errors?}`.
 
     Args:
         node: A device name from `devices` (`heltec-v3-aa13`, `host/name`), a serial port,
             `tcp://host[:port]` or `ble:<name or address>` (SDK backend). Omit to use the
             one attached radio.
-        what: One or more of `summary`, `config`, `channels`, `nodes`, `network`, or a
-            config section such as `lora`, `mqtt` or `config.network`, which reads that
-            section alone. `all` reads every part.
+        what: One or more of `summary`, `config`, `channels`, `url`, `nodes`, `network`, or
+            a config section such as `lora`, `mqtt` or `config.network`, which reads that
+            section alone. `all` reads every part but `url`.
         detail: `brief` (default) or `full`; `full` adds firmware metadata to the summary and
             every field of each node record.
         timeout_s: Seconds to wait for the radio to answer.
@@ -218,7 +220,7 @@ def inspect(
         name = item.strip().lower()
         section = name.removeprefix("config.")
         if name == "all":
-            parts.extend(backends.PARTS)
+            parts.extend(backends.UNSECRET_PARTS)
         elif name in backends.PARTS:
             parts.append(name)  # `network` here is the link state, not the config section
         elif section in _INSPECT_SECTIONS:
