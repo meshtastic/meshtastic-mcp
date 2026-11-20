@@ -34,7 +34,7 @@
 - [docs/local-models.md](docs/local-models.md): local-model offload (tools, backends, config)
 - [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md): experimental Kotlin-SDK device-IO backend
 - [docs/vanity.md](docs/vanity.md): vanity NodeNums / app colors: grind (mvgrind), verify, apply
-- [docs/discord.md](docs/discord.md): read-only Discord source tools (`discord_*`) and token setup
+- [docs/discord.md](docs/discord.md): read-only Discord source tools (`discord_*`, the separate `meshtastic-mcp-discord` server) and token setup
 - [docs/ble-sniffer.md](docs/ble-sniffer.md): off-device BLE capture of the phone<->node
   link (`ble_sniff_*`): nRF Sniffer dongle, pcap format, untrusted output
 - [docs/power-meter.md](docs/power-meter.md): ImmersionRC RF power meter and the `pa_*` PA

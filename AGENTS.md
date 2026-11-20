@@ -38,7 +38,7 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   hints come from the `_READ_ONLY` / `_DESTRUCTIVE` / `_OPEN_WORLD` maps through
   `_AnnotationTransform` in `server.py`.
 - **where tools live**: `tools/`, one module per toolset group in `toolsets.py` (`core.py`,
-  `firmware.py`, `hardware.py`, `android.py`, `apple.py`, `replay.py`, `rf.py`, `discord.py`,
+  `firmware.py`, `hardware.py`, `android.py`, `apple.py`, `replay.py`, `rf.py`,
   `local_model.py`, `sdk.py`). `tools/_app.py` holds the `FastMCP` app, `CAPS` and the
   capability decorators, and `tools/_shared.py` the helpers several modules use (`_off_loop`,
   `_run_job`, `_raise_if_failed`, `_confirmed_hw_call`). `server.py` imports every tool module,
@@ -91,7 +91,9 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   device-IO backend via the JVM CLI — see `docs/sdk-cli-bridge.md`.
 - **discord capability** (needs a read-only bot token: `$DISCORD_BOT_TOKEN` or
   `<user-config-dir>/meshtastic-mcp/discord.token`): `discord.py` stdlib REST client, no extra.
-  Ten read-only `discord_*` tools over the Meshtastic community server: server-side
+  `discord_server.py` is its own `FastMCP` app (`meshtastic-mcp-discord` or
+  `meshtastic-mcp discord-serve`), separate from the device server and importing none of the
+  device stack; the tools register only when a token resolves. Ten read-only `discord_*` tools over the Meshtastic community server: server-side
   `discord_search` (Discord's index; `author`/`mentions` accept `"me"` via `$DISCORD_USER`),
   `discord_mentions`, `discord_context`, `discord_read`, `discord_thread`,
   `discord_forum_posts`, `discord_pins`, `discord_channels`, `discord_member`,

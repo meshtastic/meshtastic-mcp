@@ -340,7 +340,10 @@ def _discord_check() -> Check:
     """
     from . import discord
 
-    needed = "read-only Discord source (discord_search / discord_read / discord_thread / …)"
+    needed = (
+        "read-only Discord source (discord_search / discord_read / discord_thread / …), "
+        "served by meshtastic-mcp-discord"
+    )
     if not discord.available():
         return Check(
             "discord",
@@ -350,7 +353,8 @@ def _discord_check() -> Check:
             detail="no bot token",
             fix=(
                 f"save a read-only bot token to {discord.token_path()} (chmod 600) "
-                f"or export {discord.TOKEN_ENV} — see docs/discord.md"
+                f"or export {discord.TOKEN_ENV}, then register meshtastic-mcp-discord "
+                "(`meshtastic-mcp install --discord`) — see docs/discord.md"
             ),
             env_override=discord.TOKEN_ENV,
         )
