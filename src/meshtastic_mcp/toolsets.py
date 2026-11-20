@@ -81,11 +81,18 @@ _GROUPS: dict[str, frozenset[str]] = {
             "get_channel_url",
             "get_config",
             "list_nodes",
+            "replay_inject",
+            "replay_inject_beacon",
+            "replay_inject_client_notification",
+            "replay_inject_fileinfo",
+            "replay_inject_traceroute",
+            "replay_inject_waypoint",
             "set_config",
             "set_debug_log_api",
             "set_owner",
         }
     ),
+    "replay": frozenset({"inject"}),
     "local-model": frozenset(
         {
             "local_model_serve",

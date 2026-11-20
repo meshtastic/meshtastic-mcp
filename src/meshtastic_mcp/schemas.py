@@ -236,6 +236,15 @@ class SendTextResult(TypedDict):
     ]
 
 
+class InjectResult(TypedDict, total=False):
+    """`inject` result: `id`, `queued` and `connected`, or `error` for an unknown session."""
+
+    id: str
+    queued: int
+    connected: bool
+    error: str
+
+
 class RebootResult(TypedDict):
     """`reboot` result."""
 

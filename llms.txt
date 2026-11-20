@@ -25,7 +25,7 @@
 - [docs/toolsets.md](docs/toolsets.md): `MESHTASTIC_MCP_TOOLSETS` / `MESHTASTIC_MCP_READ_ONLY`,
   the toolset groups, trimming the advertised tool list
 - [docs/replay.md](docs/replay.md): `replay_start` parameters, the `sim_profile` keys, fuzz
-  presets and the `replay_inject_*` tools
+  presets and the `inject` tool
 - [docs/display-mirror.md](docs/display-mirror.md): `capture_display`, `drive_display_start` and
   `send_input_event` on the device's own screen
 - [docs/screenshot-set.md](docs/screenshot-set.md): matching Android and iOS screenshots on one

@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from fastmcp.exceptions import ToolError
 
@@ -20,6 +21,7 @@ from ..replay import engine as replay_engine
 from ..replay import fuzz as replay_fuzz
 from ..replay import get_manager as get_replay_manager
 from ..replay import sim as replay_sim
+from ..schemas import InjectResult
 from ._app import app
 
 # ---------- Replay: simulated Meshtastic TCP device -----------------------
@@ -517,6 +519,222 @@ def replay_inject_waypoint(
         for _ in range(max(1, count))
     ]
     return get_replay_manager().inject(session_id, pkts, channel=channel)
+
+
+_PACKET_KINDS = ("text", "position", "nodeinfo", "raw")
+_PACKET_PARAMS = ("args", "from_node", "to_node", "channel", "count", "fuzz")
+_INJECT_KIND_PARAMS: dict[str, tuple[str, ...]] = {
+    **dict.fromkeys(_PACKET_KINDS, _PACKET_PARAMS),
+    "packet": ("packet_kind", *_PACKET_PARAMS),
+    "waypoint": (
+        "lat",
+        "lon",
+        "name",
+        "description",
+        "icon",
+        "geofence_radius",
+        "bbox",
+        "notify_on_enter",
+        "notify_on_exit",
+        "notify_favorites_only",
+        "from_node",
+        "channel",
+        "count",
+    ),
+    "beacon": (
+        "message",
+        "offer_channel_name",
+        "offer_channel_psk_hex",
+        "offer_region",
+        "offer_preset",
+        "from_node",
+        "channel",
+        "count",
+    ),
+    "client_notification": (
+        "variant",
+        "message",
+        "level",
+        "remote_longname",
+        "nonce",
+        "security_number",
+        "verification_characters",
+        "is_sender",
+        "count",
+    ),
+    "fileinfo": ("file_name", "size_bytes", "count"),
+    "traceroute": (
+        "destination_node",
+        "route",
+        "snr_towards",
+        "route_back",
+        "snr_back",
+        "from_node",
+        "channel",
+    ),
+}
+_INJECT_REQUIRED: dict[str, tuple[str, ...]] = {
+    "packet": ("packet_kind",),
+    "waypoint": ("lat", "lon"),
+    "fileinfo": ("file_name",),
+    "traceroute": ("destination_node",),
+}
+
+
+@app.tool()
+def inject(
+    session_id: str,
+    kind: Literal[
+        "text",
+        "position",
+        "nodeinfo",
+        "raw",
+        "packet",
+        "waypoint",
+        "beacon",
+        "client_notification",
+        "fileinfo",
+        "traceroute",
+    ],
+    packet_kind: str | None = None,
+    args: dict[str, Any] | None = None,
+    from_node: int | None = None,
+    to_node: int | None = None,
+    channel: str | None = None,
+    count: int | None = None,
+    fuzz: bool | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
+    name: str | None = None,
+    description: str | None = None,
+    icon: int | None = None,
+    geofence_radius: int | None = None,
+    bbox: list[float] | None = None,
+    notify_on_enter: bool | None = None,
+    notify_on_exit: bool | None = None,
+    notify_favorites_only: bool | None = None,
+    message: str | None = None,
+    offer_channel_name: str | None = None,
+    offer_channel_psk_hex: str | None = None,
+    offer_region: str | None = None,
+    offer_preset: str | None = None,
+    variant: str | None = None,
+    level: str | None = None,
+    remote_longname: str | None = None,
+    nonce: int | None = None,
+    security_number: int | None = None,
+    verification_characters: str | None = None,
+    is_sender: bool | None = None,
+    file_name: str | None = None,
+    size_bytes: int | None = None,
+    destination_node: int | None = None,
+    route: list[int] | None = None,
+    snr_towards: list[int] | None = None,
+    route_back: list[int] | None = None,
+    snr_back: list[int] | None = None,
+) -> InjectResult:
+    """Inject a packet or FromRadio message into a running replay session to drive an app.
+
+    `kind` picks what is sent, and only that kind's parameters are accepted; another kind's
+    parameter is refused. `text`, `position`, `nodeinfo` and `raw` take `args`, `from_node`,
+    `to_node`, `channel`, `count` and `fuzz`; `packet` takes those plus `packet_kind`, for any
+    packet the builder knows by name that has no kind of its own, such as a hand-built
+    `traceroute` reply with a `request_id`. `waypoint` (geofence included) takes `lat`,
+    `lon`, `name`, `description`, `icon`, `geofence_radius`, `bbox`, `notify_on_enter`,
+    `notify_on_exit`, `notify_favorites_only`, `from_node`, `channel` and `count`. `beacon`
+    is a MESH_BEACON_APP packet for Local Mesh Discovery. `client_notification` and
+    `fileinfo` are top-level FromRadio messages with no packet envelope. `traceroute` is an
+    unsolicited RouteDiscovery reply, which an app records as an observed traceroute. Omitted
+    parameters keep the defaults named below. Examples: docs/replay.md.
+
+    Returns `{id, queued, connected}`, or `{error}` for an unknown session.
+
+    Args:
+        session_id: Session id from `replay_start`.
+        kind: What to inject: `text`, `position`, `nodeinfo`, `raw`, `packet`, `waypoint`,
+            `beacon`, `client_notification`, `fileinfo` or `traceroute`.
+        packet_kind: For `packet`: the builder's packet name, such as `traceroute` or
+            `beacon`, with its fields in `args`.
+        args: For `text`, `position`, `nodeinfo`, `raw` and `packet`: `text` takes `body`
+            (and `reply_id`, `emoji` for a tapback); `position` takes `lat`, `lon`,
+            `altitude`; `nodeinfo` takes `id`, `long_name`, `short_name`, `hw_model`,
+            `role`; `raw` takes `portnum`, `payload_hex`; `traceroute` takes `route`,
+            `snr_towards`, `route_back`, `snr_back`, `request_id`.
+        from_node: Sender node number; omit for a synthetic injector node. For `traceroute`,
+            omit to send from `destination_node`.
+        to_node: Destination node number for `text`, `position`, `nodeinfo` and `raw`; omit
+            to broadcast.
+        channel: Channel name to send on; default `LongFast`. Not for `client_notification`
+            or `fileinfo`.
+        count: How many copies to send; default 1. For `fileinfo`, with `count` above 1 each
+            entry's `file_name` gets a distinct suffix. Not for `traceroute`.
+        fuzz: For `text`, `position`, `nodeinfo`, `raw` and `packet`: `True` runs each packet
+            through the session's fuzz mutator first.
+        lat: `waypoint` latitude in decimal degrees (required for it).
+        lon: `waypoint` longitude in decimal degrees (required for it).
+        name: `waypoint` name.
+        description: `waypoint` description.
+        icon: `waypoint` icon as a Unicode code point; 0 sets none.
+        geofence_radius: `waypoint` geofence circle radius in meters; 0 for none.
+        bbox: `waypoint` geofence box `[south, west, north, east]` in decimal degrees.
+        notify_on_enter: `waypoint`: notify when a node enters the geofence.
+        notify_on_exit: `waypoint`: notify when a node leaves the geofence.
+        notify_favorites_only: `waypoint`: notify only for favorite nodes.
+        message: `beacon` text, at most 100 bytes on firmware; or, for `client_notification`,
+            text that replaces firmware's wording (empty keeps it).
+        offer_channel_name: `beacon`: name of a channel the app can offer to switch to.
+        offer_channel_psk_hex: `beacon`: that channel's PSK, in hex.
+        offer_region: `beacon`: LoRa region the beaconed mesh advertises; default `US`.
+        offer_preset: `beacon`: modem preset the beaconed mesh advertises; default
+            `LONG_FAST`.
+        variant: `client_notification` variant: `low_entropy_key` (the default),
+            `duplicated_public_key`, `key_verification_number_request`,
+            `key_verification_number_inform`, `key_verification_final` or `text`.
+        level: `client_notification` level: DEBUG, INFO, WARNING (the default), ERROR or
+            CRITICAL.
+        remote_longname: `client_notification`: the remote node's long name, for the
+            key-verification variants.
+        nonce: `client_notification`: key-verification nonce.
+        security_number: `client_notification`: security number, for
+            `key_verification_number_inform`.
+        verification_characters: `client_notification`: verification characters, for
+            `key_verification_final`.
+        is_sender: `client_notification`: whether this side started the verification, for
+            `key_verification_final`.
+        file_name: `fileinfo` reported file name (required for it).
+        size_bytes: `fileinfo` reported size in bytes; negative values make a malformed entry.
+        destination_node: `traceroute` responding node's number (required for it).
+        route: `traceroute` node numbers along the path, destination last; omitted, a
+            synthetic origin, relay and destination path is used.
+        snr_towards: `traceroute` per-hop SNR towards the destination; omitted, none are sent.
+        route_back: `traceroute` node numbers along the return path, source last.
+        snr_back: `traceroute` per-hop SNR on the return path; omitted, none are sent.
+    """
+    given = {
+        key: value
+        for key, value in locals().items()
+        if key not in ("session_id", "kind") and value is not None
+    }
+    allowed = _INJECT_KIND_PARAMS[kind]
+    stray = sorted(set(given) - set(allowed))
+    if stray:
+        raise ToolError(
+            f"inject kind {kind!r} does not take {', '.join(stray)}; it takes {', '.join(allowed)}"
+        )
+    missing = [key for key in _INJECT_REQUIRED.get(kind, ()) if key not in given]
+    if missing:
+        raise ToolError(f"inject kind {kind!r} needs {', '.join(missing)}")
+    if kind in (*_PACKET_KINDS, "packet"):
+        builder_kind = given.pop("packet_kind", kind)
+        return cast(InjectResult, replay_inject(session_id, builder_kind, **given))
+    targets: dict[str, Callable[..., Any]] = {
+        "waypoint": replay_inject_waypoint,
+        "beacon": replay_inject_beacon,
+        "client_notification": replay_inject_client_notification,
+        "fileinfo": replay_inject_fileinfo,
+        "traceroute": replay_inject_traceroute,
+    }
+    return cast(InjectResult, targets[kind](session_id, **given))
 
 
 @app.tool()

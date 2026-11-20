@@ -284,9 +284,7 @@ replay_start(
 replay_start(source="defcon", sim_profile={"bots": {"count": 17}})  # BBS bots + tapback storms
 replay_start(source="meshcon", fuzz="adversary")  # lace it with bad actors
 replay_start(source="capture.db", announce_interval=30)  # in-app "Replay Clock" progress
-replay_inject(
-    sid, "waypoint", {"lat": 37, "lon": -122, "geofence_radius": 500, "notify_on_enter": True}
-)
+inject(sid, "waypoint", lat=37, lon=-122, geofence_radius=500, notify_on_enter=True)
 replay_status()
 replay_stop()
 ```
@@ -325,7 +323,7 @@ replay_stop()
   attendees, tapback (emoji-reaction) storms incl. one legendary 100+-reaction broadcast, per-bot
   beacons, and attendee→bot traceroute pairs. Layered on after the RF-observer stage so the
   app-facing exchanges arrive intact.
-- **Live injection** (`replay_inject`): push exact packets into a running session to drive app
+- **Live injection** (`inject`): push exact packets into a running session to drive app
   features on demand — a waypoint with a geofence, a node position crossing it, a text, a NodeInfo,
   or `raw`. Builders (`replay/build.py`) set proto fields the bundled lib predates (e.g. geofence)
   via raw-wire append; `fuzz=True` injects a deliberately malformed packet (shares the fuzzer's

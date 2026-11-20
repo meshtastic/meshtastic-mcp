@@ -10,13 +10,13 @@ Every tool a client loads costs context. Two environment variables shrink what t
 | Group | Tools |
 | --- | --- |
 | `core` | The portable device set: `devices`, `list_devices`, `inspect`, owner, config and channel writes, config snapshots, `send_text`, `reboot`, `shutdown`, `factory_reset`, the recorder tools, the display mirror (`capture_display`, `drive_display_*`, `send_input_event`), `inject_frame`, `triage_bundle` and `doctor`. |
-| `legacy` | The pre-1.0 tools `inspect` and `configure` replace: `device_info`, `list_nodes`, `get_config`, `get_channel_url`, `set_config`, `set_owner`, `set_debug_log_api`. Off unless named; removed in 1.1. |
+| `legacy` | The pre-1.0 tools `inspect` and `configure` replace: `device_info`, `list_nodes`, `get_config`, `get_channel_url`, `set_config`, `set_owner`, `set_debug_log_api`, and the six `replay_inject*` tools `inject` replaces. Off unless named; removed in 1.1. |
 | `firmware` | Build, flash, boards and userPrefs. Registered only with `MESHTASTIC_FIRMWARE_ROOT`. |
 | `hardware` | esptool, nrfutil, picotool, uhubctl, `touch_1200bps`, the `nrf52_*` UF2 bootloader tools, the `serial_*` monitor sessions (they run `pio device monitor` in the firmware tree) and `capture_screen` (a webcam and the `[ui]` extra). |
 | `android` | Android emulator and app driving (`android_*`), the ATAK fleet (`atak_*`). |
 | `apple` | iOS Simulator driving (`ios_*`) and `screenshot_set_*`. |
 | `discord` | `discord_*`. |
-| `replay` | The simulated device (`replay_*`) and the CoT relay (`cot_relay_*`). |
+| `replay` | The simulated device (`replay_*`, `inject`) and the CoT relay (`cot_relay_*`). |
 | `rf` | The SDR oracle (`rf_*`), the power meter (`pa_*`), the BLE sniffer (`ble_sniff_*`) and vanity keys (`vanity_*`). |
 | `local-model` | Local-model offload and its backend tools. |
 | `sdk` | The experimental Kotlin SDK bridge (`sdk_*`). |

@@ -242,6 +242,7 @@ from .tools.replay import cot_relay_start as cot_relay_start
 from .tools.replay import cot_relay_status as cot_relay_status
 from .tools.replay import cot_relay_stop as cot_relay_stop
 from .tools.replay import get_replay_manager as get_replay_manager
+from .tools.replay import inject as inject
 from .tools.replay import replay_build as replay_build
 from .tools.replay import replay_capture as replay_capture
 from .tools.replay import replay_engine as replay_engine
@@ -599,6 +600,7 @@ _DESTRUCTIVE = {
     "atak_drive_route",
     "atak_drive_stop",
     "atak_share_item",  # drives ATAK UI; broadcasts CoT to every connected peer
+    "inject",  # emits packets or FromRadio messages onto the live replay connection
     "replay_inject",  # emits packets onto the live connection
     "replay_inject_beacon",  # emits a MESH_BEACON_APP packet
     "replay_inject_client_notification",  # emits a ClientNotification FromRadio to the client
