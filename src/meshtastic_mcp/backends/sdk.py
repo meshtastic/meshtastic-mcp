@@ -99,3 +99,56 @@ class SdkBackend:
         save_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
     ) -> dict[str, Any]:
         raise BackendError("the SDK backend does not write config yet; use a serial or TCP target")
+
+    def admin(
+        self,
+        target: str | None,
+        action: str,
+        node_id: str | int | None,
+        seconds: int,
+        wait_back: bool,
+        timeout_s: float,
+    ) -> dict[str, Any]:
+        raise BackendError("the SDK backend has no admin actions yet; use a serial or TCP target")
+
+    def send(
+        self,
+        target: str | None,
+        to: str | int | None,
+        payload: dict[str, Any],
+        channel: int,
+        want_ack: bool,
+        hop_limit: int | None,
+        wait_s: float,
+    ) -> dict[str, Any]:
+        kind, value = next(iter(payload.items()))
+        if kind != "text":
+            raise BackendError("the SDK backend sends text only; use a serial or TCP target")
+        if not target or not sdk_cli.available():
+            raise BackendError(f"sending over {target} needs the SDK CLI; set {sdk_cli.CLI_ENV}")
+        dest = "BROADCAST" if to in (None, "", "^all") else str(to)
+        if dest.startswith("!"):
+            dest = str(int(dest[1:], 16))
+        res = sdk_cli.send_text(
+            target, str(value), to=dest, channel=channel, await_ms=int(wait_s * 1000)
+        )
+        error = res.get("error") or {}
+        results = [i for i in res["by_type"].get("info", []) if i.get("kind") == "send-result"]
+        queued = [i for i in res["by_type"].get("info", []) if i.get("kind") == "send-queued"]
+        if error.get("code") == "timeout":
+            delivery = "no_ack"
+        elif results and results[-1].get("outcome") == "success":
+            delivery = "delivered"
+        elif results:
+            delivery = f"failed:{results[-1].get('reason')}"
+        elif not res.get("ok"):
+            raise BackendError(f"the SDK CLI could not send: {error.get('message') or res}")
+        else:
+            delivery = None
+        return {
+            "target": target,
+            "packet_id": queued[0].get("messageId") if queued else None,
+            "destination": dest,
+            "kind": "text",
+            "delivery": delivery,
+        }
