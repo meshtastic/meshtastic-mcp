@@ -254,6 +254,10 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   the description and the inputSchema, never the outputSchema, so a tool whose result is not
   obvious names its fields in one description line (``Returns `{ok, packet_id, destination}`.``).
   `tests/unit/test_tool_docs.py` checks every tool, gated or not.
+- **The tool reference is generated.** `docs/tools.md` and the toolset table in `README.md` come
+  from the registered tools: after adding or changing a tool, run `meshtastic-mcp docs generate`
+  and commit the result. `tests/unit/test_docs_gen.py`, which CI runs, fails when it is stale. The
+  description in code is the only per-tool prose; don't restate it in other docs.
 - **Every new tool gets a toolset.** A tool outside `core` goes into `toolsets._GROUPS` or
   `_PREFIXES`; `_GROUPS["firmware"]` must equal `_FIRMWARE_TOOLS` (a test checks it). `core` is
   the portable device set, the tools that need only the base install and a radio, and
