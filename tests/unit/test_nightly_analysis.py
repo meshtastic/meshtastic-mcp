@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: Meshtastic contributors
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Analyzer heuristics over synthetic soak JSONL + registry rows, and the
-optional local-model behavioral pass (faked)."""
+"""Analyzer heuristics over synthetic soak JSONL + registry rows."""
 
 from __future__ import annotations
 
@@ -61,8 +60,7 @@ def _cats(result: na.AnalysisResult) -> list[str]:
     return [o.category for o in result.observations]
 
 
-def test_soak_panic_errors_reboots_and_silence(tmp_path, monkeypatch):
-    monkeypatch.setattr(na, "has_local_model", lambda: False)
+def test_soak_panic_errors_reboots_and_silence(tmp_path):
 
     async def go():
         db = await Database(tmp_path / "db").connect()
@@ -81,8 +79,6 @@ def test_soak_panic_errors_reboots_and_silence(tmp_path, monkeypatch):
         assert "error_logs" in cats
         assert "reboot_churn" in cats  # uptime 500 → 12 is a reset
         assert "log_silence" in cats  # QUIET produced nothing
-        # llm gate off → explicitly reported, deterministic results stand.
-        assert "llm_unavailable" in cats
         silence = next(o for o in res.observations if o.category == "log_silence")
         assert silence.device == "QUIET"
         await db.close()
@@ -90,8 +86,7 @@ def test_soak_panic_errors_reboots_and_silence(tmp_path, monkeypatch):
     asyncio.run(go())
 
 
-def test_telemetry_slopes_thresholds(tmp_path, monkeypatch):
-    monkeypatch.setattr(na, "has_local_model", lambda: False)
+def test_telemetry_slopes_thresholds(tmp_path):
 
     async def go():
         db = await Database(tmp_path / "db").connect()
@@ -120,8 +115,7 @@ def test_telemetry_slopes_thresholds(tmp_path, monkeypatch):
     asyncio.run(go())
 
 
-def test_traffic_loss(tmp_path, monkeypatch):
-    monkeypatch.setattr(na, "has_local_model", lambda: False)
+def test_traffic_loss(tmp_path):
 
     async def go():
         db = await Database(tmp_path / "db").connect()
@@ -152,7 +146,6 @@ def test_traffic_loss(tmp_path, monkeypatch):
 
 
 def test_device_missing_step_errors_and_versions(tmp_path, monkeypatch):
-    monkeypatch.setattr(na, "has_local_model", lambda: False)
     monkeypatch.setattr(na, "commit_subjects", lambda *a, **k: ["abc123 Fix eviction"])
 
     async def go():
@@ -188,9 +181,8 @@ def test_device_missing_step_errors_and_versions(tmp_path, monkeypatch):
     asyncio.run(go())
 
 
-def test_pipeline_broken_night_no_run(tmp_path, monkeypatch):
+def test_pipeline_broken_night_no_run(tmp_path):
     """No suite ever ran (run=None) — analysis still yields the step errors."""
-    monkeypatch.setattr(na, "has_local_model", lambda: False)
 
     async def go():
         db = await Database(tmp_path / "db").connect()
@@ -215,50 +207,7 @@ def test_pipeline_broken_night_no_run(tmp_path, monkeypatch):
     asyncio.run(go())
 
 
-def test_behavioral_map_reduce_and_vision(tmp_path, monkeypatch):
-    monkeypatch.setattr(na, "has_local_model", lambda: True)
-    calls = {"complete": [], "vision": []}
-
-    def fake_complete(prompt, *, system=None, lane="default", num_predict=0, timeout=0):
-        calls["complete"].append((lane, prompt[:40]))
-        if lane == "fast":
-            return "- device chunk summary"
-        return "- fleet: S1 rebooted twice\n- fleet: quiet otherwise"
-
-    def fake_vision(path, question, **kw):
-        calls["vision"].append(path)
-        return {"match": True, "answer": "yes", "evidence": "screen shows garbled text"}
-
-    monkeypatch.setattr(na.local_model, "complete", fake_complete)
-    monkeypatch.setattr(na.local_model, "vision_assert", fake_vision)
-
-    async def go():
-        db = await Database(tmp_path / "db").connect()
-        await _seed_device(db, "S1")
-        _write_jsonl(
-            tmp_path / "night" / nightly_soak.LOGS_FILE,
-            [
-                {"ts": 2100, "serial": "S1", "line": f"INFO line {i}", "level": "INFO"}
-                for i in range(5)
-            ],
-        )
-        (tmp_path / "night" / "snap-S1-123.jpg").write_bytes(b"\xff\xd8fake")
-        res = await _analyze(db, tmp_path)
-        behavior = [o for o in res.observations if o.category == "behavior"]
-        assert len(behavior) == 2  # fleet summary + flagged snapshot
-        fleet = next(o for o in behavior if "behavioral summary" in o.summary)
-        assert any("rebooted twice" in e for e in fleet.evidence)
-        snap = next(o for o in behavior if "screen check" in o.summary)
-        assert snap.device == "S1" and any("garbled" in e for e in snap.evidence)
-        lanes = [lane for lane, _p in calls["complete"]]
-        assert "fast" in lanes and "default" in lanes  # map then reduce
-        await db.close()
-
-    asyncio.run(go())
-
-
-def test_device_rows_shape(tmp_path, monkeypatch):
-    monkeypatch.setattr(na, "has_local_model", lambda: False)
+def test_device_rows_shape(tmp_path):
 
     async def go():
         db = await Database(tmp_path / "db").connect()
@@ -285,8 +234,7 @@ def test_device_rows_shape(tmp_path, monkeypatch):
     asyncio.run(go())
 
 
-def test_observer_drop_detection(tmp_path, monkeypatch):
-    monkeypatch.setattr(na, "has_local_model", lambda: False)
+def test_observer_drop_detection(tmp_path):
 
     async def go():
         db = await Database(tmp_path / "db").connect()
@@ -328,10 +276,9 @@ def test_observer_drop_detection(tmp_path, monkeypatch):
     asyncio.run(go())
 
 
-def test_traffic_confirmed_via_packet_records(tmp_path, monkeypatch):
+def test_traffic_confirmed_via_packet_records(tmp_path):
     """The traffic-loss check must see a message delivered when a PEER's
     observer recorded the RX packet — the API-based capture path."""
-    monkeypatch.setattr(na, "has_local_model", lambda: False)
 
     async def go():
         db = await Database(tmp_path / "db").connect()
@@ -358,103 +305,3 @@ def test_traffic_confirmed_via_packet_records(tmp_path, monkeypatch):
         await db.close()
 
     asyncio.run(go())
-
-
-# --- contradiction guard -------------------------------------------------
-# BEHAVIOR_SYSTEM invites "nothing notable" on a clean window, and small models
-# take that opening even when the window is dirty. These cases are verbatim
-# model output from a granite4:tiny-h vs phi4-mini bench on raw soak logs.
-
-GRANITE_CONTRADICTION = """- SOAK window clean, no reboots or unexpected silence observed
-- Multiple brownout warnings at 14:10:50 and 14:10:51 due to low vbat (3.21V)
-- Reboot occurred at 14:11:10 after watchdog timeout on node !a4c1382b
-- Several retransmission storms involving node !7f2e9910 with TEXT_MESSAGE_APP"""
-
-
-def test_flag_contradictory_all_clear_catches_leading_false_all_clear():
-    out, flagged = na.flag_contradictory_all_clear(GRANITE_CONTRADICTION)
-    assert flagged
-    assert out.startswith(na.CONTRADICTION_NOTE)
-    assert GRANITE_CONTRADICTION in out  # original text preserved below the note
-
-
-def test_flag_contradictory_all_clear_allows_an_honest_all_clear():
-    # a genuinely clean window says so and lists nothing; "no reboots" is the
-    # accurate claim here and must not trip the guard on its own wording
-    for text in ("nothing notable", "- nothing notable in this window", "- no reboots observed"):
-        out, flagged = na.flag_contradictory_all_clear(text)
-        assert not flagged, text
-        assert out == text
-
-
-def test_flag_contradictory_all_clear_ignores_plain_anomaly_report():
-    text = "- Reboot at 14:11:10 after watchdog timeout on !a4c1382b\n- CRC mismatch x5"
-    out, flagged = na.flag_contradictory_all_clear(text)
-    assert not flagged
-    assert out == text
-
-
-def test_flag_contradictory_all_clear_handles_empty():
-    assert na.flag_contradictory_all_clear("") == ("", False)
-    assert na.flag_contradictory_all_clear("   ") == ("   ", False)
-
-
-def test_flag_contradictory_all_clear_ignores_negated_clean_claim():
-    # an honest dirty report phrased as a denial must not read as an all-clear
-    for text in (
-        "- SOAK window is not clean; watchdog reboot at 02:14",
-        "- the night was far from clean: brownout vbat=3.21V then a reboot",
-    ):
-        out, flagged = na.flag_contradictory_all_clear(text)
-        assert not flagged, text
-        assert out == text
-
-
-def test_flag_contradictory_all_clear_allows_multi_item_honest_denial():
-    # "no reboots or unexpected silence" denies both; `silence` must not be
-    # harvested from that clause as if it were anomaly evidence
-    text = "- nothing notable\n- no reboots or unexpected silence observed"
-    out, flagged = na.flag_contradictory_all_clear(text)
-    assert not flagged
-    assert out == text
-
-
-def test_flag_contradictory_all_clear_counts_absence_findings_as_anomalies():
-    # a denial that IS the finding still contradicts an all-clear
-    text = "- nothing notable this window\n- no packets from !c81d44a0 for 3600s"
-    _, flagged = na.flag_contradictory_all_clear(text)
-    assert flagged
-
-
-def test_flag_contradictory_all_clear_catches_scoped_self_contradiction():
-    # verbatim phi4-mini output on a CLEAN window: it hallucinated anomalies and
-    # then declared the same topic unremarkable. The claim is scoped ("regarding
-    # unexpected silence") rather than global, and still contradicts the bullets.
-    text = (
-        "- Repeated packets with varying RSSI and SNR, indicating potential "
-        "retransmission storm.\n"
-        "- Nothing notable regarding unexpected silence, as all expected device "
-        "transmissions are logged."
-    )
-    _, flagged = na.flag_contradictory_all_clear(text)
-    assert flagged
-
-
-def test_flag_contradictory_all_clear_sees_evidence_after_a_contrast():
-    # the granite4 shape with the anomaly hung off a contrast: the denial scopes
-    # only to its own clause, so the reboot after "but" is still evidence
-    for text in (
-        "- SOAK window clean, no reboots seen, but !a4c1382b rebooted twice",
-        "- nothing notable; no errors, however a watchdog reboot hit !c81d44a0",
-    ):
-        out, flagged = na.flag_contradictory_all_clear(text)
-        assert flagged, text
-        assert out.startswith(na.CONTRADICTION_NOTE)
-
-
-def test_flag_contradictory_all_clear_allows_an_honest_contrast():
-    # a contrast that introduces no anomaly must still read as clean
-    text = "- nothing notable, but the run finished early"
-    out, flagged = na.flag_contradictory_all_clear(text)
-    assert not flagged
-    assert out == text

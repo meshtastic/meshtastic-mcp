@@ -18,6 +18,7 @@ from meshtastic_mcp import toolsets
 # TCP. A new tool that matches no group lands here, so this list fails until it is placed.
 _CORE = frozenset(
     {
+        "admin",
         "capture_display",
         "claim",
         "config_diff",
@@ -29,7 +30,6 @@ _CORE = frozenset(
         "drive_display_poll",
         "drive_display_start",
         "events_window",
-        "factory_reset",
         "inject_frame",
         "inspect",
         "job",
@@ -38,16 +38,14 @@ _CORE = frozenset(
         "mark_event",
         "packets_window",
         "query",
-        "reboot",
         "recorder_export",
         "release",
         "recorder_pause",
         "recorder_resume",
         "recorder_status",
         "send_input_event",
-        "send_text",
+        "send",
         "set_channel_url",
-        "shutdown",
         "telemetry_timeline",
         "triage_bundle",
         "wait_for",
@@ -134,7 +132,8 @@ def test_classification_of_known_tools() -> None:
     assert toolsets.toolset_of("inspect") == "core"
     assert toolsets.toolset_of("device_info") == "legacy"
     assert toolsets.toolset_of("build_start") == "firmware"
-    assert toolsets.toolset_of("esptool_raw") == "hardware"
+    assert toolsets.toolset_of("vendor") == "hardware"
+    assert toolsets.toolset_of("esptool_raw") == "legacy"
     assert toolsets.toolset_of("nrf52_flash_uf2") == "hardware"
     assert toolsets.toolset_of("android_tap") == "android"
     assert toolsets.toolset_of("atak_fleet_up") == "android"
@@ -142,7 +141,6 @@ def test_classification_of_known_tools() -> None:
     assert toolsets.toolset_of("cot_relay_start") == "replay"
     assert toolsets.toolset_of("vanity_preview") == "rf"
     assert toolsets.toolset_of("rf_confirm_tx") == "rf"
-    assert toolsets.toolset_of("vision_oracle") == "local-model"
     assert toolsets.toolset_of("ios_boot") == "apple"
     assert toolsets.toolset_of("screenshot_set_start") == "apple"
     assert toolsets.toolset_of("sdk_send_text") == "sdk"
