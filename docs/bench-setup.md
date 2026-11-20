@@ -126,3 +126,19 @@ profile is what enables per-slot power-cycle recovery.
   the `recover_device` MCP tool, or replug.
 - **`doctor`** — `meshtastic-mcp doctor` lists every missing dependency with
   the exact install command.
+
+## FleetSuite
+
+FleetSuite is a local web UI for a multi-board bench: a live device registry (discovery plus firmware, hardware model and region enrichment), a build queue with flashing, an escalating recovery ladder (reboot, USB power-cycle, bootloader, reflash), per-device camera streams for screen assertions, the tiered test runner, serial monitors and optional Datadog log and metric shipping.
+
+```bash
+uv tool install 'meshtastic-mcp[web]'
+meshtastic-mcp-web              # desktop window at http://127.0.0.1:8765
+meshtastic-mcp-web --browser    # serve only, headless or to open yourself
+```
+
+It binds to `127.0.0.1` by default, and its destructive actions (reflash, factory reset) ask for confirmation. While it runs, FleetSuite owns the bench's serial ports through its monitors and enrichment. Pause it or use its own controls rather than pointing a second tool at the same ports; its test runner suspends the monitors for the length of a run. From a source checkout, `./scripts/fleetsuite.sh` bootstraps the venv, the npm packages and the SPA build in one command, and `./scripts/web-dev.sh` runs the backend with the Vite dev server and hot reload. Set `MESHTASTIC_FIRMWARE_ROOT` to enable builds, reflash recovery and exact per-board PlatformIO env resolution; without it FleetSuite still discovers, enriches and drives devices.
+
+## The hardware test suite
+
+`tests/` is a tiered pytest suite (`unit`, `mesh`, `telemetry`, `monitor`, `recovery`, `ui`, `fleet`, `admin`, `provisioning`). `unit` runs with no hardware. The hardware tiers target a USB hub with per-board roles keyed by hub slot; the reference bench is a T-Echo, a Heltec T114, a RAK4631 and an ESP32-S3 (see `tests/_bench.py` and [tests/README.md](../tests/README.md)). Run it through `run-tests.sh`, the `meshtastic-mcp-test-tui` terminal UI or FleetSuite's test runner.
