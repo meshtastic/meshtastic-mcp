@@ -7,6 +7,8 @@ measured against `baseline.json`; no phase merges while a run scores below it.
 against `dev` only, and run `holdout` to check the tuning did not overfit. Each task has a prompt, a
 `check` on the agent's final answer, and, where the task changes a radio, a `verify` command that
 reads the radio back and a `teardown` that restores it.
+A check fails an answer whose opening paragraph admits failure ("I couldn't find it"); the
+same words in a side note further down do not.
 
 | `risk` | Runs when |
 | --- | --- |

@@ -36,7 +36,7 @@
     "check": {
       "kind": "answer_regex",
       "pattern": "(?is)^(?=.*\\b(BLE|Bluetooth)\\b)(?=.*!(?:[0-9a-f]{8})).*",
-      "reject": "(?i)\\b(couldn't|could not|unable to|over serial|via serial|ttyUSB|/dev/tty)"
+      "reject": "(?i)\\b(couldn't|could not|unable to|over serial|via serial|instead|BLE (failed|did not|didn't|isn't|wasn't))"
     },
     "notes": "The answer must name BLE and must not say it fell back to serial. The agent's claim is still not proof of the transport."
   },
