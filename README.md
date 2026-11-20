@@ -30,8 +30,9 @@ Inside Claude Code (or any MCP client registered with `meshtastic`):
 devices()                               → the attached radios, by name
 inspect(node="heltec-v3-aa13")          → firmware, region, node count
 inspect(node="heltec-v3-aa13", what=["lora", "nodes"])  → LoRa config and mesh peers
-set_debug_log_api(port="/dev/cu.usbmodem101", enabled=True)
-send_text(port="/dev/cu.usbmodem101", text="hello mesh", wait_for_tx=True)  → tx_confirmed
+claim(port="heltec-v3-aa13")                 → lease
+configure(node="heltec-v3-aa13", changes={"security.debug_log_api_enabled": True}, lease=...)
+send_text(port="heltec-v3-aa13", text="hello mesh", wait_for_tx=True)  → tx_confirmed
 ```
 
 A node never sees its own transmission on the receive path, so `packets_window` cannot confirm a

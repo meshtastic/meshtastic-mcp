@@ -81,6 +81,9 @@ _GROUPS: dict[str, frozenset[str]] = {
             "get_channel_url",
             "get_config",
             "list_nodes",
+            "set_config",
+            "set_debug_log_api",
+            "set_owner",
         }
     ),
     "local-model": frozenset(

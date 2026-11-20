@@ -11,7 +11,7 @@ SDK's CLI. `MESHTASTIC_MCP_BACKEND` picks one; a `ble:` target needs `sdk`.
 from __future__ import annotations
 
 import os
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import Any, Protocol
 
 BACKEND_ENV = "MESHTASTIC_MCP_BACKEND"
@@ -42,6 +42,22 @@ class Backend(Protocol):
 
         Returns a dict keyed by part, plus `target`, and `errors` for parts that failed while
         others succeeded. `sections` limits `config`; None means every section.
+        """
+        ...
+
+    def configure(
+        self,
+        target: str | None,
+        changes: dict[str, Any] | None,
+        restore: dict[str, Any] | None,
+        dry_run: bool,
+        timeout_s: float,
+        save_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Apply `changes` (dot-paths) and/or `restore` (a snapshot's config), then read back.
+
+        `save_snapshot(port, config)` stores the config as it was before any write and returns
+        what the result reports as `snapshot`.
         """
         ...
 
