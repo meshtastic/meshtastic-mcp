@@ -76,7 +76,6 @@ class NightlyConfig:
     soak_traffic_interval_min: float = 10.0
     soak_snapshot_interval_min: float = 15.0
     soak_keepalive: bool = True
-    llm_autostart: bool = False
     recovery_allow_reflash: bool = True
     pipeline_timeout_h: float = 10.0
     keep_nights: int = 30

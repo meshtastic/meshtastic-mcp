@@ -71,8 +71,6 @@ from .tools._app import app_plane_tool as app_plane_tool
 from .tools._app import apple_tool as apple_tool
 from .tools._app import ble_sniffer_tool as ble_sniffer_tool
 from .tools._app import firmware_tool as firmware_tool
-from .tools._app import local_serve_tool as local_serve_tool
-from .tools._app import local_tool as local_tool
 from .tools._app import sdk_tool as sdk_tool
 from .tools._app import sdr_tool as sdr_tool
 from .tools._app import tasks_mod as tasks_mod
@@ -210,12 +208,6 @@ from .tools.hardware import touch_1200bps as touch_1200bps
 from .tools.hardware import uhubctl_cycle as uhubctl_cycle
 from .tools.hardware import uhubctl_list as uhubctl_list
 from .tools.hardware import uhubctl_power as uhubctl_power
-from .tools.local_model import local_model_serve as local_model_serve
-from .tools.local_model import local_model_serve_stop as local_model_serve_stop
-from .tools.local_model import local_model_status as local_model_status
-from .tools.local_model import summarize_window as summarize_window
-from .tools.local_model import triage_window as triage_window
-from .tools.local_model import vision_oracle as vision_oracle
 from .tools.replay import _COT_LOCK as _COT_LOCK
 from .tools.replay import _COT_RELAY as _COT_RELAY
 from .tools.replay import _cot_data_dir as _cot_data_dir
@@ -226,6 +218,7 @@ from .tools.replay import cot_relay_start as cot_relay_start
 from .tools.replay import cot_relay_status as cot_relay_status
 from .tools.replay import cot_relay_stop as cot_relay_stop
 from .tools.replay import get_replay_manager as get_replay_manager
+from .tools.replay import inject as inject
 from .tools.replay import replay_build as replay_build
 from .tools.replay import replay_capture as replay_capture
 from .tools.replay import replay_engine as replay_engine
@@ -475,10 +468,6 @@ _READ_ONLY: set[str] = {
     "atak_fleet_status",  # reads fleet bring-up / drive progress; never mutates
     "replay_fuzz_presets",  # static catalog of fuzz presets; no state
     "capture_screen",
-    "summarize_window",  # reads a recorder window, distills via local model; no mutation
-    "vision_oracle",  # reads a screenshot, asks the local model; no mutation
-    "triage_window",  # reads device window (+optional screenshot); no mutation
-    "local_model_status",  # reports backend/reachability; no mutation
     "rf_scan",  # passive SDR capture; no device/host mutation
     "pa_meter_status",  # reads the power meter (version/stored freq/live dBm); no state change
     "ble_sniff_status",  # enumerates USB + resolves a binary; no capture, no state change
@@ -491,6 +480,7 @@ _READ_ONLY: set[str] = {
 _DESTRUCTIVE = {
     "nrf52_enter_uf2",  # reboots the node into its bootloader
     "nrf52_flash_uf2",  # replaces the installed firmware
+    "install",  # replaces the installed firmware, and with erase the whole flash
     "nrf52_factory_erase",  # wipes config, node DB and keys
     "build_start",  # launches a pio subprocess; cannot be undone mid-flight
     "flash_start",  # launches a pio upload subprocess
@@ -506,10 +496,12 @@ _DESTRUCTIVE = {
     "update_flash",
     "touch_1200bps",
     "configure",  # writes config; reversible through the snapshot it returns
+    "admin",  # restarts, powers off or resets a radio
     "set_owner",
     "set_config",
     "set_channel_url",
     "set_debug_log_api",
+    "send",  # injects a mesh packet; cannot be recalled
     "send_text",  # injects a mesh packet; cannot be recalled
     "inject_frame",  # injects a forged frame into the RX pipeline; cannot be recalled
     "rf_confirm_tx",  # calls send_text internally; injects a mesh packet
@@ -555,6 +547,7 @@ _DESTRUCTIVE = {
     "nrfutil_raw",
     "picotool_load",
     "picotool_raw",
+    "vendor",  # runs esptool, nrfutil or picotool; erases and writes flash
     "push_fake_nodedb",
     # Writes/overwrites <stream>.jsonl under a client-supplied dest_dir on the
     # host filesystem — surface it so clients don't treat it as a benign read.
@@ -573,14 +566,13 @@ _DESTRUCTIVE = {
     "atak_drive_route",
     "atak_drive_stop",
     "atak_share_item",  # drives ATAK UI; broadcasts CoT to every connected peer
+    "inject",  # emits packets or FromRadio messages onto the live replay connection
     "replay_inject",  # emits packets onto the live connection
     "replay_inject_beacon",  # emits a MESH_BEACON_APP packet
     "replay_inject_client_notification",  # emits a ClientNotification FromRadio to the client
     "replay_inject_fileinfo",  # emits a FileInfo FromRadio onto the live connection
     "replay_inject_traceroute",  # emits a TRACEROUTE_APP RouteDiscovery packet
     "replay_inject_waypoint",  # emits a WAYPOINT_APP packet (with optional geofence)
-    "local_model_serve",  # spawns a detached llama-server process (and may install it)
-    "local_model_serve_stop",  # terminates the managed llama-server process
     "sdk_send_text",  # injects a mesh packet via the Kotlin SDK CLI; cannot be recalled
 }
 # Writes that are neither read-only nor destructive: they change host state another call
@@ -592,6 +584,7 @@ _ADDITIVE_WRITES = {
 # Idempotent writes: calling with identical args leaves the device in identical
 # state. Clients can safely retry these on timeout without side-effects.
 _IDEMPOTENT_WRITES = {
+    "admin",
     "configure",
     "set_config",
     "set_owner",
@@ -620,6 +613,7 @@ _OPEN_WORLD = {
     "vanity_apply",  # writes the security config to a live device and reboots it
     "set_owner",
     "set_debug_log_api",
+    "send",
     "send_text",
     "inject_frame",
     "reboot",
@@ -726,6 +720,7 @@ _TITLE_OVERRIDES: dict[str, str] = {
     "picotool_info": "Picotool Info",
     "picotool_load": "Picotool Load UF2",
     "picotool_raw": "Picotool Raw Pass-Through",
+    "vendor": "Vendor Flash Tool Pass-Through",
     "nrf52_enter_uf2": "nRF52 Enter UF2 Mode",
     "nrf52_bootloader_info": "nRF52 Bootloader Info",
     "nrf52_backup_firmware": "nRF52 Back Up Firmware",
@@ -966,7 +961,7 @@ def bringup_device(port: str = "", region: str = "US") -> str:
         "1. `list_devices` to find it (or use the given port / a tcp://host:port).\n"
         "2. `device_info` for firmware version + node identity; `list_nodes` for the DB.\n"
         f"3. Confirm region is set ({region}); if unset, `get_config('lora')` then `set_config`.\n"
-        "4. `send_text` a marker to ^all and confirm it leaves on the wire.\n"
+        "4. `send` a text marker to ^all and confirm it leaves on the wire.\n"
         "Report firmware version, region, node count, and any config that looks off."
     )
 
