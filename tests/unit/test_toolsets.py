@@ -24,6 +24,7 @@ _CORE = frozenset(
         "config_snapshot",
         "config_snapshots_list",
         "device_info",
+        "devices",
         "doctor",
         "drive_display_poll",
         "drive_display_start",

@@ -464,6 +464,7 @@ _READ_ONLY: set[str] = {
     "vanity_grind_poll",  # reads grind-job state; never mutates
     "drive_display_poll",  # reads drive-job state; never touches the device
     "job",  # reads any job's state through its kind's poller; never mutates
+    "devices",  # reads the name registry and enumerates ports; opens none
     "serial_list",
     "serial_read",  # reads buffered bytes; no write side-effect
     "device_info",
