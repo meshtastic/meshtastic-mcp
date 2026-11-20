@@ -888,6 +888,13 @@ def main(argv=None) -> None:
     srv.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback)")
     srv.add_argument("--port", type=int, default=8765)
 
+    brg = sub.add_parser(
+        "bridge",
+        help="serve stdio here and forward to a meshtastic-mcp server (default: this host's)",
+    )
+    brg.add_argument("--url", default=None, help="the server's URL, such as http://bench:8765/mcp")
+    brg.add_argument("--token-file", default=None, help="a file holding the server's token")
+
     args = p.parse_args(argv)
 
     if args.cmd == "serve":
@@ -897,7 +904,10 @@ def main(argv=None) -> None:
             token = serve_mod.load_token()
         except serve_mod.TokenConfigError as exc:
             raise SystemExit(f"meshtastic-mcp serve: {exc}") from exc
-        serve_mod.serve(args.host, args.port, token)
+        try:
+            serve_mod.serve(args.host, args.port, token)
+        except serve_mod.ServerAlreadyRunning as exc:
+            raise SystemExit(f"meshtastic-mcp serve: {exc}") from exc
         raise SystemExit(0)
 
     if args.cmd == "doctor":
@@ -954,10 +964,39 @@ def main(argv=None) -> None:
     if args.cmd == "leases":
         raise SystemExit(_cmd_leases(args))
 
-    # default: run the MCP server
+    if args.cmd == "bridge":
+        raise SystemExit(_cmd_bridge(args))
+
+    # default: run the MCP server, or bridge to the one already serving this host's radios
+    from meshtastic_mcp import bridge
+
+    target = bridge.auto_target(os.environ)
+    if target is not None:
+        raise SystemExit(bridge.run(*target, os.environ))
+
     from meshtastic_mcp.server import app
 
     app.run()
+
+
+def _cmd_bridge(args) -> int:
+    from meshtastic_mcp import bridge
+
+    if args.url:
+        if not args.token_file:
+            print("error: --url needs --token-file", file=sys.stderr)
+            return 2
+        try:
+            token = Path(args.token_file).expanduser().read_text(encoding="utf-8").strip()
+        except OSError as e:
+            print(f"error: cannot read {args.token_file}: {e}", file=sys.stderr)
+            return 1
+        return bridge.run(args.url, token, os.environ)
+    target = bridge.auto_target({k: v for k, v in os.environ.items() if k != bridge.STANDALONE_ENV})
+    if target is None:
+        print("error: no meshtastic-mcp server runs on this host; pass --url", file=sys.stderr)
+        return 1
+    return bridge.run(*target, os.environ)
 
 
 if __name__ == "__main__":
