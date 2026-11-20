@@ -228,7 +228,7 @@ dropping DTR as the nRF52 core needs, and fails unless adafruit-nrfutil printed
 `Device programmed.`. A board left sitting in serial DFU takes the package with no touch:
 
 ```
-nrfutil_raw(args=["dfu", "serial", "--package", "fw.zip", "--port", "/dev/ttyACM0",
+vendor(tool="nrfutil", args=["dfu", "serial", "--package", "fw.zip", "--port", "/dev/ttyACM0",
                   "-b", "115200", "--singlebank"], confirm=True)
 ```
 

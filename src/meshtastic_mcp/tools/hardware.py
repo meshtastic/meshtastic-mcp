@@ -10,7 +10,7 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
@@ -376,7 +376,7 @@ async def nrfutil_dfu(
     With adafruit-nrfutil the transfer uses `--singlebank` and fails unless the run printed
     "Device programmed."; where `/dev/serial/by-id` exists the tool does the 1200 baud
     touch itself (dropping DTR) and waits for the bootloader, elsewhere it passes
-    `-t 1200`. For a board already sitting in serial DFU, use `nrfutil_raw` with no touch
+    `-t 1200`. For a board already sitting in serial DFU, use `vendor(tool="nrfutil")` with no touch
     instead. On the Meshtastic bootloader `nrf52_flash_uf2` is several times faster; for
     firmware built from the tree prefer `pio_flash`. Requires confirm=True, or the user's
     answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
@@ -412,6 +412,42 @@ async def nrfutil_raw(ctx: Context, args: list[str], confirm: bool = False) -> d
             human. Only dfu/settings subcommands ask.
     """
     return await _confirmed_hw_call(ctx, lambda c: hw_tools.nrfutil_raw(args, confirm=c), confirm)
+
+
+_VENDORS = {
+    "esptool": lambda args, port, c: hw_tools.esptool_raw(args, port=port, confirm=c),
+    "nrfutil": lambda args, port, c: hw_tools.nrfutil_raw(args, confirm=c),
+    "picotool": lambda args, port, c: hw_tools.picotool_raw(args, confirm=c),
+}
+
+
+@app.tool()
+async def vendor(
+    ctx: Context,
+    tool: Literal["esptool", "nrfutil", "picotool"],
+    args: list[str],
+    port: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Run esptool, nrfutil or picotool with arguments, for what `install` and `admin` do not do.
+
+    A read-only subcommand runs at once. One that erases or writes (esptool `erase_flash`,
+    `write_flash`, nrfutil `dfu`, picotool `load` and so on) needs `confirm=True` or the
+    user's answer, and counts as irreversible. A failed command is a tool error carrying both
+    output tails. Prefer `install` to flash firmware and `admin` for radio actions.
+
+    Returns `{exit_code, stdout_tail, stderr_tail, duration_s, ...}`.
+
+    Args:
+        tool: `esptool`, `nrfutil` (adafruit-nrfutil or Nordic nRF Util) or `picotool`.
+        args: The arguments after the tool name, such as `["chip_id"]` or
+            `["dfu", "serial", "--package", "fw.zip", "--port", "/dev/ttyACM0"]`.
+        port: For esptool, the serial port (`--port`); the others take it in `args`.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+    """
+    run = _VENDORS[tool]
+    return await _confirmed_hw_call(ctx, lambda c: run(args, port, c), confirm)
 
 
 @app.tool()

@@ -581,6 +581,7 @@ _DESTRUCTIVE = {
     "nrfutil_raw",
     "picotool_load",
     "picotool_raw",
+    "vendor",  # runs esptool, nrfutil or picotool; erases and writes flash
     "push_fake_nodedb",
     # Writes/overwrites <stream>.jsonl under a client-supplied dest_dir on the
     # host filesystem — surface it so clients don't treat it as a benign read.
@@ -763,6 +764,7 @@ _TITLE_OVERRIDES: dict[str, str] = {
     "picotool_info": "Picotool Info",
     "picotool_load": "Picotool Load UF2",
     "picotool_raw": "Picotool Raw Pass-Through",
+    "vendor": "Vendor Flash Tool Pass-Through",
     "nrf52_enter_uf2": "nRF52 Enter UF2 Mode",
     "nrf52_bootloader_info": "nRF52 Bootloader Info",
     "nrf52_backup_firmware": "nRF52 Back Up Firmware",
