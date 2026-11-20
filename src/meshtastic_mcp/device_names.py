@@ -82,6 +82,44 @@ def record_seen(port: str, node: dict[str, Any]) -> dict[str, Any]:
         return {"key": key, **rec}
 
 
+def record_ble(node_num: int, address: str, ble_name: str | None) -> dict[str, Any] | None:
+    """Store the BLE identity of the radio with `node_num`, if a USB or TCP record has it.
+
+    A radio first named over BLE alone gets a record keyed `ble:<address>`.
+    """
+    with _lock():
+        records = _load()
+        key = next((k for k, r in records.items() if r.get("node_num") == node_num), None)
+        key = key or f"ble:{address.lower()}"
+        rec = records.get(key, {"port": f"ble:{address}", "node_num": node_num})
+        rec["ble_address"] = address
+        if ble_name:
+            rec["ble_name"] = ble_name
+        rec["seen_at"] = time.time()
+        records[key] = rec
+        _save(records)
+        return {"key": key, **rec}
+
+
+def ble_target(name: str) -> str | None:
+    """The BLE address recorded for the radio called `name`, or None."""
+    bare = _strip_host(name)
+    rec = next((r for r in _load().values() if r.get("name") == bare), None)
+    return rec.get("ble_address") if rec else None
+
+
+def key_for_ble(address_or_name: str) -> str | None:
+    """The registry key of the radio with this BLE address or advertised name."""
+    needle = address_or_name.lower()
+    for key, rec in _load().items():
+        if needle in (
+            str(rec.get("ble_address", "")).lower(),
+            str(rec.get("ble_name", "")).lower(),
+        ):
+            return key
+    return None
+
+
 def rename(port_or_name: str, name: str) -> dict[str, Any]:
     """Give a radio a name of your choosing. Raises `ValueError` if another radio has it."""
     name = _slug(name)
@@ -161,6 +199,8 @@ def listing(attached: list[str]) -> list[dict[str, Any]]:
                 "model": row.get("model"),
                 "long_name": row.get("long_name"),
                 "short_name": row.get("short_name"),
+                "ble_address": row.get("ble_address"),
+                "ble_name": row.get("ble_name"),
                 "last_seen": row.get("seen_at"),
                 "leased_to": (lease.get("holder") or "another session") if lease else None,
                 "key": key,
