@@ -72,8 +72,6 @@ from .tools._app import apple_tool as apple_tool
 from .tools._app import ble_sniffer_tool as ble_sniffer_tool
 from .tools._app import discord_tool as discord_tool
 from .tools._app import firmware_tool as firmware_tool
-from .tools._app import local_serve_tool as local_serve_tool
-from .tools._app import local_tool as local_tool
 from .tools._app import sdk_tool as sdk_tool
 from .tools._app import sdr_tool as sdr_tool
 from .tools._app import tasks_mod as tasks_mod
@@ -226,12 +224,6 @@ from .tools.hardware import touch_1200bps as touch_1200bps
 from .tools.hardware import uhubctl_cycle as uhubctl_cycle
 from .tools.hardware import uhubctl_list as uhubctl_list
 from .tools.hardware import uhubctl_power as uhubctl_power
-from .tools.local_model import local_model_serve as local_model_serve
-from .tools.local_model import local_model_serve_stop as local_model_serve_stop
-from .tools.local_model import local_model_status as local_model_status
-from .tools.local_model import summarize_window as summarize_window
-from .tools.local_model import triage_window as triage_window
-from .tools.local_model import vision_oracle as vision_oracle
 from .tools.replay import _COT_LOCK as _COT_LOCK
 from .tools.replay import _COT_RELAY as _COT_RELAY
 from .tools.replay import _cot_data_dir as _cot_data_dir
@@ -491,10 +483,6 @@ _READ_ONLY: set[str] = {
     "atak_fleet_status",  # reads fleet bring-up / drive progress; never mutates
     "replay_fuzz_presets",  # static catalog of fuzz presets; no state
     "capture_screen",
-    "summarize_window",  # reads a recorder window, distills via local model; no mutation
-    "vision_oracle",  # reads a screenshot, asks the local model; no mutation
-    "triage_window",  # reads device window (+optional screenshot); no mutation
-    "local_model_status",  # reports backend/reachability; no mutation
     "rf_scan",  # passive SDR capture; no device/host mutation
     "pa_meter_status",  # reads the power meter (version/stored freq/live dBm); no state change
     "ble_sniff_status",  # enumerates USB + resolves a binary; no capture, no state change
@@ -605,8 +593,6 @@ _DESTRUCTIVE = {
     "replay_inject_fileinfo",  # emits a FileInfo FromRadio onto the live connection
     "replay_inject_traceroute",  # emits a TRACEROUTE_APP RouteDiscovery packet
     "replay_inject_waypoint",  # emits a WAYPOINT_APP packet (with optional geofence)
-    "local_model_serve",  # spawns a detached llama-server process (and may install it)
-    "local_model_serve_stop",  # terminates the managed llama-server process
     "sdk_send_text",  # injects a mesh packet via the Kotlin SDK CLI; cannot be recalled
 }
 # Writes that are neither read-only nor destructive: they change host state another call

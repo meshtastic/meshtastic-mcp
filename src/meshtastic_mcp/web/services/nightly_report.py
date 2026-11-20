@@ -273,16 +273,8 @@ def render_body(
     if soak is not None:
         sections.append("## Soak\n" + soak)
 
-    behavior = [o for o in analysis.observations if o.category == "behavior"]
-    if behavior:
-        sections.append(
-            "## Behavioral analysis (local model)\n"
-            "_Draft from an offline model — verify before acting._\n\n"
-            + "\n".join(_observation_block(o) for o in behavior)
-        )
-
     other = sorted(
-        (o for o in analysis.observations if o.category not in ("behavior", "version_change")),
+        (o for o in analysis.observations if o.category != "version_change"),
         key=lambda o: _SEVERITY_ORDER.get(o.severity, 9),
     )
     if other:

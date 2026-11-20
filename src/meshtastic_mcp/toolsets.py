@@ -86,16 +86,6 @@ _GROUPS: dict[str, frozenset[str]] = {
             "set_owner",
         }
     ),
-    "local-model": frozenset(
-        {
-            "local_model_serve",
-            "local_model_serve_stop",
-            "local_model_status",
-            "summarize_window",
-            "triage_window",
-            "vision_oracle",
-        }
-    ),
 }
 _PREFIXES: dict[str, tuple[str, ...]] = {
     "android": ("android_", "atak_"),
