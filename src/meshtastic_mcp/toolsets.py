@@ -85,6 +85,12 @@ _GROUPS: dict[str, frozenset[str]] = {
             "nrfutil_raw",
             "picotool_raw",
             "reboot",
+            "replay_inject",
+            "replay_inject_beacon",
+            "replay_inject_client_notification",
+            "replay_inject_fileinfo",
+            "replay_inject_traceroute",
+            "replay_inject_waypoint",
             "set_config",
             "set_debug_log_api",
             "set_owner",
@@ -92,6 +98,7 @@ _GROUPS: dict[str, frozenset[str]] = {
             "send_text",
         }
     ),
+    "replay": frozenset({"inject"}),
 }
 _PREFIXES: dict[str, tuple[str, ...]] = {
     "android": ("android_", "atak_"),
