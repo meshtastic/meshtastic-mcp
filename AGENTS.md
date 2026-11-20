@@ -486,7 +486,7 @@ configure(node=<name>, restore=<snapshot>, lease=<lease>)   # undo, from the sna
 ```
 `configure` snapshots first, puts several changes in one edit transaction, and reads every
 change back over a fresh connection (`verified`, `mismatches`), because the firmware
-acknowledges writes it drops. `restarted` comes from the radio's reboot counter.
+acknowledges writes it drops. `restarted` comes from the radio's uptime.
 
 **Self-provision before a firmware operation**
 ```

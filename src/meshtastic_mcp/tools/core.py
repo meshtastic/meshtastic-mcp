@@ -269,12 +269,12 @@ def configure(
     `restore=<name>` puts that config back. Several changes go in one edit transaction.
     The firmware acknowledges writes it drops, so each change is read back over a fresh
     connection: `verified` is true only when all of them stuck, and `mismatches` names any
-    that did not. `restarted` is measured from the radio's reboot counter; most sections
+    that did not. `restarted` is measured from the radio's uptime; most sections
     restart the radio, `lora` applies live. A write needs the lease from `claim`;
     `dry_run=True` needs none and only reports what would change.
 
     Returns `{target, dry_run, changes: {path: {from, to}}, snapshot?: {name, path},
-    transaction?, verified, mismatches?, restarted, reboot_count?, errors?}`.
+    transaction?, verified, mismatches?, restarted, uptime_s?, errors?}`.
 
     Args:
         node: A device name from `devices`, a serial port or `tcp://host[:port]`; omit to

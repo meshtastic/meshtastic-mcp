@@ -19,7 +19,7 @@ NUM = 0x3A14AA13
 
 
 class _Radio:
-    """The device side: what is stored, what was sent, and how often it has booted."""
+    """The device side: what is stored, what was sent, and how long it has been up."""
 
     def __init__(self) -> None:
         self.local = localonly_pb2.LocalConfig()
@@ -29,7 +29,7 @@ class _Radio:
         self.module = localonly_pb2.LocalModuleConfig()
         self.module.mqtt.SetInParent()
         self.owner = {"longName": "Heltec", "shortName": "HV3"}
-        self.reboots = 5
+        self.uptime = 1000
         self.sent: list[str] = []
         self.drop: set[str] = set()
         self.in_transaction = False
@@ -46,9 +46,13 @@ class _Radio:
         if section != "lora" and not self.in_transaction:
             self.pending_reboot = True
 
+    def answer_telemetry(self, request, *, destinationId, portNum, wantResponse, onResponse):
+        assert destinationId == NUM and request.HasField("device_metrics")
+        onResponse({"decoded": {"telemetry": {"deviceMetrics": {"uptimeSeconds": self.uptime}}}})
+
     def connect(self):
         if self.pending_reboot:
-            self.reboots += 1
+            self.uptime = 1
             self.pending_reboot = False
         radio = self
 
@@ -84,7 +88,8 @@ class _Radio:
         return SimpleNamespace(
             devPath="/dev/ttyUSB0",
             localNode=Node(),
-            myInfo=mesh_pb2.MyNodeInfo(my_node_num=NUM, reboot_count=self.reboots),
+            myInfo=mesh_pb2.MyNodeInfo(my_node_num=NUM),
+            sendData=self.answer_telemetry,
             nodesByNum={NUM: {"num": NUM, "user": dict(self.owner)}},
         )
 
@@ -137,7 +142,7 @@ def test_several_changes_share_one_paced_transaction(radio) -> None:
     assert radio.sent[0] == "begin" and radio.sent[-1] == "commit"
     assert set(radio.sent[1:-1]) == {"lora", "device", "owner"}
     assert result["transaction"] is True and result["restarted"] is True
-    assert result["reboot_count"] == {"before": 5, "after": 6}
+    assert result["uptime_s"] == {"before": 1000, "after": 1}
     assert result["changes"]["owner.long_name"] == {"from": "Heltec", "to": "Base"}
     assert result["verified"] is True
 
@@ -196,3 +201,9 @@ def test_a_radio_that_never_comes_back_is_reported(radio, monkeypatch) -> None:
     result = core.configure(changes={"device.role": "CLIENT_MUTE"}, timeout_s=0.01)
     assert result["verified"] is False and result["restarted"] is None
     assert "did not answer again" in result["errors"]["read_back"]
+
+
+def test_a_radio_that_does_not_report_uptime_leaves_restarted_unknown(radio, monkeypatch) -> None:
+    monkeypatch.setattr(python_configure, "_uptime", lambda iface, timeout_s=5.0: None)
+    result = core.configure(changes={"device.role": "CLIENT_MUTE"})
+    assert result["verified"] is True and result["restarted"] is None

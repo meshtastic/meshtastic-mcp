@@ -7,11 +7,13 @@ The firmware acknowledges writes it drops, so a write counts only once a fresh c
 it back. Several writes go in one edit transaction, paced, because an unpaced burst loses
 writes and can lose the transaction's own begin. A commit always restarts the radio; a single
 write restarts it unless the section applies live (`lora`, and some `device`, `power` and
-`display` fields). `restarted` is measured from the radio's reboot counter, not predicted.
+`display` fields). `restarted` is measured from the radio's uptime, not predicted: the
+reboot counter in `MyNodeInfo` only counts on ESP32, and reads 0 on nRF52.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -19,7 +21,7 @@ from typing import Any
 
 from google.protobuf import json_format
 from google.protobuf.message import Message
-from meshtastic.protobuf import localonly_pb2
+from meshtastic.protobuf import localonly_pb2, portnums_pb2, telemetry_pb2
 
 from .. import admin, connection
 from . import BackendError
@@ -28,6 +30,7 @@ from .protodict import to_dict
 PACE_S = 0.25  # between writes inside a transaction
 REBOOT_DELAY_S = 7.0  # firmware DEFAULT_REBOOT_SECONDS after a save that restarts
 BOOT_S = 3.0  # time for the radio to come back far enough to answer
+UPTIME_SLACK_S = 5.0  # clock and reply jitter allowed before a lower uptime counts as a restart
 OWNER_KEYS = ("owner.long_name", "owner.short_name")
 _IDENTITY = ("private_key", "public_key")
 
@@ -183,9 +186,37 @@ def _mismatches(plan: _Plan, iface: Any) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _reboot_count(iface: Any) -> int | None:
-    count = getattr(iface.myInfo, "reboot_count", None)
-    return int(count) if count is not None else None
+def _uptime(iface: Any, timeout_s: float = 5.0) -> tuple[float, float] | None:
+    """`(uptime_s, monotonic time it was read)` from the radio's device telemetry, or None."""
+    done = threading.Event()
+    box: dict[str, Any] = {}
+
+    def on_response(packet: dict[str, Any]) -> None:
+        metrics = ((packet.get("decoded") or {}).get("telemetry") or {}).get("deviceMetrics")
+        box["uptime"] = (metrics or {}).get("uptimeSeconds")
+        done.set()
+
+    request = telemetry_pb2.Telemetry()
+    request.device_metrics.SetInParent()
+    iface.sendData(
+        request,
+        destinationId=iface.myInfo.my_node_num,
+        portNum=portnums_pb2.PortNum.TELEMETRY_APP,
+        wantResponse=True,
+        onResponse=on_response,
+    )
+    if not done.wait(timeout_s) or box.get("uptime") is None:
+        return None
+    return float(box["uptime"]), time.monotonic()
+
+
+def _restarted(
+    before: tuple[float, float] | None, after: tuple[float, float] | None
+) -> bool | None:
+    if before is None or after is None:
+        return None
+    elapsed = after[1] - before[1]
+    return after[0] + UPTIME_SLACK_S < before[0] + elapsed
 
 
 def configure(
@@ -215,7 +246,7 @@ def configure(
                 "moduleConfig": admin._message_to_dict(iface.localNode.moduleConfig),
             },
         )
-        before = _reboot_count(iface)
+        before = _uptime(iface)
         out["transaction"] = _apply(plan, iface)
         time.sleep(2.5)  # let the radio finish its flash write before the port closes
     # Wait out the firmware's restart timer, then read back over a fresh connection.
@@ -224,7 +255,7 @@ def configure(
     while True:
         try:
             with connection.connect(port=port, timeout_s=8.0) as iface:
-                after = _reboot_count(iface)
+                after = _uptime(iface)
                 mismatches = _mismatches(plan, iface)
             break
         except (connection.ConnectionError, OSError, TimeoutError) as exc:
@@ -237,6 +268,6 @@ def configure(
     out["verified"] = not mismatches
     if mismatches:
         out["mismatches"] = mismatches
-    out["restarted"] = (after > before) if before is not None and after is not None else None
-    out["reboot_count"] = {"before": before, "after": after}
+    out["restarted"] = _restarted(before, after)
+    out["uptime_s"] = {"before": before and before[0], "after": after and after[0]}
     return out
