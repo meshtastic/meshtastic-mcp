@@ -464,6 +464,39 @@ Give back a device taken with `claim`. Returns the lease that ended, without its
 | --- | --- | --- | --- |
 | `lease` | string | required | The handle `claim` returned. |
 
+### `send`
+
+Destructive, open world.
+
+Send a text, position or waypoint over the mesh, or ask a node for a traceroute or telemetry.
+
+Pass exactly one of `text`, `position`, `waypoint` or `request`. A request waits up to
+`wait_s` and returns the node's answer as `reply` (null if none came). A direct text with
+`want_ack=True` waits for the routing ACK: `delivery` is `delivered` (the destination
+acknowledged), `relayed` (only our radio heard a neighbor rebroadcast it), `nak:<reason>`
+or `no_ack`. A broadcast is never acknowledged; `wait_for_tx=True` looks for the
+firmware's `Started Tx` log line instead, which needs `security.debug_log_api_enabled`.
+A radio cannot see its own sends in `packets_window`; check a second radio with
+`wait_for`.
+
+Returns `{target, packet_id, destination, kind, delivery?, ack_from?, reply?, waited_s?,
+tx_confirmed?, tx_unconfirmed_reason?}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `node` | string | `null` | The radio to send from: a device name from `devices`, a serial port, `tcp://host[:port]`, or `ble:<name>` (SDK backend, text only); omit for the one attached radio. |
+| `to` | string \| integer | `null` | The destination node id (`!3a14aa13`) or number; omit to broadcast. |
+| `text` | string | `null` | A text message. |
+| `position` | object | `null` | `{latitude, longitude, altitude?}` to send as a position. |
+| `waypoint` | object | `null` | `{name, latitude, longitude, description?, icon?, expire?}`. |
+| `request` | `traceroute` \| `telemetry` | `null` | `traceroute` or `telemetry` (device metrics), sent to `to`. |
+| `channel` | integer | `0` | The channel index to send on. |
+| `want_ack` | boolean | `false` | Ask the destination to acknowledge a direct text. |
+| `hop_limit` | integer | `null` | Hops the packet may take; omit for the radio's setting. |
+| `wait_s` | number | `30.0` | Seconds to wait for an ACK or a reply. |
+| `wait_for_tx` | boolean | `false` | For a broadcast text, also wait for evidence that it was transmitted. |
+
 ### `send_input_event`
 
 Destructive, open world.
@@ -482,35 +515,6 @@ Returns `{ok, event_code, kb_char}`.
 | `touch_x` | integer | `0` | Touch x coordinate (0..65535), for a tap such as `USER_PRESS`. |
 | `touch_y` | integer | `0` | Touch y coordinate (0..65535). |
 | `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
-
-### `send_text`
-
-Destructive, open world.
-
-Send a text message over the mesh.
-
-Delivery is async and best effort: by default this returns once the packet is queued.
-`wait_for_tx=True` also polls for the firmware's `Started Tx (id=...)` log line or a
-neighbor's rebroadcast. `tx_confirmed` is true (seen), false (logs flowed, no TX) or
-null (not observable, usually because firmware logs are not captured, which does NOT
-mean failure); turn the log stream on first with
-`configure(changes={"security.debug_log_api_enabled": True})`.
-`tx_unconfirmed_reason` says which case. `packets_window` cannot confirm a local send.
-
-Returns `{ok, packet_id, destination}`, plus `{tx_confirmed, tx_latency_s,
-tx_unconfirmed_reason?}` with `wait_for_tx=True`.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
-| `text` | string | required | The message. |
-| `to` | string \| integer | `null` | A node id ("!abcdef01") or number to direct-message; omit to broadcast ("^all"). |
-| `channel_index` | integer | `0` | The channel to send on. |
-| `want_ack` | boolean | `false` | Ask the recipient for an acknowledgement. |
-| `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
-| `wait_for_tx` | boolean | `false` | Also wait for evidence that the packet reached the air. |
-| `tx_timeout_s` | number | `30.0` | Seconds `wait_for_tx` polls before giving up. |
-| `tx_linger_s` | number | `8.0` | Seconds to hold the connection open after the send, so the firmware's ~4 s politeness delay and the airtime finish before the port resets, which would drop a queued broadcast. |
 
 ### `set_channel_url`
 
@@ -2708,6 +2712,35 @@ last_heard, battery_level, is_favorite}]` as JSON.
 | `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
 | `timeout_s` | number | `8.0` | Seconds to wait for the node to answer. |
 | `format` | string | `"json"` | `json` (default) or `table` (Markdown). Use `table` when there are many nodes: repeating every field name per row in JSON costs ~7k tokens for 100 nodes, and a table header appears once. |
+
+### `send_text`
+
+Destructive, open world.
+
+Send a text message over the mesh.
+
+Delivery is async and best effort: by default this returns once the packet is queued.
+`wait_for_tx=True` also polls for the firmware's `Started Tx (id=...)` log line or a
+neighbor's rebroadcast. `tx_confirmed` is true (seen), false (logs flowed, no TX) or
+null (not observable, usually because firmware logs are not captured, which does NOT
+mean failure); turn the log stream on first with
+`configure(changes={"security.debug_log_api_enabled": True})`.
+`tx_unconfirmed_reason` says which case. `packets_window` cannot confirm a local send.
+
+Returns `{ok, packet_id, destination}`, plus `{tx_confirmed, tx_latency_s,
+tx_unconfirmed_reason?}` with `wait_for_tx=True`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `text` | string | required | The message. |
+| `to` | string \| integer | `null` | A node id ("!abcdef01") or number to direct-message; omit to broadcast ("^all"). |
+| `channel_index` | integer | `0` | The channel to send on. |
+| `want_ack` | boolean | `false` | Ask the recipient for an acknowledgement. |
+| `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
+| `wait_for_tx` | boolean | `false` | Also wait for evidence that the packet reached the air. |
+| `tx_timeout_s` | number | `30.0` | Seconds `wait_for_tx` polls before giving up. |
+| `tx_linger_s` | number | `8.0` | Seconds to hold the connection open after the send, so the firmware's ~4 s politeness delay and the airtime finish before the port resets, which would drop a queued broadcast. |
 
 ### `set_config`
 
