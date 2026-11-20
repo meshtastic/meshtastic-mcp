@@ -52,6 +52,7 @@ _GROUPS: dict[str, frozenset[str]] = {
             "capture_screen",
             "esptool_chip_info",
             "esptool_erase_flash",
+            "install",
             "nrfutil_dfu",
             "picotool_info",
             "picotool_load",
@@ -77,24 +78,18 @@ _GROUPS: dict[str, frozenset[str]] = {
         {
             "device_info",
             "esptool_raw",
+            "factory_reset",
             "get_channel_url",
             "get_config",
             "list_nodes",
             "nrfutil_raw",
             "picotool_raw",
+            "reboot",
             "set_config",
             "set_debug_log_api",
             "set_owner",
-        }
-    ),
-    "local-model": frozenset(
-        {
-            "local_model_serve",
-            "local_model_serve_stop",
-            "local_model_status",
-            "summarize_window",
-            "triage_window",
-            "vision_oracle",
+            "shutdown",
+            "send_text",
         }
     ),
 }

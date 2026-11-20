@@ -731,3 +731,161 @@ async def nrf52_factory_erase(
             f"{result.get('error') or result}"
         )
     return cast(dict[str, Any], result)
+
+
+# ---------- install: one tool that picks the flasher -----------------------
+
+_INSTALL_BACK_S = 90.0  # a full ESP32 erase-and-flash can take this long to boot and answer
+
+
+def _await_uf2_drive(port: str, timeout_s: float = 25.0) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            return _uf2_drive(port)
+        except ToolError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(1.0)
+
+
+def _await_radio(port: str) -> dict[str, Any]:
+    """Wait for the flashed radio to answer, and read the firmware it now runs."""
+    deadline = time.monotonic() + _INSTALL_BACK_S
+    last = ""
+    while time.monotonic() < deadline:
+        try:
+            with connection.connect(port=port, timeout_s=8.0) as iface:
+                version = getattr(iface.metadata, "firmware_version", None)
+            return {"back": True, "firmware_version": version}
+        except (connection.ConnectionError, OSError, TimeoutError) as exc:
+            last = str(exc)
+            time.sleep(3.0)
+    return {"back": False, "error": f"the radio did not answer after the install: {last}"}
+
+
+def _install(
+    port: str,
+    source: dict[str, Any],
+    erase: bool,
+    userprefs: dict[str, Any] | None,
+    build_flags: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if "env" in source:
+        env = str(source["env"])
+        from .. import boards
+
+        try:
+            arch = str(boards.get_board(env).get("architecture") or "")
+        except config.ConfigError as exc:
+            raise ToolError(f"installing a build needs a firmware tree: {exc}") from exc
+        except KeyError as exc:
+            raise ToolError(str(exc)) from exc
+        if arch.startswith("esp32"):
+            method = "erase_and_flash" if erase else "update_flash"
+            res = (flash.erase_and_flash if erase else flash.update_flash)(
+                env, port, confirm=True, userprefs_overrides=userprefs
+            )
+        else:
+            if erase:
+                raise ToolError(
+                    "erase applies to an ESP32 build; wipe an nRF52 with "
+                    "admin(action='factory_reset_full') or nrf52_factory_erase"
+                )
+            method = "pio upload"
+            res = flash.flash(
+                env, port, confirm=True, userprefs_overrides=userprefs, build_flags=build_flags
+            )
+    else:
+        path = str(source["file"])
+        if not os.path.isfile(path):
+            raise ToolError(f"no file at {path}")
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".uf2":
+            method = "uf2"
+            if not _uf2_drive_or_none(port):
+                admin.enter_uf2_mode(port=port, confirm=True)
+            drive = _await_uf2_drive(port)
+            _check_softdevice(drive, path)
+            res = _uf2_result(nrf52_bootloader.flash_uf2(drive, path, timeout_s=60))
+        elif ext == ".zip":
+            method = "nrfutil dfu"
+            res = hw_tools.nrfutil_dfu(port, path, confirm=True)
+        elif ext == ".bin":
+            method = "esptool write_flash"
+            args = ["write_flash"] + (["--erase-all"] if erase else []) + ["0x0", path]
+            res = hw_tools.esptool_raw(args, port=port, confirm=True)
+        else:
+            raise ToolError(
+                f"cannot install a {ext or 'extensionless'} file: use .uf2, .zip or .bin"
+            )
+    out = {**res, "method": method}
+    if res.get("exit_code", 0) != 0:
+        return out
+    return {**out, **_await_radio(port)}
+
+
+def _uf2_drive_or_none(port: str) -> dict[str, Any] | None:
+    try:
+        return _uf2_drive(port)
+    except ToolError:
+        return None
+
+
+@app.tool(**tasks_mod.task_kwargs())
+async def install(
+    ctx: Context,
+    port: str,
+    source: dict[str, Any],
+    erase: bool = False,
+    confirm: bool = False,
+    userprefs: dict[str, Any] | None = None,
+    build_flags: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Install firmware on a board, picking the flasher from the board, and read back its version.
+
+    `source` is `{"env": "<pio env>"}` (build from the firmware tree; ESP32 OTA-updates the
+    app and keeps config, `erase=True` does a full erase and factory flash; nRF52 and RP2040
+    upload through PlatformIO, which does the bootloader touch) or `{"file": "<path>"}`
+    (`.uf2` through the nRF52 UF2 drive, entering UF2 mode first; `.zip` through nrfutil DFU;
+    `.bin` written at 0x0 by esptool). After a good write it waits for the board to answer and
+    returns the `firmware_version` it now reports. Requires confirm=True, or the user's answer
+    when the client can ask; `erase` is irreversible. Runs as a `flashes` job: after a cancel
+    or timeout follow its `job_id` with `job`, since a flash cannot be stopped mid-write.
+
+    Returns `{job_id, method, exit_code, stdout_tail, stderr_tail, back?, firmware_version?,
+    error?}`.
+
+    Args:
+        port: The board's serial port, ideally its `/dev/serial/by-id` path.
+        source: `{"env": ...}` or `{"file": ...}`. A git ref or a release is not installed
+            here yet: build it in the firmware tree, or download it, and pass the file.
+        erase: Erase the whole flash first (ESP32 builds and `.bin` files).
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+        userprefs: `USERPREFS_*` values baked into a build.
+        build_flags: `-D` macros for a build.
+    """
+    if len([k for k in ("env", "file") if k in source]) != 1:
+        raise ToolError('pass source={"env": ...} or source={"file": ...}')
+    if "ref" in source or "release" in source:
+        raise ToolError(
+            "installing a git ref or a release is not supported yet: the firmware tree is shared, "
+            "so build that ref in your own checkout, or download the release, and pass the file"
+        )
+    label = source.get("env") or os.path.basename(str(source.get("file")))
+    pending = await confirm_mod.gate(
+        ctx,
+        f"{'erase and ' if erase else ''}install {label} onto {port}",
+        confirm,
+        irreversible=erase,
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+    return await _run_job(
+        ctx,
+        "flashes",
+        str(label),
+        lambda: _install(port, source, erase, userprefs, build_flags),
+        poll_tool=None,
+    )

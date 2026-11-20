@@ -88,7 +88,6 @@ export interface NightlyConfig {
   soak_traffic_interval_min: number;
   soak_snapshot_interval_min: number;
   soak_keepalive: boolean;
-  llm_autostart: boolean;
   recovery_allow_reflash: boolean;
   pipeline_timeout_h: number;
   keep_nights: number;

@@ -4,7 +4,7 @@
 > devices and the apps that talk to them. Portable core (serial/TCP device admin + recorder +
 > replay/simulated-device streaming with a synthetic-mesh generator and fuzzer, plus nRF52
 > UF2 bootloader flashing), with optional firmware (build/flash), android/apple emulator
-> (hardware-free e2e), local-model offload, and RTL-SDR RF-compliance capabilities, plus
+> (hardware-free e2e), and RTL-SDR RF-compliance capabilities, plus
 > FleetSuite, a local web control plane for a multi-board hardware bench ([web] extra,
 > `meshtastic-mcp-web`).
 > Run `meshtastic-mcp doctor` (or the `doctor` tool) to see + acquire any missing dependencies.
@@ -31,7 +31,6 @@
 - [docs/screenshot-set.md](docs/screenshot-set.md): matching Android and iOS screenshots on one
   simulated mesh, and connecting the iOS app to a replay node
 - [docs/rf-oracle.md](docs/rf-oracle.md): the RTL-SDR on-air checks `rf_scan` and `rf_confirm_tx`
-- [docs/local-models.md](docs/local-models.md): local-model offload (tools, backends, config)
 - [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md): experimental Kotlin-SDK device-IO backend
 - [docs/vanity.md](docs/vanity.md): vanity NodeNums / app colors: grind (mvgrind), verify, apply
 - [docs/discord.md](docs/discord.md): read-only Discord source tools (`discord_*`) and token setup
