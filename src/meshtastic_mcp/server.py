@@ -517,6 +517,7 @@ _READ_ONLY: set[str] = {
 _DESTRUCTIVE = {
     "nrf52_enter_uf2",  # reboots the node into its bootloader
     "nrf52_flash_uf2",  # replaces the installed firmware
+    "install",  # replaces the installed firmware, and with erase the whole flash
     "nrf52_factory_erase",  # wipes config, node DB and keys
     "build_start",  # launches a pio subprocess; cannot be undone mid-flight
     "flash_start",  # launches a pio upload subprocess
