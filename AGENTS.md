@@ -254,6 +254,10 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   the description and the inputSchema, never the outputSchema, so a tool whose result is not
   obvious names its fields in one description line (``Returns `{ok, packet_id, destination}`.``).
   `tests/unit/test_tool_docs.py` checks every tool, gated or not.
+- **The tool reference is generated.** `docs/tools.md` and the toolset table in `README.md` come
+  from the registered tools: after adding or changing a tool, run `meshtastic-mcp docs generate`
+  and commit the result. `tests/unit/test_docs_gen.py`, which CI runs, fails when it is stale. The
+  description in code is the only per-tool prose; don't restate it in other docs.
 - **Every new tool gets a toolset.** A tool outside `core` goes into `toolsets._GROUPS` or
   `_PREFIXES`; `_GROUPS["firmware"]` must equal `_FIRMWARE_TOOLS` (a test checks it). `core` is
   the portable device set, the tools that need only the base install and a radio, and
@@ -283,8 +287,8 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   fifth, and the widest: a BLE device name is arbitrary text chosen by whoever owns any
   radio in range, so an attacker needs no mesh membership at all, only proximity.
   Combined with `device_info` (private data)
-  and `send_text` (exfiltration), a hostile node could inject instructions via a crafted
-  packet payload. Do not process untrusted mesh content and call `send_text` in the same
+  and `send` (exfiltration), a hostile node could inject instructions via a crafted
+  packet payload. Do not process untrusted mesh content and call `send` in the same
   agentic task without explicit human review. See `SECURITY.md`.
 - **No type debt.** mypy runs with no per-module `ignore_errors` — fix types, don't exclude
   modules. Likewise keep ruff clean (no blanket `# noqa`).
@@ -343,7 +347,7 @@ MESHTASTIC_FIRMWARE_ROOT=/path/to/firmware uv run --extra test python -m pytest 
 
 ## Common workflows
 
-These are the canonical happy paths. Where a step depends on an earlier one (turn on `security.debug_log_api_enabled` before `send_text`), keep that order.
+These are the canonical happy paths. Where a step depends on an earlier one (turn on `security.debug_log_api_enabled` before `send`), keep that order.
 
 **Discover and inspect a device**
 
@@ -360,9 +364,9 @@ devices()                           # the attached radios by name; opens no port
 inspect(node=<name>)                # firmware version, region, node num, primary channel
 inspect(node=<name>, what=["lora", "nodes", "network"])  # one connection for all three
 ```
-`device_info`, `list_nodes`, `get_config`, `get_channel_url`, `set_config`, `set_owner`,
-`set_debug_log_api`, `reboot`, `shutdown` and `factory_reset` are the opt-in `legacy` toolset:
-hidden unless `MESHTASTIC_MCP_TOOLSETS` names it (`all,legacy`), removed in 1.1.
+The pre-1.0 tools these replace are the opt-in `legacy` toolset, listed in
+[docs/tools.md](docs/tools.md#legacy): hidden unless `MESHTASTIC_MCP_TOOLSETS` names it
+(`all,legacy`), removed in 1.1.
 
 **Build / flash without timing out**
 ```
@@ -447,7 +451,8 @@ config_diff("before", "after")     # or diff two snapshots
 ```
 list_devices()                          # pick port
 configure(node=<port>, changes={"security.debug_log_api_enabled": True})  # see below
-send_text(port=<port>, text="…", wait_for_tx=True)  # tx_confirmed + tx_latency_s
+send(node=<port>, text="…", wait_for_tx=True)  # tx_confirmed + tx_latency_s
+send(node=<port>, to=<!id>, text="…", want_ack=True)  # delivery: delivered | relayed | nak | no_ack
 ```
 **A node cannot see its own transmission on the receive path.** `packets_window`
 (and the recorder's packet stream generally) is fed by the `meshtastic.receive`
@@ -598,11 +603,11 @@ UI-drive on physical phones requires USB debugging enabled and the device truste
 These will produce flaky, slow, or incorrect results:
 
 - **Polling `device_info()` or `list_nodes()` in a tight loop.** Both open/hold/close the serial port. The exclusive lock is non-blocking — a concurrent caller does not queue; it fails fast with a `... is busy — ... Retry shortly.` error you must catch and retry. Use `recorder_status()` + `events_window()` for ongoing observation instead.
-- **Asserting immediately after `send_text`.** Mesh delivery is best-effort and async. Use `wait_for_tx=True` (bounded by `tx_timeout_s`), not a bare sleep.
+- **Asserting immediately after `send`.** Mesh delivery is best-effort and async. Use `wait_for_tx=True` (bounded by `tx_timeout_s`), not a bare sleep.
 - **Confirming a local send with `packets_window`.** A self-originated packet never reaches that stream — the library drops the firmware's echo as "a packet we sent" — so it reads as failure on a working mesh. Use `wait_for_tx=True` with `security.debug_log_api_enabled` on, and treat `tx_confirmed: null` as "not observable", not "failed". See *Send a message and confirm delivery*.
 - **Calling a firmware tool without checking `doctor()` first.** If `MESHTASTIC_FIRMWARE_ROOT` is unset, firmware tools are not registered at all. Call `doctor()` on first failure; parse `fix_commands` and surface them to the user. A tool can also be missing because `MESHTASTIC_MCP_TOOLSETS` or `MESHTASTIC_MCP_READ_ONLY` hides it; check the server's env before reaching for `doctor`.
 - **Passing `confirm=True` on your own after a refusal.** The refusal means the client could not ask the human. Surface what the tool will do to the user and pass `confirm=True` only once they agree; never loop-retry.
 - **Treating a canceled flash as stopped.** A flash keeps writing after its call is canceled. Follow the `job_id` the tool logged with `flash_poll` before you reset, unplug or reflash the board.
 - **Letting a test suite reach the bench.** Anything that shells out to a real `pio run -t upload` can flash an attached board, and an *invalid* `--upload-port` is the guaranteed trigger for PlatformIO's auto-detect fallback — most dangerous exactly when the port doesn't exist. A stray upload flashes whatever board answers, wrong image included, and can outlive the test run as an orphaned process. Mock the subprocess; never let a port string a test invented reach `pio`.
 - **Assuming the recorder has data immediately.** It starts capturing when a serial session opens. If you just opened the port, query with `start="-5s"` and check `line_count > 0` before asserting content.
-- **Using `serial_open`/`serial_read`/`serial_close` for admin work.** Those are low-level transport tools for raw byte inspection. Use the admin tools (`get_config`, `send_text`, `device_info`, etc.) which manage the session for you.
+- **Using `serial_open`/`serial_read`/`serial_close` for admin work.** Those are low-level transport tools for raw byte inspection. Use the device tools (`inspect`, `configure`, `send`) which manage the session for you.

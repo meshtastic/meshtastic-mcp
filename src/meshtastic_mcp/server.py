@@ -537,6 +537,7 @@ _DESTRUCTIVE = {
     "set_config",
     "set_channel_url",
     "set_debug_log_api",
+    "send",  # injects a mesh packet; cannot be recalled
     "send_text",  # injects a mesh packet; cannot be recalled
     "inject_frame",  # injects a forged frame into the RX pipeline; cannot be recalled
     "rf_confirm_tx",  # calls send_text internally; injects a mesh packet
@@ -659,6 +660,7 @@ _OPEN_WORLD = {
     "vanity_apply",  # writes the security config to a live device and reboots it
     "set_owner",
     "set_debug_log_api",
+    "send",
     "send_text",
     "inject_frame",
     "reboot",
@@ -1005,7 +1007,7 @@ def bringup_device(port: str = "", region: str = "US") -> str:
         "1. `list_devices` to find it (or use the given port / a tcp://host:port).\n"
         "2. `device_info` for firmware version + node identity; `list_nodes` for the DB.\n"
         f"3. Confirm region is set ({region}); if unset, `get_config('lora')` then `set_config`.\n"
-        "4. `send_text` a marker to ^all and confirm it leaves on the wire.\n"
+        "4. `send` a text marker to ^all and confirm it leaves on the wire.\n"
         "Report firmware version, region, node count, and any config that looks off."
     )
 

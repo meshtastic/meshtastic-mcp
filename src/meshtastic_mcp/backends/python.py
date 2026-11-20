@@ -204,3 +204,16 @@ class PythonBackend:
         from .python_admin import admin
 
         return admin(target, action, node_id, seconds, wait_back, timeout_s)
+    def send(
+        self,
+        target: str | None,
+        to: str | int | None,
+        payload: dict[str, Any],
+        channel: int,
+        want_ack: bool,
+        hop_limit: int | None,
+        wait_s: float,
+    ) -> dict[str, Any]:
+        from .python_send import send
+
+        return send(target, to, payload, channel, want_ack, hop_limit, wait_s)

@@ -71,6 +71,17 @@ class Backend(Protocol):
         timeout_s: float,
     ) -> dict[str, Any]:
         """Run a radio-level `action`; `wait_back` waits for a restarted radio to answer."""
+    def send(
+        self,
+        target: str | None,
+        to: str | int | None,
+        payload: dict[str, Any],
+        channel: int,
+        want_ack: bool,
+        hop_limit: int | None,
+        wait_s: float,
+    ) -> dict[str, Any]:
+        """Send one of `text`, `position`, `waypoint` or `request` (`payload` has one key)."""
         ...
 
 
