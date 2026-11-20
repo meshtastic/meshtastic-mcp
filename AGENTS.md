@@ -29,7 +29,9 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   background tasks when the `[tasks]` extra is installed; see `docs/background-jobs.md`),
   `toolsets.py` (`MESHTASTIC_MCP_TOOLSETS` / `MESHTASTIC_MCP_READ_ONLY`, a `Transform` that hides
   tools; see `docs/toolsets.md`), `schemas.py` (the TypedDict output schemas)
-  and `serve.py` (`meshtastic-mcp serve`, HTTP with a bearer token; see `docs/serve.md`). Tool
+  `serve.py` (`meshtastic-mcp serve`, HTTP with a bearer token; see `docs/serve.md`) and
+  `bridge.py` (one `serve` per host, found through a lock in the data dir; the plain stdio entry
+  bridges to it unless `MESHTASTIC_MCP_STANDALONE=1`). Tool
   hints come from the `_READ_ONLY` / `_DESTRUCTIVE` / `_OPEN_WORLD` maps through
   `_AnnotationTransform` in `server.py`.
 - **where tools live**: `tools/`, one module per toolset group in `toolsets.py` (`core.py`,

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -38,6 +39,9 @@ ANSWER_CHARS = 2000  # enough of the final answer to judge a failed check by han
 DEFAULT_REJECT = (
     r"(?i)\b(couldn't|could not|can't|cannot|unable to|wasn't able to|was not able to)\b"
 )
+# The server under test runs as its own process even where the host runs a `serve`, so a run
+# measures the code in --mcp-config rather than bridging to the bench's server.
+EVAL_ENV = {**os.environ, "MESHTASTIC_MCP_STANDALONE": "1"}
 
 
 @dataclass
@@ -236,6 +240,7 @@ def run_task(
             text=True,
             timeout=900,
             check=False,
+            env=EVAL_ENV,
         )
         stats = parse_stream(proc.stdout.splitlines())
         answered = not stats.is_error and check_answer(task, stats.result_text)

@@ -226,3 +226,7 @@ def test_summarize_totals_results() -> None:
     summary = runner.summarize(results)
     assert (summary["tasks"], summary["passed"], summary["tool_errors"]) == (2, 1, 1)
     assert summary["input_tokens"] == 30
+
+
+def test_the_server_under_test_never_bridges_to_the_bench_server() -> None:
+    assert runner.EVAL_ENV["MESHTASTIC_MCP_STANDALONE"] == "1"

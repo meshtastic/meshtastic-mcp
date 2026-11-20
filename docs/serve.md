@@ -56,32 +56,15 @@ claude mcp add --transport http meshtastic http://<bench-host>:8765/mcp \
 
 ## A client that only speaks stdio
 
-A client that launches servers as stdio children (a generated `.mcp.json`, a launcher script) can bridge to the bench with FastMCP's proxy. FastMCP 4 builds it with `create_proxy`; `FastMCP.as_proxy` no longer exists. Keep the banner off, since stdout carries the protocol.
+On the bench host itself, the plain stdio entry finds the running server and bridges to it, so a client registered as `meshtastic-mcp` needs no change. `serve` holds a lock on `serve.lock` in the data dir for its whole life and writes its URL and token-file path to `serve.json` beside it; the stdio entry bridges when the lock is held, and a server killed outright leaves nothing behind to find. It does not bridge when the server took its token from `MESHTASTIC_MCP_TOKEN` rather than a file, since the client could not read it, and says so on stderr. `MESHTASTIC_MCP_STANDALONE=1` makes a client run its own server anyway, which then races the bench's for the radios. Nothing starts a server for you: a server's capabilities and environment are fixed when it starts.
 
-```python
-import os
-import sys
-import urllib.error
-import urllib.request
+From another host, bridge explicitly:
 
-from fastmcp.client.transports import StreamableHttpTransport
-from fastmcp.server import create_proxy
-
-url = "http://192.168.1.10:8765/mcp"
-token = open(os.environ["MESHTASTIC_MCP_TOKEN_FILE"]).read().strip()
-headers = {"Authorization": f"Bearer {token}"}
-try:
-    urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=5).close()
-except urllib.error.HTTPError:
-    pass  # any HTTP answer means the bench is up
-except OSError as e:
-    sys.exit(f"bench does not answer: {e}")
-create_proxy(StreamableHttpTransport(url, headers=headers), name="meshtastic").run(
-    show_banner=False
-)
+```bash
+meshtastic-mcp bridge --url http://192.168.1.10:8765/mcp --token-file ~/.config/meshtastic-mcp/token
 ```
 
-Run it under `uv run --no-project --with 'fastmcp>=4,<5' python bridge.py`. Reading the token from a file at launch keeps it out of the client's config. The proxy does not contact the bench until its first request, so without the probe a bench that is down shows up as an empty tool list and `Unknown tool` errors. With it the bridge exits and the client reports the server as failed. Falling back to a local stdio server would race the bench for its ports.
+The bridge connects once before it serves, so a server that is down fails the client's start instead of showing an empty tool list, and it warns on stderr when the server's version differs from its own: the tools are always the server's. A client's own `MESHTASTIC_MCP_TOOLSETS` and `MESHTASTIC_MCP_READ_ONLY` still apply on the bridge, on top of the server's.
 
 The prompt for a `confirm`-gated tool reaches the client behind the bridge. A headless client such as `claude -p` answers with the usual `was not confirmed, so nothing ran` refusal. A raw JSON-RPC probe that cannot answer an elicitation holds the call until its stdin closes.
 
@@ -89,4 +72,4 @@ A client host that cannot open LAN sockets from its interpreter can still reach 
 
 ## One owner per bench
 
-The per-port lock and the job registry live inside one process. A stdio client started alongside the HTTP server opens its own copy of both and can race it for a port, so point every client on the bench at the server. Every client then shares one job registry, so a `job_id` one client started can be polled from another; see [background-jobs.md](background-jobs.md).
+The per-port lock and the job registry live inside one process, so one server owns a bench host: a second `serve` on the same host refuses to start, and stdio clients bridge to the first. Every client then shares one job registry, so a `job_id` one client started can be polled from another; see [background-jobs.md](background-jobs.md). Leases and device names are files in the data dir, so they also bind a client that runs standalone. The eval runner is one on purpose: it sets `MESHTASTIC_MCP_STANDALONE=1` to measure the code under test.

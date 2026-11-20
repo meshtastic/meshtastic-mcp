@@ -34,7 +34,9 @@ python -m evals.runner --devices devices.json --mcp-config bench.mcp.json --labe
 
 `devices.json` names the radios and ports the prompts use; see `devices.example.json`. Hardware tasks
 run on the james-pc bench. The bench is shared, so check for other sessions' servers first, and
-resolve ports by `/dev/serial/by-id/`.
+resolve ports by `/dev/serial/by-id/`. The runner sets `MESHTASTIC_MCP_STANDALONE=1`, so the
+server in `--mcp-config` runs as its own process instead of bridging to the bench's `serve`: a
+run measures that code, and for its duration it is a second owner of the radios.
 
 Results go to `evals/results/<label>.json` (not committed). Each result keeps the first 2,000
 characters of the agent's answer, so a failed check can be judged by hand.
