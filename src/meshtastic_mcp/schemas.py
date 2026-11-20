@@ -64,6 +64,17 @@ class InspectResult(TypedDict):
     errors: NotRequired[dict[str, str]]
 
 
+class AdminResult(TypedDict):
+    target: Any
+    action: str
+    ok: bool
+    node_id: NotRequired[Any]
+    back: NotRequired[bool]
+    restarted: NotRequired[bool]
+    uptime_s: NotRequired[float]
+    error: NotRequired[str]
+
+
 class ConfigureResult(TypedDict):
     target: Any
     dry_run: bool
@@ -76,6 +87,20 @@ class ConfigureResult(TypedDict):
     side_effects: NotRequired[dict[str, Any]]
     uptime_s: NotRequired[dict[str, Any]]
     errors: NotRequired[dict[str, str]]
+
+
+class SendResult(TypedDict):
+    target: Any
+    destination: Any
+    kind: str
+    packet_id: NotRequired[Any]
+    delivery: NotRequired[str | None]
+    ack_from: NotRequired[Any]
+    reply: NotRequired[Any]
+    waited_s: NotRequired[float]
+    tx_confirmed: NotRequired[bool | None]
+    tx_latency_s: NotRequired[float | None]
+    tx_unconfirmed_reason: NotRequired[str]
 
 
 class NodeUser(TypedDict, total=False):
@@ -123,6 +148,8 @@ class NamedDevice(TypedDict):
     model: str | None
     long_name: str | None
     short_name: str | None
+    ble_address: str | None
+    ble_name: str | None
     last_seen: float | None
     leased_to: str | None
     key: str
