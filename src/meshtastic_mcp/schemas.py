@@ -64,6 +64,17 @@ class InspectResult(TypedDict):
     errors: NotRequired[dict[str, str]]
 
 
+class AdminResult(TypedDict):
+    target: Any
+    action: str
+    ok: bool
+    node_id: NotRequired[Any]
+    back: NotRequired[bool]
+    restarted: NotRequired[bool]
+    uptime_s: NotRequired[float]
+    error: NotRequired[str]
+
+
 class ConfigureResult(TypedDict):
     target: Any
     dry_run: bool

@@ -100,6 +100,17 @@ class SdkBackend:
     ) -> dict[str, Any]:
         raise BackendError("the SDK backend does not write config yet; use a serial or TCP target")
 
+    def admin(
+        self,
+        target: str | None,
+        action: str,
+        node_id: str | int | None,
+        seconds: int,
+        wait_back: bool,
+        timeout_s: float,
+    ) -> dict[str, Any]:
+        raise BackendError("the SDK backend has no admin actions yet; use a serial or TCP target")
+
     def send(
         self,
         target: str | None,

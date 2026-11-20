@@ -364,8 +364,9 @@ devices()                           # the attached radios by name; opens no port
 inspect(node=<name>)                # firmware version, region, node num, primary channel
 inspect(node=<name>, what=["lora", "nodes", "network"])  # one connection for all three
 ```
-`device_info`, `list_nodes`, `get_config`, `get_channel_url`, `set_config`, `set_owner`,
-`set_debug_log_api` and `send_text` are the opt-in `legacy` toolset: hidden unless `MESHTASTIC_MCP_TOOLSETS` names it (`all,legacy`), removed in 1.1.
+The pre-1.0 tools these replace are the opt-in `legacy` toolset, listed in
+[docs/tools.md](docs/tools.md#legacy): hidden unless `MESHTASTIC_MCP_TOOLSETS` names it
+(`all,legacy`), removed in 1.1.
 
 **Build / flash without timing out**
 ```
@@ -393,8 +394,8 @@ restart.
 
 **Confirm a destructive tool**
 ```
-reboot(port=<port>)                 # client with elicitation: the human sees "Allow: ...?"
-reboot(port=<port>, confirm=True)   # after the user agreed; runs without asking
+admin(action="reboot", node=<name>)                 # client with elicitation: the human sees "Allow: ...?"
+admin(action="reboot", node=<name>, confirm=True)   # after the user agreed; waits until it answers again
 ```
 A refusal naming `confirm=True` means the client cannot ask (a subagent, `claude -p`). Tell the
 user what the tool will do and pass `confirm=True` only once they agree. Under

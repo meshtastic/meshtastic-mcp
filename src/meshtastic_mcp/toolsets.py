@@ -78,12 +78,15 @@ _GROUPS: dict[str, frozenset[str]] = {
     "legacy": frozenset(
         {
             "device_info",
+            "factory_reset",
             "get_channel_url",
             "get_config",
             "list_nodes",
+            "reboot",
             "set_config",
             "set_debug_log_api",
             "set_owner",
+            "shutdown",
             "send_text",
         }
     ),

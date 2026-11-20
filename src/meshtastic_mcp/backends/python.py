@@ -192,6 +192,19 @@ class PythonBackend:
 
         return configure(target, changes, restore, dry_run, timeout_s, save_snapshot)
 
+    def admin(
+        self,
+        target: str | None,
+        action: str,
+        node_id: str | int | None,
+        seconds: int,
+        wait_back: bool,
+        timeout_s: float,
+    ) -> dict[str, Any]:
+        from .python_admin import admin
+
+        return admin(target, action, node_id, seconds, wait_back, timeout_s)
+
     def send(
         self,
         target: str | None,
