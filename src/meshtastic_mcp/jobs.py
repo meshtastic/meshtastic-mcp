@@ -393,6 +393,53 @@ async def run_sync(
     return {**state["result"], "job_id": job_id}
 
 
+Poller = Callable[[str, int], dict[str, Any]]
+_pollers: dict[str, Poller] = {}
+# Kinds whose results are secret (a grind's hits are private keys). `serve` shares one
+# registry among clients, so `listing` leaves them out: only the caller holding the id reads one.
+_private_kinds: set[str] = set()
+
+
+def register_poller(kind: str, fn: Poller, *, private: bool = False) -> None:
+    """Make `view` return `fn(job_id, tail_lines)` for jobs of `kind`, with the domain's fields."""
+    _pollers[kind] = fn
+    if private:
+        _private_kinds.add(kind)
+
+
+def view(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
+    """What the job's own poll tool would return: its domain poller, else `poll`."""
+    state = state_of(job_id)
+    fn = _pollers.get(state["kind"]) if state is not None else None
+    return fn(job_id, tail_lines) if fn is not None else poll(job_id, tail_lines=tail_lines)
+
+
+def settled(job_id: str) -> bool:
+    """True once the job's thread has finished, or if the id is unknown."""
+    with LOCK:
+        state = _active.get(job_id)
+        return state is None or bool(state.get("settled"))
+
+
+def listing() -> list[dict[str, Any]]:
+    """Every job this server knows except private kinds, newest first, without logs."""
+    now = time.time()
+    with LOCK:
+        visible = [s for s in _active.values() if s["kind"] not in _private_kinds]
+        rows = [
+            {
+                "job_id": s["job_id"],
+                "kind": s["kind"],
+                "label": s["label"],
+                "status": s["status"],
+                "elapsed_s": round((s["finished_at"] or now) - s["started_at"], 1),
+            }
+            for s in visible
+        ]
+        order = {s["job_id"]: s["started_at"] for s in visible}
+    return sorted(rows, key=lambda r: order[r["job_id"]], reverse=True)
+
+
 def state_of(job_id: str) -> dict[str, Any] | None:
     """The raw mutable state dict for `job_id` (read/update under `LOCK`)."""
     with LOCK:

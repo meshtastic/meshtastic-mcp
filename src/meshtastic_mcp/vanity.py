@@ -555,3 +555,8 @@ def _verify_identity(port: str | None, expected_num: int, timeout_s: float) -> d
 def data_dir() -> Path:
     """Where ground keys land (0600 files). Exposed for `doctor`/docs."""
     return config.mcp_data_dir() / "grinds"
+
+
+jobs.register_poller(
+    "grinds", lambda job_id, tail: grind_poll(job_id, tail_lines=tail), private=True
+)
