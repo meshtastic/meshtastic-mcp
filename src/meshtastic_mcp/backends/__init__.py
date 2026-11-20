@@ -5,7 +5,7 @@
 
 A backend returns plain dicts, never a meshtastic-python interface or an SDK envelope, so a tool
 works the same over either. `python` is meshtastic-python in this process; `sdk` is the Kotlin
-SDK's CLI. `MESHTASTIC_MCP_BACKEND` picks one; a `ble:` target needs `sdk`.
+SDK's CLI. `MESHTASTIC_MCP_BACKEND` picks one (default `python`); both reach `ble:` targets.
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def for_target(target: str | None) -> Backend:
     wanted = os.environ.get(BACKEND_ENV, "").strip().lower()
     if wanted not in {"", "python", "sdk"}:
         raise BackendError(f"{BACKEND_ENV}={wanted!r}; choose python or sdk")
-    if (target or "").startswith("ble:") or wanted == "sdk":
+    if wanted == "sdk":
         from .sdk import SdkBackend
 
         return SdkBackend()

@@ -148,6 +148,8 @@ class NamedDevice(TypedDict):
     model: str | None
     long_name: str | None
     short_name: str | None
+    ble_address: str | None
+    ble_name: str | None
     last_seen: float | None
     leased_to: str | None
     key: str

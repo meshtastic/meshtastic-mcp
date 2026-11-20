@@ -127,7 +127,8 @@ def test_a_position_carries_its_coordinates(radio) -> None:
     assert sent["kind"] == "position" and sent["latitude"] == 47.6 and sent["altitude"] == 50
 
 
-def test_ble_text_goes_through_the_sdk(radio, monkeypatch) -> None:
+def test_the_sdk_backend_sends_text(radio, monkeypatch) -> None:
+    monkeypatch.setenv(backends.BACKEND_ENV, "sdk")
     monkeypatch.setattr(sdk_cli, "available", lambda: True)
     calls = []
 
@@ -151,6 +152,7 @@ def test_ble_text_goes_through_the_sdk(radio, monkeypatch) -> None:
 
 
 def test_an_sdk_timeout_is_no_ack(radio, monkeypatch) -> None:
+    monkeypatch.setenv(backends.BACKEND_ENV, "sdk")
     monkeypatch.setattr(sdk_cli, "available", lambda: True)
     monkeypatch.setattr(
         sdk_cli,
