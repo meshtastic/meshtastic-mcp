@@ -49,6 +49,40 @@ def _checked(result: dict[str, Any], what: str) -> dict[str, Any]:
     return result
 
 
+def _session_node(row: dict[str, Any]) -> dict[str, Any]:
+    node_id = row.get("id")
+    num = int(node_id[1:], 16) if isinstance(node_id, str) and node_id.startswith("!") else None
+    return {
+        "node_num": num,
+        "node_id": node_id,
+        "long_name": row.get("long_name"),
+        "short_name": row.get("short_name"),
+        "hw_model": row.get("hw_model"),
+        "hops_away": row.get("hops_away"),
+        "snr": row.get("snr"),
+        "last_heard": row.get("last_heard"),
+    }
+
+
+def _read_session(
+    live: Any, target: str, parts: Collection[str], detail: str, timeout_s: float
+) -> dict[str, Any]:
+    """Read through the long-lived `cli mcp` session, which keeps the radio connected."""
+    live.ensure(sdk_cli.normalize_transport(target), timeout_s)
+    listing = live.call("nodes", {}, timeout_s)
+    rows = [_session_node(r) for r in listing.get("nodes") or []]
+    out: dict[str, Any] = {"target": target}
+    if "summary" in parts:
+        state = live.call("connection_state", {}, timeout_s)
+        own = next((r for r in rows if r["node_id"] == state.get("own")), {})
+        out["summary"] = {**own, "num_nodes": listing.get("count")}
+        if detail == "full":
+            out["summary"]["connection"] = state
+    if "nodes" in parts:
+        out["nodes"] = rows
+    return out
+
+
 class SdkBackend:
     name = "sdk"
     parts = frozenset({"summary", "nodes"})
@@ -75,6 +109,12 @@ class SdkBackend:
                 f"{target} needs the SDK backend, and its CLI is not installed; "
                 f"set {sdk_cli.CLI_ENV} or {sdk_cli.ROOT_ENV}"
             )
+        from .sdk_session import session
+
+        cli = sdk_cli.cli_path()
+        live = session(cli) if cli else None
+        if live is not None:
+            return _read_session(live, target, parts, detail, timeout_s)
         timeout_ms = int(timeout_s * 1000)
         out: dict[str, Any] = {"target": target}
         if "summary" in parts:
