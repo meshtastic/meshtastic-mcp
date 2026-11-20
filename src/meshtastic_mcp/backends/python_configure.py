@@ -41,6 +41,8 @@ class _Plan:
     parents: dict[str, str] = field(default_factory=dict)  # section -> localConfig|moduleConfig
     owner: dict[str, str] = field(default_factory=dict)
     changes: dict[str, dict[str, Any]] = field(default_factory=dict)  # path -> {from, to}
+    requested: set[str] = field(default_factory=set)  # paths the caller named
+    restored: set[str] = field(default_factory=set)  # sections a restore owns whole
 
 
 def _flat(d: dict[str, Any], prefix: str) -> dict[str, Any]:
@@ -88,6 +90,7 @@ def _plan_changes(plan: _Plan, node: Any, changes: dict[str, Any]) -> None:
             plan.owner[path.split(".", 1)[1]] = str(value)
             continue
         segments = [s for s in path.split(".") if s]
+        plan.requested.add(".".join(segments))
         if len(segments) < 2:
             raise BackendError(f"{path!r}: name a field, such as lora.region")
         try:
@@ -112,6 +115,7 @@ def _plan_restore(plan: _Plan, node: Any, snapshot: dict[str, Any]) -> None:
                 continue
             copy = _working_copy(plan, node, desc.name)
             copy.CopyFrom(getattr(saved, desc.name))
+            plan.restored.add(desc.name)
             if desc.name == "security":
                 # A snapshot never moves a radio's identity, even one taken from another radio.
                 for key_field in _IDENTITY:
@@ -172,18 +176,25 @@ def _apply(plan: _Plan, iface: Any) -> bool:
     return transacted
 
 
-def _mismatches(plan: _Plan, iface: Any) -> dict[str, dict[str, Any]]:
-    out: dict[str, dict[str, Any]] = {}
+def _read_back(plan: _Plan, iface: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """`(mismatches, side_effects)`: requested values that did not stick, and other fields in
+    the written sections that the firmware changed on its own (a region change caps
+    `tx_power`, for one)."""
+    mismatches: dict[str, dict[str, Any]] = {}
+    side_effects: dict[str, dict[str, Any]] = {}
     node = iface.localNode
     for section, wanted in plan.sections.items():
         live, _ = admin._section_container(node, section)
         for path, values in _section_diff(section, wanted, live).items():
-            out[path] = {"wanted": values["from"], "read_back": values["to"]}
+            if section in plan.restored or path in plan.requested:
+                mismatches[path] = {"wanted": values["from"], "read_back": values["to"]}
+            else:
+                side_effects[path] = values
     owner = _owner_now(iface)
     for key, wanted in plan.owner.items():
         if owner.get(key) != wanted:
-            out[f"owner.{key}"] = {"wanted": wanted, "read_back": owner.get(key)}
-    return out
+            mismatches[f"owner.{key}"] = {"wanted": wanted, "read_back": owner.get(key)}
+    return mismatches, side_effects
 
 
 def _uptime(iface: Any, timeout_s: float = 5.0) -> tuple[float, float] | None:
@@ -256,7 +267,7 @@ def configure(
         try:
             with connection.connect(port=port, timeout_s=8.0) as iface:
                 after = _uptime(iface)
-                mismatches = _mismatches(plan, iface)
+                mismatches, side_effects = _read_back(plan, iface)
             break
         except (connection.ConnectionError, OSError, TimeoutError) as exc:
             last_error = str(exc)
@@ -268,6 +279,8 @@ def configure(
     out["verified"] = not mismatches
     if mismatches:
         out["mismatches"] = mismatches
+    if side_effects:
+        out["side_effects"] = side_effects
     out["restarted"] = _restarted(before, after)
     out["uptime_s"] = {"before": before and before[0], "after": after and after[0]}
     return out

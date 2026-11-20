@@ -270,11 +270,12 @@ def configure(
     The firmware acknowledges writes it drops, so each change is read back over a fresh
     connection: `verified` is true only when all of them stuck, and `mismatches` names any
     that did not. `restarted` is measured from the radio's uptime; most sections
-    restart the radio, `lora` applies live. A write needs the lease from `claim`;
-    `dry_run=True` needs none and only reports what would change.
+    restart the radio, `lora` applies live. Fields the firmware changed on its own in the
+    sections written (a region change caps `tx_power`) come back as `side_effects`. Without a
+    lease from `claim`, the call takes one for its duration; `dry_run=True` writes nothing.
 
     Returns `{target, dry_run, changes: {path: {from, to}}, snapshot?: {name, path},
-    transaction?, verified, mismatches?, restarted, uptime_s?, errors?}`.
+    transaction?, verified, mismatches?, side_effects?, restarted, uptime_s?, errors?}`.
 
     Args:
         node: A device name from `devices`, a serial port or `tcp://host[:port]`; omit to
@@ -290,22 +291,24 @@ def configure(
     """
     if not changes and restore is None:
         raise ToolError("pass `changes`, `restore`, or both")
-    if not dry_run and leases.CURRENT.get() is None:
-        raise ToolError(
-            "configure writes to the radio; claim it first (`claim`) and pass the lease, "
-            "or use dry_run=True to see what would change"
-        )
     try:
         saved = config_snapshot_mod.load_config(restore) if restore is not None else None
     except (FileNotFoundError, ValueError) as exc:
         raise ToolError(str(exc)) from exc
+    held = None
     try:
+        if not dry_run and leases.CURRENT.get() is None and not (node or "").startswith("ble:"):
+            # No lease held: take one for this call, so no other session writes mid-call.
+            held = leases.claim(connection.resolve_port(node), ttl_s=120, holder="configure")
         backend = backends.for_target(node)
         result = backend.configure(
             node, changes, saved, dry_run, min(timeout_s, 55.0), _save_configure_snapshot
         )
-    except (backends.BackendError, connection.ConnectionError) as exc:
+    except (backends.BackendError, connection.ConnectionError, leases.LeaseError) as exc:
         raise ToolError(str(exc)) from exc
+    finally:
+        if held is not None:
+            leases.release(held["lease"])
     return cast(ConfigureResult, result)
 
 

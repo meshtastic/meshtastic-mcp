@@ -73,6 +73,7 @@ class ConfigureResult(TypedDict):
     snapshot: NotRequired[dict[str, str]]
     transaction: NotRequired[bool]
     mismatches: NotRequired[dict[str, Any]]
+    side_effects: NotRequired[dict[str, Any]]
     uptime_s: NotRequired[dict[str, Any]]
     errors: NotRequired[dict[str, str]]
 

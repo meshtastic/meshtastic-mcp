@@ -445,7 +445,7 @@ config_diff("before", "after")     # or diff two snapshots
 **Send a message and confirm delivery**
 ```
 list_devices()                          # pick port
-configure(node=<port>, changes={"security.debug_log_api_enabled": True}, lease=<lease>)  # see below
+configure(node=<port>, changes={"security.debug_log_api_enabled": True})  # see below
 send_text(port=<port>, text="…", wait_for_tx=True)  # tx_confirmed + tx_latency_s
 ```
 **A node cannot see its own transmission on the receive path.** `packets_window`
@@ -480,13 +480,14 @@ use `want_ack=True` on a direct message, or observe on a second node.
 **Read or write config**
 ```
 inspect(node=<name>, what="lora")           # read; default values included
-claim(port=<name>)                          # writes need the lease
-configure(node=<name>, changes={"lora.region": "US"}, lease=<lease>)
-configure(node=<name>, restore=<snapshot>, lease=<lease>)   # undo, from the snapshot it returned
+configure(node=<name>, changes={"lora.region": "US"})      # leases the radio for the call
+configure(node=<name>, restore=<snapshot>)   # undo, from the snapshot it returned
 ```
 `configure` snapshots first, puts several changes in one edit transaction, and reads every
 change back over a fresh connection (`verified`, `mismatches`), because the firmware
-acknowledges writes it drops. `restarted` comes from the radio's uptime.
+acknowledges writes it drops; fields the firmware changed on its own come back as
+`side_effects`. `restarted` comes from the radio's uptime. Pass `lease` from `claim` to hold
+the radio across several calls.
 
 **Self-provision before a firmware operation**
 ```

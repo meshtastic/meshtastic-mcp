@@ -39,6 +39,8 @@ class _Radio:
         self.sent.append(section)
         if section in self.drop:
             return
+        if section == "lora" and value.region == config_pb2.Config.LoRaConfig.RegionCode.EU_868:
+            value = type(value)(region=value.region, tx_power=27)  # the firmware caps power
         parent = (
             self.local if section in python_configure.admin.LOCAL_CONFIG_SECTIONS else self.module
         )
@@ -113,11 +115,30 @@ def radio(monkeypatch, tmp_path):
     leases.CURRENT.reset(token)
 
 
-def test_a_write_needs_a_lease(radio) -> None:
+def test_a_write_without_a_lease_holds_one_for_the_call(radio, monkeypatch) -> None:
     leases.CURRENT.set(None)
-    with pytest.raises(ToolError, match="claim it first"):
-        core.configure(changes={"lora.region": "EU_868"})
-    assert radio.sent == []
+    seen = []
+    real_configure = python_configure.configure
+
+    def spy(*args, **kwargs):
+        seen.append([r["holder"] for r in leases.active()])
+        return real_configure(*args, **kwargs)
+
+    monkeypatch.setattr(python_configure, "configure", spy)
+    result = core.configure(node="/dev/ttyUSB0", changes={"lora.region": "EU_868"})
+    assert result["verified"] is True
+    assert seen == [["configure"]] and leases.active() == []
+
+
+def test_a_radio_another_session_holds_is_refused(radio) -> None:
+    leases.CURRENT.set(None)
+    other = leases.claim("/dev/ttyUSB0", holder="someone else")
+    try:
+        with pytest.raises(ToolError, match="someone else"):
+            core.configure(node="/dev/ttyUSB0", changes={"lora.region": "EU_868"})
+        assert radio.sent == []
+    finally:
+        leases.release(other["lease"])
 
 
 def test_dry_run_reports_and_writes_nothing(radio) -> None:
@@ -173,7 +194,8 @@ def test_restore_puts_the_snapshot_back_but_never_the_keys(radio) -> None:
     config_snapshot.save(snapshot, "/dev/ttyUSB0", saved)
     radio.sent.clear()
     result = core.configure(restore=snapshot)
-    assert set(result["changes"]) == {"lora.region", "device.role"}
+    # the power the firmware capped for EU_868 comes back with the region
+    assert set(result["changes"]) == {"lora.region", "lora.tx_power", "device.role"}
     assert radio.local.lora.region == config_pb2.Config.LoRaConfig.RegionCode.US
     assert radio.local.security.private_key == b"\x01" * 32
     assert result["verified"] is True
@@ -207,3 +229,10 @@ def test_a_radio_that_does_not_report_uptime_leaves_restarted_unknown(radio, mon
     monkeypatch.setattr(python_configure, "_uptime", lambda iface, timeout_s=5.0: None)
     result = core.configure(changes={"device.role": "CLIENT_MUTE"})
     assert result["verified"] is True and result["restarted"] is None
+
+
+def test_a_field_the_firmware_changed_itself_is_a_side_effect_not_a_failure(radio) -> None:
+    radio.local.lora.tx_power = 30
+    result = core.configure(changes={"lora.region": "EU_868"})
+    assert result["verified"] is True and "mismatches" not in result
+    assert result["side_effects"] == {"lora.tx_power": {"from": 30, "to": 27}}
