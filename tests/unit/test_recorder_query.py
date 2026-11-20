@@ -118,6 +118,22 @@ def test_files_outside_the_data_directory_are_unreadable(base: Path, tmp_path: P
         recorder_query.run(f"SELECT * FROM read_text('{outside}')", base=base)
 
 
+def test_globbing_outside_the_data_directory_is_refused(base: Path) -> None:
+    with pytest.raises(QueryError, match=r"(?i)permission"):
+        recorder_query.run("SELECT * FROM glob('/etc/*')", base=base)
+
+
+def test_memory_and_threads_are_capped_and_locked(base: Path) -> None:
+    out = recorder_query.run(
+        "SELECT current_setting('memory_limit'), current_setting('threads')", base=base
+    )
+    limit, threads = out["rows"][0]
+    assert limit.replace(" ", "").upper().startswith(("488.2MIB", "512.0MIB", "512MB"))
+    assert threads == recorder_query.THREADS
+    with pytest.raises(QueryError):
+        recorder_query.run("SET memory_limit='8GB'", base=base)
+
+
 def test_a_slow_query_is_interrupted(base: Path) -> None:
     with pytest.raises(QueryError, match="exceeded"):
         recorder_query.run(

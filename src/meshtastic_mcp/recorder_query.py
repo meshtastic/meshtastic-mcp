@@ -66,6 +66,8 @@ STREAMS: dict[str, dict[str, str]] = {
 DEFAULT_MAX_ROWS = 200
 MAX_ROWS_CEILING = 5000
 DEFAULT_TIMEOUT_S = 20.0
+MEMORY_LIMIT = "512MB"
+THREADS = 2
 
 
 class QueryError(ValueError):
@@ -151,6 +153,9 @@ def run(
 
         base = base.resolve()
         con.execute("SET TimeZone='UTC'")
+        # The bench host is shared; DuckDB would otherwise take 80% of RAM and every core.
+        con.execute(f"SET memory_limit='{MEMORY_LIMIT}'")
+        con.execute(f"SET threads={THREADS}")
         for stream in STREAMS:
             con.execute(f"CREATE TEMP VIEW {stream} AS {_view_sql(base, stream)}")
         con.execute(f"SET allowed_directories=[{_sql_str(str(base))}]")
