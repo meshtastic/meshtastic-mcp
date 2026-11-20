@@ -206,13 +206,20 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   Contention fails fast with a `... is busy ... Retry shortly.` error — it never queues or
   blocks, so the caller must catch and retry.
 - **Leases bind a device across servers.** `leases.py` keeps them as files in the data dir,
-  keyed by USB VID:PID:serial (or the TCP endpoint), so every server on the host sees them.
+  keyed by USB VID:serial (or the TCP endpoint), so every server on the host sees them and
+  a lease follows a board into its bootloader.
   `_LeaseTransform` in `server.py` adds a `lease` argument to each tool whose `port` is a
   device and refuses the call while someone else's lease is live; a tool whose `port` means
   something else goes in `_PORT_NOT_A_DEVICE`. A job keeps the lease it started under until
   it ends. Leases are optional for now: an unleased device works as before, and servers
   from `master`, the `meshtastic` CLI and `pio` ignore them. `uhubctl_*` takes a hub port,
   not a device, so it is not checked.
+- **Radios have stable names.** `device_names.py` names a radio `<model>-<last four hex of
+  its node id>` on its first successful `connection.connect`, under the lease key, in
+  `<data dir>/devices.json`, and never renames it; only a human does
+  (`meshtastic-mcp devices --name`). `connection.resolve_port` turns a name into the
+  current port, so every tool takes one. `devices()` opens no port: a radio no connection
+  has reached has no name yet.
 - **Anything that can outrun a 60 s MCP call gets a job, not a longer timeout.** `jobs.py`
   is the one registry (build, flash, grind, sniff, display drive, screenshot set): `jobs.start()`
   returns a `job_id`, the tool pairs it with a `_poll`. Don't add a second registry. An MCP
