@@ -32,6 +32,7 @@ _CORE = frozenset(
         "get_channel_url",
         "get_config",
         "inject_frame",
+        "job",
         "list_devices",
         "list_nodes",
         "logs_window",

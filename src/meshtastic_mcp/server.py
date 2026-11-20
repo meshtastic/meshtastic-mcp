@@ -141,6 +141,7 @@ from .tools.core import get_channel_url as get_channel_url
 from .tools.core import get_config as get_config
 from .tools.core import inject_frame as inject_frame
 from .tools.core import inject_mod as inject_mod
+from .tools.core import job as job
 from .tools.core import list_devices as list_devices
 from .tools.core import list_nodes as list_nodes
 from .tools.core import logs_window as logs_window
@@ -462,6 +463,7 @@ _READ_ONLY: set[str] = {
     "vanity_preview",  # pure key -> id/colour derivation; no device, no host state
     "vanity_grind_poll",  # reads grind-job state; never mutates
     "drive_display_poll",  # reads drive-job state; never touches the device
+    "job",  # reads any job's state through its kind's poller; never mutates
     "serial_list",
     "serial_read",  # reads buffered bytes; no write side-effect
     "device_info",
@@ -702,6 +704,7 @@ _OPEN_WORLD = {
     "ble_sniff_start",
     "ble_sniff_poll",
     "ble_sniff_stop",
+    "job",  # returns a BLE capture's names, the same as ble_sniff_poll
     # Return user-authored content from remote mesh nodes — untrusted input
     # that can carry prompt-injection payloads (lethal-trifecta leg 2).
     "logs_window",

@@ -904,3 +904,7 @@ def flash_poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
         if out.get("worker_error"):
             out["error"] = out.pop("worker_error")
     return out
+
+
+jobs.register_poller("builds", lambda job_id, tail: build_poll(job_id, tail_lines=tail))
+jobs.register_poller("flashes", lambda job_id, tail: flash_poll(job_id, tail_lines=tail))

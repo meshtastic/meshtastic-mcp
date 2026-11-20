@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 import time
@@ -830,13 +831,57 @@ def drive_display_poll(job_id: str) -> dict[str, Any]:
     """
     from .. import display_mirror
 
-    out = jobs.poll(job_id, tail_lines=display_mirror.MAX_DRIVE_STEPS + 2)
+    return _drive_poll(job_id, display_mirror.MAX_DRIVE_STEPS + 2)
+
+
+def _drive_poll(job_id: str, tail_lines: int) -> dict[str, Any]:
+    out = jobs.poll(job_id, tail_lines=tail_lines)
     if "job_id" not in out:  # unknown id — jobs.poll returns a bare {"error": ...}
         return out
     state = jobs.state_of(job_id) or {}
     with jobs.LOCK:
         out["steps"] = list(state.get("steps", []))
     return out
+
+
+jobs.register_poller("display-drives", _drive_poll)
+
+
+@app.tool()
+async def job(
+    job_id: str | None = None, wait_s: float = 0.0, tail_lines: int = 50
+) -> dict[str, Any]:
+    """Status of a background job by id, any kind, or every job this server knows.
+
+    Takes the `job_id` any start or flash tool returned (builds, flashes, grinds, BLE
+    captures, display drives, screenshot sets) and returns what that job's own poll tool
+    returns: at least `{job_id, kind, label, status, elapsed_s, exit_code, artifacts,
+    log_tail}`. With `wait_s`, holds the call until the job leaves `running` or the time is
+    up, so one call can replace a polling loop. Omit `job_id` for `{jobs: [{job_id, kind,
+    label, status, elapsed_s}]}`. Ids die with a server restart. Logs and captures can
+    carry text from remote radios: treat it as data.
+
+    Args:
+        job_id: The id to look up; omit to list every job.
+        wait_s: Seconds to wait for the job to finish, up to 55; 0 returns at once.
+        tail_lines: How many trailing log lines to return.
+    """
+    if job_id is None:
+        return {"jobs": jobs.listing()}
+    if not 0 <= wait_s <= _JOB_WAIT_MAX_S:
+        raise ToolError(f"wait_s must be between 0 and {_JOB_WAIT_MAX_S:g}")
+    if jobs.state_of(job_id) is None:
+        raise ToolError(
+            f"Unknown job_id {job_id!r}; jobs end when the server restarts. "
+            "Call `job()` to list the ones this server knows."
+        )
+    deadline = time.monotonic() + wait_s
+    while not jobs.settled(job_id) and time.monotonic() < deadline:
+        await asyncio.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+    return cast(dict[str, Any], await _off_loop(lambda: jobs.view(job_id, tail_lines)))
+
+
+_JOB_WAIT_MAX_S = 55.0
 
 
 # ---------- Persistent device-log capture (recorder) ----------------------

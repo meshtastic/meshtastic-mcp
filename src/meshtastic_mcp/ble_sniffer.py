@@ -858,3 +858,6 @@ def capture_stop(job_id: str) -> dict[str, Any]:
             break
         time.sleep(0.25)
     return {"ok": True, "stopped": True, **capture_poll(job_id)}
+
+
+jobs.register_poller(_JOB_KIND, lambda job_id, tail: capture_poll(job_id, tail_lines=tail))
