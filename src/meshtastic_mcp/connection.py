@@ -63,6 +63,45 @@ _OPEN_GRACE_S = 10.0
 _wedged_opens: dict[str, threading.Thread] = {}
 
 
+# A radio that is restarting can miss the client's one `want_config`, and the library then waits
+# 30 s for a config that never comes, whatever timeout it was given. Resend it while nothing
+# has answered, and bound the wait by the interface's own timeout.
+_RESEND_WANT_CONFIG_S = 3.0
+
+
+def _wait_connected_resending(iface: Any, timeout: float = 30.0) -> None:
+    from meshtastic.mesh_interface import MeshInterface  # type: ignore[import-untyped]
+
+    if iface.noProto:
+        return
+    deadline = time.monotonic() + min(timeout, float(iface._timeout.expireTimeout))
+    while not iface.isConnected.wait(
+        max(0.0, min(_RESEND_WANT_CONFIG_S, deadline - time.monotonic()))
+    ):
+        if time.monotonic() >= deadline:
+            raise MeshInterface.MeshInterfaceError("Timed out waiting for connection completion")
+        if iface.myInfo is None:  # nothing of the config has arrived, so the request was lost
+            log.info(
+                "no reply to want_config on %s; sending it again", getattr(iface, "devPath", "?")
+            )
+            iface._startConfig()
+    if iface.failure:
+        raise iface.failure
+
+
+def _resending(cls: Any) -> Any:
+    """`cls` with a handshake wait that resends `want_config` and honors its timeout."""
+    if not isinstance(cls, type):
+        return cls  # a stand-in, as tests use
+
+    class Resending(cls):  # type: ignore[misc,valid-type]
+        def _waitConnected(self, timeout: float = 30.0) -> None:
+            _wait_connected_resending(self, timeout)
+
+    Resending.__name__ = cls.__name__
+    return Resending
+
+
 def _open_bounded(factory, port: str, deadline_s: float):
     """Run `factory()` (a blocking interface constructor) with a deadline.
 
@@ -305,7 +344,7 @@ def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0
         iface = None
         ok = False
         try:
-            iface = TCPInterface(
+            iface = _resending(TCPInterface)(
                 hostname=host,
                 portNumber=tcp_port,
                 connectNow=True,
@@ -348,7 +387,7 @@ def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0
     ok = False
     try:
         iface = _open_bounded(
-            lambda: SerialInterface(
+            lambda: _resending(SerialInterface)(
                 devPath=resolved,
                 connectNow=True,
                 noProto=False,
