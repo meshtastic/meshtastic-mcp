@@ -360,8 +360,8 @@ devices()                           # the attached radios by name; opens no port
 inspect(node=<name>)                # firmware version, region, node num, primary channel
 inspect(node=<name>, what=["lora", "nodes", "network"])  # one connection for all three
 ```
-`device_info`, `list_nodes`, `get_config` and `get_channel_url` are the `legacy` toolset:
-listed by default for 1.0, removed in 1.1.
+`device_info`, `list_nodes`, `get_config` and `get_channel_url` are the opt-in `legacy`
+toolset: hidden unless `MESHTASTIC_MCP_TOOLSETS` names it (`all,legacy`), removed in 1.1.
 
 **Build / flash without timing out**
 ```

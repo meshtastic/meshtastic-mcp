@@ -18,6 +18,8 @@ from pathlib import Path
 import pytest
 
 os.environ.setdefault("MESHTASTIC_MCP_DATA_DIR", tempfile.mkdtemp(prefix="mtmcp-unit-"))
+# The unit tier still covers the opt-in `legacy` tools, so its server lists them.
+os.environ.setdefault("MESHTASTIC_MCP_TOOLSETS", "all,legacy")
 
 
 @pytest.fixture(scope="session", autouse=True)

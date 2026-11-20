@@ -157,7 +157,7 @@ class ClientFilter(Transform):
         read_only = bool(tool.annotations and tool.annotations.read_only_hint)
         if self._read_only and not read_only:
             return False
-        return self._toolsets is None or toolsets.toolset_of(tool.name) in self._toolsets
+        return toolsets.toolset_of(tool.name) in self._toolsets
 
     async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
         return [t for t in tools if self._visible(t)]
