@@ -1569,30 +1569,6 @@ can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
 | `port` | string | required | The ESP32's serial port. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
 
-### `esptool_raw`
-
-Destructive, open world.
-
-Pass-through to `esptool`.
-
-Destructive subcommands (write_flash, erase_flash, erase_region, merge_bin) require
-confirm=True, or the user's answer when the client can ask; other subcommands run
-without asking. Prefer the high-level `pio_flash` / `erase_and_flash` / `update_flash`
-tools where possible; they know board-specific offsets and protocols.
-
-Security: `args` is passed directly to the esptool binary. All arguments must come from
-a trusted source; do not allow untrusted content (e.g. mesh packet payloads) to flow
-into argument lists.
-
-Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
-| `args` | list of string | required | The esptool arguments, from a trusted source only. |
-| `port` | string | `null` | Serial port, passed as `--port`; omit to leave it to `args` or esptool. |
-| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. Only destructive subcommands ask. |
-
 ### `install`
 
 Destructive.
@@ -1716,7 +1692,7 @@ DFU-flash a .zip package to an nRF52840 via `nrfutil dfu serial`.
 With adafruit-nrfutil the transfer uses `--singlebank` and fails unless the run printed
 "Device programmed."; where `/dev/serial/by-id` exists the tool does the 1200 baud
 touch itself (dropping DTR) and waits for the bootloader, elsewhere it passes
-`-t 1200`. For a board already sitting in serial DFU, use `nrfutil_raw` with no touch
+`-t 1200`. For a board already sitting in serial DFU, use `vendor(tool="nrfutil")` with no touch
 instead. On the Meshtastic bootloader `nrf52_flash_uf2` is several times faster; for
 firmware built from the tree prefer `pio_flash`. Requires confirm=True, or the user's
 answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
@@ -1727,27 +1703,6 @@ answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
 | `port` | string | required | The app's serial port; a `/dev/serial/by-id` link works. |
 | `package_path` | string | required | The DFU .zip package. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
-
-### `nrfutil_raw`
-
-Destructive, open world.
-
-Pass-through to `nrfutil`.
-
-dfu/settings subcommands require confirm=True, or the user's answer when the client can
-ask. Recovers an nRF52 left sitting in serial DFU, with no touch, as
-`args=["dfu", "serial", "--package", "<zip>", "--port", "/dev/ttyACM0",
-"-b", "115200", "--singlebank"]` (adafruit-nrfutil).
-
-Security: `args` is passed directly to the nrfutil binary. All arguments must come from
-a trusted source; do not allow untrusted content to flow into argument lists.
-
-Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `args` | list of string | required | The nrfutil arguments, from a trusted source only. |
-| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. Only dfu/settings subcommands ask. |
 
 ### `picotool_info`
 
@@ -1776,25 +1731,6 @@ or the user's answer when the client can ask.
 | --- | --- | --- | --- |
 | `uf2_path` | string | required | The .uf2 file to load. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
-
-### `picotool_raw`
-
-Destructive, open world.
-
-Pass-through to `picotool`.
-
-load/reboot/save/erase require confirm=True, or the user's answer when the client can
-ask; other subcommands run without asking.
-
-Security: `args` is passed directly to the picotool binary. All arguments must come
-from a trusted source; do not allow untrusted content to flow into argument lists.
-
-Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `args` | list of string | required | The picotool arguments, from a trusted source only. |
-| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. Only load/reboot/save/erase ask. |
 
 ### `serial_close`
 
@@ -1924,6 +1860,27 @@ Returns `{action, location, port, delay_s, duration_s, ...}`.
 | `port` | integer | `null` | The port number on that hub. |
 | `role` | string | `null` | A device role ("nrf52", "esp32s3"). Role lookup honors `MESHTASTIC_UHUBCTL_LOCATION_<ROLE>` + `_PORT_<ROLE>` env vars first, then falls back to VID auto-detection. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. Only `off` asks. |
+
+### `vendor`
+
+Destructive.
+
+Run esptool, nrfutil or picotool with arguments, for what `install` and `admin` do not do.
+
+A read-only subcommand runs at once. One that erases or writes (esptool `erase_flash`,
+`write_flash`, nrfutil `dfu`, picotool `load` and so on) needs `confirm=True` or the
+user's answer, and counts as irreversible. A failed command is a tool error carrying both
+output tails. Prefer `install` to flash firmware and `admin` for radio actions.
+
+Returns `{exit_code, stdout_tail, stderr_tail, duration_s, ...}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `tool` | `esptool` \| `nrfutil` \| `picotool` | required | `esptool`, `nrfutil` (adafruit-nrfutil or Nordic nRF Util) or `picotool`. |
+| `args` | list of string | required | The arguments after the tool name, such as `["chip_id"]` or `["dfu", "serial", "--package", "fw.zip", "--port", "/dev/ttyACM0"]`. |
+| `port` | string | `null` | For esptool, the serial port (`--port`); the others take it in `args`. |
+| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
 
 ## replay
 
@@ -2569,6 +2526,30 @@ num_nodes, primary_channel, modem_preset, channel_num, display}`.
 | `port` | string | `null` | Serial port or `tcp://host[:port]`. Omitted, the one likely-Meshtastic device is auto-selected; otherwise the tool errors with the candidate list. |
 | `timeout_s` | number | `8.0` | Seconds to wait for the node to answer. |
 
+### `esptool_raw`
+
+Destructive, open world.
+
+Pass-through to `esptool`.
+
+Destructive subcommands (write_flash, erase_flash, erase_region, merge_bin) require
+confirm=True, or the user's answer when the client can ask; other subcommands run
+without asking. Prefer the high-level `pio_flash` / `erase_and_flash` / `update_flash`
+tools where possible; they know board-specific offsets and protocols.
+
+Security: `args` is passed directly to the esptool binary. All arguments must come from
+a trusted source; do not allow untrusted content (e.g. mesh packet payloads) to flow
+into argument lists.
+
+Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `args` | list of string | required | The esptool arguments, from a trusted source only. |
+| `port` | string | `null` | Serial port, passed as `--port`; omit to leave it to `args` or esptool. |
+| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. Only destructive subcommands ask. |
+
 ### `factory_reset`
 
 Destructive, open world.
@@ -2631,6 +2612,46 @@ last_heard, battery_level, is_favorite}]` as JSON.
 | `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
 | `timeout_s` | number | `8.0` | Seconds to wait for the node to answer. |
 | `format` | string | `"json"` | `json` (default) or `table` (Markdown). Use `table` when there are many nodes: repeating every field name per row in JSON costs ~7k tokens for 100 nodes, and a table header appears once. |
+
+### `nrfutil_raw`
+
+Destructive, open world.
+
+Pass-through to `nrfutil`.
+
+dfu/settings subcommands require confirm=True, or the user's answer when the client can
+ask. Recovers an nRF52 left sitting in serial DFU, with no touch, as
+`args=["dfu", "serial", "--package", "<zip>", "--port", "/dev/ttyACM0",
+"-b", "115200", "--singlebank"]` (adafruit-nrfutil).
+
+Security: `args` is passed directly to the nrfutil binary. All arguments must come from
+a trusted source; do not allow untrusted content to flow into argument lists.
+
+Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `args` | list of string | required | The nrfutil arguments, from a trusted source only. |
+| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. Only dfu/settings subcommands ask. |
+
+### `picotool_raw`
+
+Destructive, open world.
+
+Pass-through to `picotool`.
+
+load/reboot/save/erase require confirm=True, or the user's answer when the client can
+ask; other subcommands run without asking.
+
+Security: `args` is passed directly to the picotool binary. All arguments must come
+from a trusted source; do not allow untrusted content to flow into argument lists.
+
+Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `args` | list of string | required | The picotool arguments, from a trusted source only. |
+| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. Only load/reboot/save/erase ask. |
 
 ### `reboot`
 

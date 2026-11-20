@@ -52,17 +52,15 @@ _GROUPS: dict[str, frozenset[str]] = {
             "capture_screen",
             "esptool_chip_info",
             "esptool_erase_flash",
-            "esptool_raw",
             "install",
             "nrfutil_dfu",
-            "nrfutil_raw",
             "picotool_info",
             "picotool_load",
-            "picotool_raw",
             "touch_1200bps",
             "uhubctl_cycle",
             "uhubctl_list",
             "uhubctl_power",
+            "vendor",
         }
     ),
     "rf": frozenset(
@@ -79,10 +77,13 @@ _GROUPS: dict[str, frozenset[str]] = {
     "legacy": frozenset(
         {
             "device_info",
+            "esptool_raw",
             "factory_reset",
             "get_channel_url",
             "get_config",
             "list_nodes",
+            "nrfutil_raw",
+            "picotool_raw",
             "reboot",
             "set_config",
             "set_debug_log_api",

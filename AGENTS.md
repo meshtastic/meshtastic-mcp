@@ -426,7 +426,7 @@ PlatformIO, whose touch also drops DTR.
 **Recover an nRF52**
 - *Stuck in serial DFU* (the bootloader's port is up, the app never came back): send the
   package with no touch,
-  `nrfutil_raw(args=["dfu", "serial", "--package", <zip>, "--port", "/dev/ttyACM0", "-b", "115200", "--singlebank"], confirm=True)`.
+  `vendor(tool="nrfutil", args=["dfu", "serial", "--package", <zip>, "--port", "/dev/ttyACM0", "-b", "115200", "--singlebank"], confirm=True)`.
 - *USB serial wedged* (opens hang; tools fail with `... looks wedged. Power-cycle it`):
   `uhubctl_cycle(role=<role>)` or `uhubctl_cycle(location=<loc>, port=<n>)` from `uhubctl_list`,
   then retry.
