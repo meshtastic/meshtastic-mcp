@@ -8,7 +8,7 @@ from __future__ import annotations
 import socket
 import struct
 import threading
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import Any
 
 from meshtastic.protobuf import admin_pb2, localonly_pb2
@@ -178,3 +178,16 @@ class PythonBackend:
         if errors:
             out["errors"] = errors
         return out
+
+    def configure(
+        self,
+        target: str | None,
+        changes: dict[str, Any] | None,
+        restore: dict[str, Any] | None,
+        dry_run: bool,
+        timeout_s: float,
+        save_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        from .python_configure import configure
+
+        return configure(target, changes, restore, dry_run, timeout_s, save_snapshot)

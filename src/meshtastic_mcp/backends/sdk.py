@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import Any
 
 from .. import sdk_cli
@@ -88,3 +88,14 @@ class SdkBackend:
             res = _checked(sdk_cli.list_nodes(target, timeout_ms=timeout_ms), "list nodes")
             out["nodes"] = [_node(n, detail) for n in res.get("nodes") or []]
         return out
+
+    def configure(
+        self,
+        target: str | None,
+        changes: dict[str, Any] | None,
+        restore: dict[str, Any] | None,
+        dry_run: bool,
+        timeout_s: float,
+        save_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        raise BackendError("the SDK backend does not write config yet; use a serial or TCP target")

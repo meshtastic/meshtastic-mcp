@@ -531,6 +531,7 @@ _DESTRUCTIVE = {
     "erase_and_flash",
     "update_flash",
     "touch_1200bps",
+    "configure",  # writes config; reversible through the snapshot it returns
     "set_owner",
     "set_config",
     "set_channel_url",
@@ -617,6 +618,7 @@ _ADDITIVE_WRITES = {
 # Idempotent writes: calling with identical args leaves the device in identical
 # state. Clients can safely retry these on timeout without side-effects.
 _IDEMPOTENT_WRITES = {
+    "configure",
     "set_config",
     "set_owner",
     "set_channel_url",

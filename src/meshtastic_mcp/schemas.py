@@ -64,6 +64,20 @@ class InspectResult(TypedDict):
     errors: NotRequired[dict[str, str]]
 
 
+class ConfigureResult(TypedDict):
+    target: Any
+    dry_run: bool
+    changes: dict[str, Any]
+    verified: bool | None
+    restarted: bool | None
+    snapshot: NotRequired[dict[str, str]]
+    transaction: NotRequired[bool]
+    mismatches: NotRequired[dict[str, Any]]
+    side_effects: NotRequired[dict[str, Any]]
+    uptime_s: NotRequired[dict[str, Any]]
+    errors: NotRequired[dict[str, str]]
+
+
 class NodeUser(TypedDict, total=False):
     long_name: str | None
     short_name: str | None

@@ -343,7 +343,7 @@ MESHTASTIC_FIRMWARE_ROOT=/path/to/firmware uv run --extra test python -m pytest 
 
 ## Common workflows
 
-These are the canonical happy paths. Where a step depends on an earlier one (`set_debug_log_api` before `send_text`, `reboot` after `set_config`), keep that order.
+These are the canonical happy paths. Where a step depends on an earlier one (turn on `security.debug_log_api_enabled` before `send_text`), keep that order.
 
 **Discover and inspect a device**
 
@@ -360,8 +360,8 @@ devices()                           # the attached radios by name; opens no port
 inspect(node=<name>)                # firmware version, region, node num, primary channel
 inspect(node=<name>, what=["lora", "nodes", "network"])  # one connection for all three
 ```
-`device_info`, `list_nodes`, `get_config` and `get_channel_url` are the opt-in `legacy`
-toolset: hidden unless `MESHTASTIC_MCP_TOOLSETS` names it (`all,legacy`), removed in 1.1.
+`device_info`, `list_nodes`, `get_config`, `get_channel_url`, `set_config`, `set_owner` and
+`set_debug_log_api` are the opt-in `legacy` toolset: hidden unless `MESHTASTIC_MCP_TOOLSETS` names it (`all,legacy`), removed in 1.1.
 
 **Build / flash without timing out**
 ```
@@ -445,7 +445,7 @@ config_diff("before", "after")     # or diff two snapshots
 **Send a message and confirm delivery**
 ```
 list_devices()                          # pick port
-set_debug_log_api(port=<port>, enabled=True)        # required for confirmation (see below)
+configure(node=<port>, changes={"security.debug_log_api_enabled": True})  # see below
 send_text(port=<port>, text="…", wait_for_tx=True)  # tx_confirmed + tx_latency_s
 ```
 **A node cannot see its own transmission on the receive path.** `packets_window`
@@ -460,7 +460,7 @@ with `packets_window`; it returns empty even when the message was delivered.
 
 `wait_for_tx=True` instead looks for the firmware's `Started Tx (id=…)` log line
 (and for a neighbour rebroadcasting the packet). That log only reaches the
-recorder when `set_debug_log_api(True)` is on for the port, or a `serial_session`
+recorder when `security.debug_log_api_enabled` is on for the port, or a `serial_session`
 is tapping it. With it on, the firmware streams its log lines as `LogRecord` protobufs
 (the `meshtastic.log.line` topic in meshtastic-python) over the connection the admin
 tools use, so no monitor session or second port lock is needed. The firmware's log path
@@ -479,11 +479,15 @@ use `want_ack=True` on a direct message, or observe on a second node.
 
 **Read or write config**
 ```
-get_config(port=<port>, section="lora")     # read — safe, no side effects
-set_config(path="lora.region", value="US", port=<port>)  # write one field by dot-path
-# most sections restart the radio themselves; lora applies live on firmware >= 2.8.0. No reboot() needed.
-get_config(port=<port>, section="lora")     # verify round-trip
+inspect(node=<name>, what="lora")           # read; default values included
+configure(node=<name>, changes={"lora.region": "US"})      # leases the radio for the call
+configure(node=<name>, restore=<snapshot>)   # undo, from the snapshot it returned
 ```
+`configure` snapshots first, puts several changes in one edit transaction, and reads every
+change back over a fresh connection (`verified`, `mismatches`), because the firmware
+acknowledges writes it drops; fields the firmware changed on its own come back as
+`side_effects`. `restarted` comes from the radio's uptime. Pass `lease` from `claim` to hold
+the radio across several calls.
 
 **Self-provision before a firmware operation**
 ```
@@ -594,7 +598,7 @@ These will produce flaky, slow, or incorrect results:
 
 - **Polling `device_info()` or `list_nodes()` in a tight loop.** Both open/hold/close the serial port. The exclusive lock is non-blocking — a concurrent caller does not queue; it fails fast with a `... is busy — ... Retry shortly.` error you must catch and retry. Use `recorder_status()` + `events_window()` for ongoing observation instead.
 - **Asserting immediately after `send_text`.** Mesh delivery is best-effort and async. Use `wait_for_tx=True` (bounded by `tx_timeout_s`), not a bare sleep.
-- **Confirming a local send with `packets_window`.** A self-originated packet never reaches that stream — the library drops the firmware's echo as "a packet we sent" — so it reads as failure on a working mesh. Use `wait_for_tx=True` with `set_debug_log_api(True)`, and treat `tx_confirmed: null` as "not observable", not "failed". See *Send a message and confirm delivery*.
+- **Confirming a local send with `packets_window`.** A self-originated packet never reaches that stream — the library drops the firmware's echo as "a packet we sent" — so it reads as failure on a working mesh. Use `wait_for_tx=True` with `security.debug_log_api_enabled` on, and treat `tx_confirmed: null` as "not observable", not "failed". See *Send a message and confirm delivery*.
 - **Calling a firmware tool without checking `doctor()` first.** If `MESHTASTIC_FIRMWARE_ROOT` is unset, firmware tools are not registered at all. Call `doctor()` on first failure; parse `fix_commands` and surface them to the user. A tool can also be missing because `MESHTASTIC_MCP_TOOLSETS` or `MESHTASTIC_MCP_READ_ONLY` hides it; check the server's env before reaching for `doctor`.
 - **Passing `confirm=True` on your own after a refusal.** The refusal means the client could not ask the human. Surface what the tool will do to the user and pass `confirm=True` only once they agree; never loop-retry.
 - **Treating a canceled flash as stopped.** A flash keeps writing after its call is canceled. Follow the `job_id` the tool logged with `flash_poll` before you reset, unplug or reflash the board.

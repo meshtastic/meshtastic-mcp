@@ -95,6 +95,20 @@ def capture(name: str, port: str | None = None) -> dict[str, Any]:
     }
 
 
+def save(name: str, port: str | None, config: dict[str, Any]) -> str:
+    """Write `config` (`{localConfig, moduleConfig}`) as snapshot `name`; returns its path."""
+    path = _snapshot_path(name)
+    _write_private_json(
+        path, {"name": name, "captured_at": time.time(), "port": port, "config": config}
+    )
+    return str(path)
+
+
+def load_config(name: str) -> dict[str, Any]:
+    """The `{localConfig, moduleConfig}` a snapshot holds."""
+    return dict(_load(name)["config"])
+
+
 def list_snapshots() -> list[dict[str, Any]]:
     """List saved snapshots with their capture time and port."""
     out: list[dict[str, Any]] = []
