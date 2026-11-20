@@ -1923,6 +1923,67 @@ Stop the CoT relay and close its capture files.
 
 Returns the final status with `stopped: true`, or `{running: false}` when no relay runs.
 
+### `inject`
+
+Destructive.
+
+Inject a packet or FromRadio message into a running replay session to drive an app.
+
+`kind` picks what is sent, and only that kind's parameters are accepted; another kind's
+parameter is refused. `text`, `position`, `nodeinfo` and `raw` take `args`, `from_node`,
+`to_node`, `channel`, `count` and `fuzz`; `packet` takes those plus `packet_kind`, for any
+packet the builder knows by name that has no kind of its own, such as a hand-built
+`traceroute` reply with a `request_id`. `waypoint` (geofence included) takes `lat`,
+`lon`, `name`, `description`, `icon`, `geofence_radius`, `bbox`, `notify_on_enter`,
+`notify_on_exit`, `notify_favorites_only`, `from_node`, `channel` and `count`. `beacon`
+is a MESH_BEACON_APP packet for Local Mesh Discovery. `client_notification` and
+`fileinfo` are top-level FromRadio messages with no packet envelope. `traceroute` is an
+unsolicited RouteDiscovery reply, which an app records as an observed traceroute. Omitted
+parameters keep the defaults named below. Examples: docs/replay.md.
+
+Returns `{id, queued, connected}`, or `{error}` for an unknown session.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | required | Session id from `replay_start`. |
+| `kind` | `text` \| `position` \| `nodeinfo` \| `raw` \| `packet` \| `waypoint` \| `beacon` \| `client_notification` \| `fileinfo` \| `traceroute` | required | What to inject: `text`, `position`, `nodeinfo`, `raw`, `packet`, `waypoint`, `beacon`, `client_notification`, `fileinfo` or `traceroute`. |
+| `packet_kind` | string | `null` | For `packet`: the builder's packet name, such as `traceroute` or `beacon`, with its fields in `args`. |
+| `args` | object | `null` | For `text`, `position`, `nodeinfo`, `raw` and `packet`: `text` takes `body` (and `reply_id`, `emoji` for a tapback); `position` takes `lat`, `lon`, `altitude`; `nodeinfo` takes `id`, `long_name`, `short_name`, `hw_model`, `role`; `raw` takes `portnum`, `payload_hex`; `traceroute` takes `route`, `snr_towards`, `route_back`, `snr_back`, `request_id`. |
+| `from_node` | integer | `null` | Sender node number; omit for a synthetic injector node. For `traceroute`, omit to send from `destination_node`. |
+| `to_node` | integer | `null` | Destination node number for `text`, `position`, `nodeinfo` and `raw`; omit to broadcast. |
+| `channel` | string | `null` | Channel name to send on; default `LongFast`. Not for `client_notification` or `fileinfo`. |
+| `count` | integer | `null` | How many copies to send; default 1. For `fileinfo`, with `count` above 1 each entry's `file_name` gets a distinct suffix. Not for `traceroute`. |
+| `fuzz` | boolean | `null` | For `text`, `position`, `nodeinfo`, `raw` and `packet`: `True` runs each packet through the session's fuzz mutator first. |
+| `lat` | number | `null` | `waypoint` latitude in decimal degrees (required for it). |
+| `lon` | number | `null` | `waypoint` longitude in decimal degrees (required for it). |
+| `name` | string | `null` | `waypoint` name. |
+| `description` | string | `null` | `waypoint` description. |
+| `icon` | integer | `null` | `waypoint` icon as a Unicode code point; 0 sets none. |
+| `geofence_radius` | integer | `null` | `waypoint` geofence circle radius in meters; 0 for none. |
+| `bbox` | list of number | `null` | `waypoint` geofence box `[south, west, north, east]` in decimal degrees. |
+| `notify_on_enter` | boolean | `null` | `waypoint`: notify when a node enters the geofence. |
+| `notify_on_exit` | boolean | `null` | `waypoint`: notify when a node leaves the geofence. |
+| `notify_favorites_only` | boolean | `null` | `waypoint`: notify only for favorite nodes. |
+| `message` | string | `null` | `beacon` text, at most 100 bytes on firmware; or, for `client_notification`, text that replaces firmware's wording (empty keeps it). |
+| `offer_channel_name` | string | `null` | `beacon`: name of a channel the app can offer to switch to. |
+| `offer_channel_psk_hex` | string | `null` | `beacon`: that channel's PSK, in hex. |
+| `offer_region` | string | `null` | `beacon`: LoRa region the beaconed mesh advertises; default `US`. |
+| `offer_preset` | string | `null` | `beacon`: modem preset the beaconed mesh advertises; default `LONG_FAST`. |
+| `variant` | string | `null` | `client_notification` variant: `low_entropy_key` (the default), `duplicated_public_key`, `key_verification_number_request`, `key_verification_number_inform`, `key_verification_final` or `text`. |
+| `level` | string | `null` | `client_notification` level: DEBUG, INFO, WARNING (the default), ERROR or CRITICAL. |
+| `remote_longname` | string | `null` | `client_notification`: the remote node's long name, for the key-verification variants. |
+| `nonce` | integer | `null` | `client_notification`: key-verification nonce. |
+| `security_number` | integer | `null` | `client_notification`: security number, for `key_verification_number_inform`. |
+| `verification_characters` | string | `null` | `client_notification`: verification characters, for `key_verification_final`. |
+| `is_sender` | boolean | `null` | `client_notification`: whether this side started the verification, for `key_verification_final`. |
+| `file_name` | string | `null` | `fileinfo` reported file name (required for it). |
+| `size_bytes` | integer | `null` | `fileinfo` reported size in bytes; negative values make a malformed entry. |
+| `destination_node` | integer | `null` | `traceroute` responding node's number (required for it). |
+| `route` | list of integer | `null` | `traceroute` node numbers along the path, destination last; omitted, a synthetic origin, relay and destination path is used. |
+| `snr_towards` | list of integer | `null` | `traceroute` per-hop SNR towards the destination; omitted, none are sent. |
+| `route_back` | list of integer | `null` | `traceroute` node numbers along the return path, source last. |
+| `snr_back` | list of integer | `null` | `traceroute` per-hop SNR on the return path; omitted, none are sent. |
+
 ### `replay_fuzz_presets`
 
 Read-only, idempotent.
@@ -1933,147 +1994,6 @@ Use the returned names as the `fuzz=` argument to `replay_start`, or pass a
 dict like `{"preset": "parser", "drop": 0.1}` to override individual rates.
 
 Returns `{presets: {name: {category: rate}}, usage}`.
-
-### `replay_inject`
-
-Destructive.
-
-Inject packets into a running replay session to drive app features on demand.
-
-Builds a packet from `kind` and `args` and sends it on the live connection. A geofence
-example: docs/replay.md.
-
-Returns `{id, queued, connected}`, or `{error}` for an unknown session.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
-| `kind` | string | required | `waypoint`, `position`, `text`, `nodeinfo` or `raw`. |
-| `args` | object | `null` | Fields for `kind`. `waypoint` takes `lat`, `lon`, `name`, `geofence_radius`, `bbox`, `notify_on_enter`, `notify_on_exit`, `notify_favorites_only`, `icon`; `position` takes `lat`, `lon`, `altitude`; `text` takes `body`; `nodeinfo` takes `id`, `long_name`, `short_name`, `hw_model`, `role`; `raw` takes `portnum`, `payload_hex`. |
-| `from_node` | integer | `null` | Sender node number; omit for a synthetic injector node. |
-| `to_node` | integer | `null` | Destination node number; omit to broadcast. |
-| `channel` | string | `"LongFast"` | Channel name to send on. |
-| `count` | integer | `1` | How many copies to send. |
-| `fuzz` | boolean | `false` | `True` runs each packet through the session's fuzz mutator first. |
-
-### `replay_inject_beacon`
-
-Destructive.
-
-Inject a MESH_BEACON_APP packet (portnum 37) into a running replay session.
-
-Exercises an app's Local Mesh Discovery without beaconing hardware. See docs/replay.md.
-
-Returns `{id, queued, connected}`, or `{error}` for an unknown session.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
-| `message` | string | `"Mesh beacon \u2014 join the network"` | Beacon text, at most 100 bytes on firmware. |
-| `from_node` | integer | `null` | Sender node number; omit for a synthetic injector node. |
-| `channel` | string | `"LongFast"` | Channel name to send on. |
-| `offer_channel_name` | string | `""` | Name of a channel the app can offer to switch to. |
-| `offer_channel_psk_hex` | string | `""` | That channel's PSK, in hex. |
-| `offer_region` | string | `"US"` | LoRa region the beaconed mesh advertises. |
-| `offer_preset` | string | `"LONG_FAST"` | Modem preset the beaconed mesh advertises. |
-| `count` | integer | `1` | How many copies to send. |
-
-### `replay_inject_client_notification`
-
-Destructive.
-
-Inject a ClientNotification into a running replay session to test the app's UI.
-
-The key-verification variants are filled by `nonce`, `remote_longname`,
-`security_number`, `verification_characters` and `is_sender`. Each variant:
-docs/replay.md.
-
-Returns `{id, queued, connected}`, or `{error}` for an unknown session.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
-| `variant` | string | `"low_entropy_key"` | `low_entropy_key` (regenerated weak keys), `duplicated_public_key`, `key_verification_number_request`, `key_verification_number_inform`, `key_verification_final`, or `text`. |
-| `message` | string | `""` | Replaces firmware's wording; empty keeps it. |
-| `level` | string | `"WARNING"` | DEBUG, INFO, WARNING, ERROR or CRITICAL. |
-| `remote_longname` | string | `""` | The remote node's long name, for the key-verification variants. |
-| `nonce` | integer | `0` | Key-verification nonce. |
-| `security_number` | integer | `0` | Security number, for `key_verification_number_inform`. |
-| `verification_characters` | string | `""` | Verification characters, for `key_verification_final`. |
-| `is_sender` | boolean | `false` | Whether this side started the verification, for `key_verification_final`. |
-| `count` | integer | `1` | How many copies to send. |
-
-### `replay_inject_fileinfo`
-
-Destructive.
-
-Inject a raw FileInfo FromRadio message into a running replay session.
-
-FileInfo is a handshake-only FromRadio with no MeshPacket envelope, which firmware
-sends only at connect. Use it to test a client mid-session: repeat it with `count`
-(does the client cap its manifest?), or send a huge `file_name` or negative
-`size_bytes` for a malformed entry. See docs/replay.md.
-
-Returns `{id, queued, connected}`, or `{error}` for an unknown session.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
-| `file_name` | string | required | Reported file name; with `count` above 1 each copy gets a distinct suffix. |
-| `size_bytes` | integer | `0` | Reported file size in bytes. |
-| `count` | integer | `1` | How many entries to send. |
-
-### `replay_inject_traceroute`
-
-Destructive.
-
-Inject a TRACEROUTE_APP RouteDiscovery reply into a running replay session.
-
-The reply references no request, so an app records it as an observed traceroute, not as
-the answer to one it sent; to test the request UI, send a traceroute from the app, which
-the engine answers itself. See docs/replay.md.
-
-Returns `{id, queued, connected}`, or `{error}` for an unknown session.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
-| `destination_node` | integer | required | The responding node's number. |
-| `route` | list of integer | `null` | Node numbers along the path, destination last; omitted, the path is `[from_node, destination_node]`, or a synthetic origin-relay-destination path when `from_node` is omitted too. |
-| `snr_towards` | list of integer | `null` | Per-hop SNR towards the destination; omitted, none are sent. |
-| `route_back` | list of integer | `null` | Node numbers along the return path, source last. |
-| `snr_back` | list of integer | `null` | Per-hop SNR on the return path; omitted, none are sent. |
-| `from_node` | integer | `null` | Sender node number; omit to send from `destination_node`. |
-| `channel` | string | `"LongFast"` | Channel name to send on. |
-
-### `replay_inject_waypoint`
-
-Destructive.
-
-Inject a WAYPOINT_APP packet (portnum 8), geofence included, into a replay session.
-
-Set `geofence_radius`, `bbox` or both, then move a node across the boundary with
-`replay_inject(sid, "position", {"lat": ..., "lon": ...}, from_node=<tracker>)`. See
-docs/replay.md.
-
-Returns `{id, queued, connected}`, or `{error}` for an unknown session.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
-| `lat` | number | required | Waypoint latitude in decimal degrees. |
-| `lon` | number | required | Waypoint longitude in decimal degrees. |
-| `name` | string | `""` | Waypoint name. |
-| `description` | string | `""` | Waypoint description. |
-| `icon` | integer | `0` | Icon as a Unicode code point; 0 sets none. |
-| `geofence_radius` | integer | `0` | Geofence circle radius in meters; 0 for none. |
-| `bbox` | list of number | `null` | Geofence box `[south, west, north, east]` in decimal degrees. |
-| `notify_on_enter` | boolean | `false` | Notify when a node enters the geofence. |
-| `notify_on_exit` | boolean | `false` | Notify when a node leaves the geofence. |
-| `notify_favorites_only` | boolean | `false` | Notify only for favorite nodes. |
-| `from_node` | integer | `null` | Sender node number; omit for a synthetic injector node. |
-| `channel` | string | `"LongFast"` | Channel name to send on. |
-| `count` | integer | `1` | How many copies to send. |
 
 ### `replay_start`
 
@@ -2669,6 +2589,147 @@ Returns `{ok, rebooting_in_s}`.
 | `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
 | `seconds` | integer | `10` | Delay before the node reboots. |
+
+### `replay_inject`
+
+Destructive.
+
+Inject packets into a running replay session to drive app features on demand.
+
+Builds a packet from `kind` and `args` and sends it on the live connection. A geofence
+example: docs/replay.md.
+
+Returns `{id, queued, connected}`, or `{error}` for an unknown session.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | required | Session id from `replay_start`. |
+| `kind` | string | required | `waypoint`, `position`, `text`, `nodeinfo` or `raw`. |
+| `args` | object | `null` | Fields for `kind`. `waypoint` takes `lat`, `lon`, `name`, `geofence_radius`, `bbox`, `notify_on_enter`, `notify_on_exit`, `notify_favorites_only`, `icon`; `position` takes `lat`, `lon`, `altitude`; `text` takes `body`; `nodeinfo` takes `id`, `long_name`, `short_name`, `hw_model`, `role`; `raw` takes `portnum`, `payload_hex`. |
+| `from_node` | integer | `null` | Sender node number; omit for a synthetic injector node. |
+| `to_node` | integer | `null` | Destination node number; omit to broadcast. |
+| `channel` | string | `"LongFast"` | Channel name to send on. |
+| `count` | integer | `1` | How many copies to send. |
+| `fuzz` | boolean | `false` | `True` runs each packet through the session's fuzz mutator first. |
+
+### `replay_inject_beacon`
+
+Destructive.
+
+Inject a MESH_BEACON_APP packet (portnum 37) into a running replay session.
+
+Exercises an app's Local Mesh Discovery without beaconing hardware. See docs/replay.md.
+
+Returns `{id, queued, connected}`, or `{error}` for an unknown session.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | required | Session id from `replay_start`. |
+| `message` | string | `"Mesh beacon \u2014 join the network"` | Beacon text, at most 100 bytes on firmware. |
+| `from_node` | integer | `null` | Sender node number; omit for a synthetic injector node. |
+| `channel` | string | `"LongFast"` | Channel name to send on. |
+| `offer_channel_name` | string | `""` | Name of a channel the app can offer to switch to. |
+| `offer_channel_psk_hex` | string | `""` | That channel's PSK, in hex. |
+| `offer_region` | string | `"US"` | LoRa region the beaconed mesh advertises. |
+| `offer_preset` | string | `"LONG_FAST"` | Modem preset the beaconed mesh advertises. |
+| `count` | integer | `1` | How many copies to send. |
+
+### `replay_inject_client_notification`
+
+Destructive.
+
+Inject a ClientNotification into a running replay session to test the app's UI.
+
+The key-verification variants are filled by `nonce`, `remote_longname`,
+`security_number`, `verification_characters` and `is_sender`. Each variant:
+docs/replay.md.
+
+Returns `{id, queued, connected}`, or `{error}` for an unknown session.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | required | Session id from `replay_start`. |
+| `variant` | string | `"low_entropy_key"` | `low_entropy_key` (regenerated weak keys), `duplicated_public_key`, `key_verification_number_request`, `key_verification_number_inform`, `key_verification_final`, or `text`. |
+| `message` | string | `""` | Replaces firmware's wording; empty keeps it. |
+| `level` | string | `"WARNING"` | DEBUG, INFO, WARNING, ERROR or CRITICAL. |
+| `remote_longname` | string | `""` | The remote node's long name, for the key-verification variants. |
+| `nonce` | integer | `0` | Key-verification nonce. |
+| `security_number` | integer | `0` | Security number, for `key_verification_number_inform`. |
+| `verification_characters` | string | `""` | Verification characters, for `key_verification_final`. |
+| `is_sender` | boolean | `false` | Whether this side started the verification, for `key_verification_final`. |
+| `count` | integer | `1` | How many copies to send. |
+
+### `replay_inject_fileinfo`
+
+Destructive.
+
+Inject a raw FileInfo FromRadio message into a running replay session.
+
+FileInfo is a handshake-only FromRadio with no MeshPacket envelope, which firmware
+sends only at connect. Use it to test a client mid-session: repeat it with `count`
+(does the client cap its manifest?), or send a huge `file_name` or negative
+`size_bytes` for a malformed entry. See docs/replay.md.
+
+Returns `{id, queued, connected}`, or `{error}` for an unknown session.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | required | Session id from `replay_start`. |
+| `file_name` | string | required | Reported file name; with `count` above 1 each copy gets a distinct suffix. |
+| `size_bytes` | integer | `0` | Reported file size in bytes. |
+| `count` | integer | `1` | How many entries to send. |
+
+### `replay_inject_traceroute`
+
+Destructive.
+
+Inject a TRACEROUTE_APP RouteDiscovery reply into a running replay session.
+
+The reply references no request, so an app records it as an observed traceroute, not as
+the answer to one it sent; to test the request UI, send a traceroute from the app, which
+the engine answers itself. See docs/replay.md.
+
+Returns `{id, queued, connected}`, or `{error}` for an unknown session.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | required | Session id from `replay_start`. |
+| `destination_node` | integer | required | The responding node's number. |
+| `route` | list of integer | `null` | Node numbers along the path, destination last; omitted, the path is `[from_node, destination_node]`, or a synthetic origin-relay-destination path when `from_node` is omitted too. |
+| `snr_towards` | list of integer | `null` | Per-hop SNR towards the destination; omitted, none are sent. |
+| `route_back` | list of integer | `null` | Node numbers along the return path, source last. |
+| `snr_back` | list of integer | `null` | Per-hop SNR on the return path; omitted, none are sent. |
+| `from_node` | integer | `null` | Sender node number; omit to send from `destination_node`. |
+| `channel` | string | `"LongFast"` | Channel name to send on. |
+
+### `replay_inject_waypoint`
+
+Destructive.
+
+Inject a WAYPOINT_APP packet (portnum 8), geofence included, into a replay session.
+
+Set `geofence_radius`, `bbox` or both, then move a node across the boundary with
+`replay_inject(sid, "position", {"lat": ..., "lon": ...}, from_node=<tracker>)`. See
+docs/replay.md.
+
+Returns `{id, queued, connected}`, or `{error}` for an unknown session.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | required | Session id from `replay_start`. |
+| `lat` | number | required | Waypoint latitude in decimal degrees. |
+| `lon` | number | required | Waypoint longitude in decimal degrees. |
+| `name` | string | `""` | Waypoint name. |
+| `description` | string | `""` | Waypoint description. |
+| `icon` | integer | `0` | Icon as a Unicode code point; 0 sets none. |
+| `geofence_radius` | integer | `0` | Geofence circle radius in meters; 0 for none. |
+| `bbox` | list of number | `null` | Geofence box `[south, west, north, east]` in decimal degrees. |
+| `notify_on_enter` | boolean | `false` | Notify when a node enters the geofence. |
+| `notify_on_exit` | boolean | `false` | Notify when a node leaves the geofence. |
+| `notify_favorites_only` | boolean | `false` | Notify only for favorite nodes. |
+| `from_node` | integer | `null` | Sender node number; omit for a synthetic injector node. |
+| `channel` | string | `"LongFast"` | Channel name to send on. |
+| `count` | integer | `1` | How many copies to send. |
 
 ### `send_text`
 
