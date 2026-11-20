@@ -257,6 +257,8 @@ from .tools.replay import replay_sim as replay_sim
 from .tools.replay import replay_start as replay_start
 from .tools.replay import replay_status as replay_status
 from .tools.replay import replay_stop as replay_stop
+from .tools.replay import sim as sim
+from .tools.replay import sim_status as sim_status
 from .tools.rf import ble_sniff_poll as ble_sniff_poll
 from .tools.rf import ble_sniff_start as ble_sniff_start
 from .tools.rf import ble_sniff_status as ble_sniff_status
@@ -487,6 +489,7 @@ _READ_ONLY: set[str] = {
     "wait_for",  # holds a connection open while it watches; changes nothing
     "recorder_status",
     "replay_status",  # reads replay-session run-state; never mutates
+    "sim_status",  # reads simulated-session run-state; never mutates
     "cot_relay_status",  # reads relay run-state (peers/counts); never mutates
     "atak_fleet_status",  # reads fleet bring-up / drive progress; never mutates
     "replay_fuzz_presets",  # static catalog of fuzz presets; no state
@@ -590,6 +593,7 @@ _DESTRUCTIVE = {
     # Bind a TCP listener and serve a simulated mesh to a connecting app.
     "replay_start",
     "replay_stop",
+    "sim",  # starts a simulated mesh listener, or stops sessions
     # Bind a TCP listener (CoT relay) / write captures to the host filesystem.
     "cot_relay_start",
     "cot_relay_stop",
@@ -821,6 +825,7 @@ _PORT_NOT_A_DEVICE = frozenset(
         "ios_open_url",
         "logs_window",
         "replay_start",
+        "sim",
         "telemetry_timeline",
         "uhubctl_cycle",
         "uhubctl_power",

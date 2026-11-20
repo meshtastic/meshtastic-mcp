@@ -24,7 +24,7 @@
 - [docs/serve.md](docs/serve.md): `meshtastic-mcp serve`, a token-authenticated HTTP server for a shared bench
 - [docs/toolsets.md](docs/toolsets.md): `MESHTASTIC_MCP_TOOLSETS` / `MESHTASTIC_MCP_READ_ONLY`,
   the toolset groups, trimming the advertised tool list
-- [docs/replay.md](docs/replay.md): `replay_start` parameters, the `sim_profile` keys, fuzz
+- [docs/replay.md](docs/replay.md): `sim` parameters, the `sim_profile` keys, fuzz
   presets and the `replay_inject_*` tools
 - [docs/display-mirror.md](docs/display-mirror.md): `capture_display`, `drive_display_start` and
   `send_input_event` on the device's own screen

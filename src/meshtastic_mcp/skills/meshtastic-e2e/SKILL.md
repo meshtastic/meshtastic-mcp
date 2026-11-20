@@ -59,7 +59,7 @@ adb shell am start -n <pkg>/org.meshtastic.app.MainActivity \
   this (bypass, deep link, dialog, fallback taps) — prefer it over raw adb.
 - Driving Settings/UI with a sim attached? Start it with
   `sim_profile={"traceroute_pairs_per_hour": 0}` — the default sim injects traceroute
-  responses that pop a modal over whatever you are testing (`replay_stop` also works once
+  responses that pop a modal over whatever you are testing (`sim(action="stop")` also works once
   the node DB is populated; the app keeps its nodes).
 
 ## Topology (read first)
@@ -223,7 +223,7 @@ connected ATAK/iTAK client via an **in-app local TAK server** that emits CoT
 (the deprecated `IMeshService` plugin is gone). Two layers:
 
 - **Bridge-semantics (no emulator, in CI):** the sim emits a TAKPacketV2 squad
-  (`replay_start(source=..., sim_profile={"tak": {"team_nodes": N, "wire": "v2"}})`
+  (`sim(action="start", source=..., sim_profile={"tak": {"team_nodes": N, "wire": "v2"}})`
   — v2 rides portnum 78 `ATAK_PLUGIN_V2`; v1 rides 72). `replay/tak_server.py`
   `capture_to_cot_events()` reproduces the bridge's wire→TAKPacketV2→CoT path;
   `tests/unit/test_tak_bridge.py` asserts the CoT is well-formed, typed

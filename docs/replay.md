@@ -1,6 +1,6 @@
 # Replay: a simulated Meshtastic device
 
-`replay_start` serves a capture as a radio over TCP, the inverse of the recorder. An app, an Android emulator at `10.0.2.2:<port>`, or the meshtastic Python library connects to `host:port`, does the want-config handshake, and receives a paced stream of packets restamped to "now", as from a real radio. Each session runs in a background thread. The call returns the session status (id, listen address, totals); `replay_status` polls it and `replay_stop` tears it down. `meshtastic-mcp replay` serves the same from a shell.
+`sim(action="start")` serves a capture as a radio over TCP, the inverse of the recorder. An app, an Android emulator at `10.0.2.2:<port>`, or the meshtastic Python library connects to `host:port`, does the want-config handshake, and receives a paced stream of packets restamped to "now", as from a real radio. Each session runs in a background thread. The call returns the session status (id, listen address, totals); `sim_status` polls it and `sim(action="stop")` tears it down. `start` takes the parameters below plus nothing else; `stop` takes only `session_id`, and a start parameter passed to `stop` is an error. `meshtastic-mcp replay` serves the same from a shell.
 
 ## Sources
 
@@ -22,7 +22,7 @@ Highest priority first:
 2. `rate` sends a steady number of packets per second and ignores the capture's timing.
 3. `speed` multiplies the original cadence, with idle gaps capped at `max_gap` seconds.
 
-Pacing is deadline-anchored, so drift does not accumulate and a requested rate is delivered. `replay_status` reports `target_rate` against the live `achieved_rate`, so a stress run checks itself.
+Pacing is deadline-anchored, so drift does not accumulate and a requested rate is delivered. `sim_status` reports `target_rate` against the live `achieved_rate`, so a stress run checks itself.
 
 `start` and `end` (ISO-8601, UTC when no zone is given) window the capture. `loop` restarts at the end. `limit_nodes` caps the node DB of a file source.
 
@@ -69,7 +69,7 @@ The RF gateway observer set by `sim_profile["observer"]` is not the connected no
 
 ## Discovery
 
-`mdns` advertises the session over mDNS/Bonjour as `_meshtastic._tcp` with the `shortname` and `id` TXT records real firmware publishes, so apps list it in network discovery (as `RPLY_4331`) with no manual IP entry. The default `None` is on unless the session binds loopback only. It is best effort: it prefers the `zeroconf` package, falls back to `dns-sd` or `avahi-publish-service`, and otherwise reports a hint under `mdns` in `replay_status`.
+`mdns` advertises the session over mDNS/Bonjour as `_meshtastic._tcp` with the `shortname` and `id` TXT records real firmware publishes, so apps list it in network discovery (as `RPLY_4331`) with no manual IP entry. The default `None` is on unless the session binds loopback only. It is best effort: it prefers the `zeroconf` package, falls back to `dns-sd` or `avahi-publish-service`, and otherwise reports a hint under `mdns` in `sim_status`.
 
 ## Fuzzing
 
@@ -82,7 +82,7 @@ The RF gateway observer set by `sim_profile["observer"]` is not the connected no
 | `adversary` | Spoofing, flooding, forged ACKs, rogue ADMIN, evil-twin impersonation. |
 | `chaos` | Everything, frame corruption included. |
 
-`fuzz_seed` seeds it so a crash reproduces. `replay_status` reports fuzz activity (counts and recent events) under `fuzz`. `replay_fuzz_presets` lists the presets with the fault categories each enables.
+`fuzz_seed` seeds it so a crash reproduces. `sim_status` reports fuzz activity (counts and recent events) under `fuzz`. `replay_fuzz_presets` lists the presets with the fault categories each enables.
 
 ## Injecting packets into a running session
 

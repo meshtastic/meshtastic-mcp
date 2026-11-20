@@ -343,7 +343,7 @@ Two things that bite in practice:
 
 - **The content varies shot to shot.** Node counts, battery percentage and the clock all move,
   so a set captured over several minutes looks inconsistent. `push_fake_nodedb` (and
-  `replay_start` for a simulated mesh) give every screenshot the same mesh; `set_owner` fixes
+  `sim(action="start")` for a simulated mesh) give every screenshot the same mesh; `set_owner` fixes
   the device name.
 - **Real screens leak real data.** Node long_names, positions and message text from your own
   mesh end up in the image. Seed a fake node DB before capturing anything destined for a public

@@ -77,6 +77,9 @@ _GROUPS: dict[str, frozenset[str]] = {
     # The pre-1.0 names a `next` tool replaces. Opt-in: only a client that names it gets them.
     "legacy": frozenset(
         {
+            "replay_start",
+            "replay_status",
+            "replay_stop",
             "device_info",
             "get_channel_url",
             "get_config",
@@ -86,6 +89,8 @@ _GROUPS: dict[str, frozenset[str]] = {
             "set_owner",
         }
     ),
+    # `sim` and `sim_status` match no `replay_` prefix.
+    "replay": frozenset({"sim", "sim_status"}),
     "local-model": frozenset(
         {
             "local_model_serve",
