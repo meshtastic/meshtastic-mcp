@@ -745,6 +745,11 @@ def main(argv=None) -> None:
         help=f"base directory for cloned repos (default: {_default_provision_dir()})",
     )
 
+    gen = sub.add_parser("docs", help="regenerate the tool reference from the registered tools")
+    gen.add_argument("action", choices=["generate"])
+    gen.add_argument("--check", action="store_true", help="exit 1 if a generated file is stale")
+    gen.add_argument("--root", type=Path, default=Path.cwd(), help="repo checkout to write into")
+
     lea = sub.add_parser("leases", help="list device leases on this host, or break one")
     lea.add_argument("--break", dest="break_target", metavar="PORT_OR_DEVICE", default=None)
     lea.add_argument("--json", action="store_true", help="emit JSON")
@@ -961,6 +966,10 @@ def main(argv=None) -> None:
     if args.cmd == "completion":
         raise SystemExit(_cmd_completion(args))
 
+    if args.cmd == "docs":
+        from .docs_gen import generate
+
+        raise SystemExit(generate(args.root, args.check))
     if args.cmd == "leases":
         raise SystemExit(_cmd_leases(args))
 
