@@ -53,6 +53,7 @@ _GROUPS: dict[str, frozenset[str]] = {
             "esptool_chip_info",
             "esptool_erase_flash",
             "esptool_raw",
+            "install",
             "nrfutil_dfu",
             "nrfutil_raw",
             "picotool_info",
