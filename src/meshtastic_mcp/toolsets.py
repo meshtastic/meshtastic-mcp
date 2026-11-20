@@ -79,22 +79,16 @@ _GROUPS: dict[str, frozenset[str]] = {
     "legacy": frozenset(
         {
             "device_info",
+            "factory_reset",
             "get_channel_url",
             "get_config",
             "list_nodes",
+            "reboot",
             "set_config",
             "set_debug_log_api",
             "set_owner",
-        }
-    ),
-    "local-model": frozenset(
-        {
-            "local_model_serve",
-            "local_model_serve_stop",
-            "local_model_status",
-            "summarize_window",
-            "triage_window",
-            "vision_oracle",
+            "shutdown",
+            "send_text",
         }
     ),
 }

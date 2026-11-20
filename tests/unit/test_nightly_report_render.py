@@ -177,20 +177,6 @@ def test_body_sections_and_folding():
     assert "untrusted content" in body
 
 
-def test_behavior_section_separated():
-    analysis = _analysis(
-        observations=[
-            Observation("info", "behavior", "summary", evidence=["- all quiet"]),
-            Observation("warn", "traffic_loss", "1/2 lost"),
-        ]
-    )
-    body = nrep.render_body(dict(NIGHTLY, status="passed"), analysis, [], max_body_kb=60)
-    assert "## Behavioral analysis (local model)" in body
-    assert "Draft from an offline model" in body
-    # traffic_loss lands in Observations, not the behavior section.
-    assert body.index("behavior") < body.index("traffic_loss")
-
-
 def test_budget_ladder_compacts_then_truncates():
     big_longrepr = "x" * 2500
     failures = [
@@ -250,10 +236,8 @@ def test_reporter_persists_even_when_disabled(tmp_path, monkeypatch):
         await rn.finish(db, nid, status="passed", summary=None)
 
         from meshtastic_mcp.web.services import github_issues as gi
-        from meshtastic_mcp.web.services import nightly_analysis as na
 
         await gi.save_config(db, gi.NightlyReportConfig(enabled=False))
-        monkeypatch.setattr(na, "has_local_model", lambda: False)
         monkeypatch.setattr(nrep, "nightly_data_dir", lambda _id: tmp_path / "no-such-night")
 
         hub = FakeHub()

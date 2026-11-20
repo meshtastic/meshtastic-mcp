@@ -75,28 +75,6 @@ def has_sdr() -> bool:
         return False
 
 
-def has_local_model() -> bool:
-    """True when a local Ollama instance is reachable (offload tools are usable).
-
-    Optional: enables the bulk-text offload tools (summarize/triage recorder
-    windows, narrate packets) that push token-heavy work onto a local GPU.
-    """
-    from . import local_model
-
-    return local_model.available()
-
-
-def has_llama_server() -> bool:
-    """True when a ``llama``/``llama-server`` binary is on PATH (can run/manage one).
-
-    Gates the bootstrap tools that start a self-contained llama.cpp backend; the
-    offload tools themselves gate on ``has_local_model`` (a reachable backend).
-    """
-    from . import llama_server
-
-    return llama_server.available()
-
-
 def has_power_meter() -> bool:
     """True when an ImmersionRC RF Power Meter v2 is attached (VID 0x04D8/PID 0x000A).
 
@@ -183,8 +161,6 @@ class Capabilities:
     pio: bool
     android: bool
     apple: bool
-    local_model: bool
-    llama_server: bool
     sdr: bool
     power_meter: bool
     tak: bool
@@ -201,8 +177,6 @@ class Capabilities:
                 ("pio", self.pio),
                 ("android", self.android),
                 ("apple", self.apple),
-                ("local_model", self.local_model),
-                ("llama_server", self.llama_server),
                 ("sdr", self.sdr),
                 ("power_meter", self.power_meter),
                 ("tak", self.tak),
@@ -222,8 +196,6 @@ def detect() -> Capabilities:
         pio=has_pio(),
         android=has_android(),
         apple=has_apple(),
-        local_model=has_local_model(),
-        llama_server=has_llama_server(),
         sdr=has_sdr(),
         power_meter=has_power_meter(),
         tak=has_tak(),
