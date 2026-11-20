@@ -28,8 +28,9 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Any
 
-from . import devices, registry
+from . import device_names, devices, registry
 
 log = logging.getLogger("meshtastic_mcp.connection")
 
@@ -203,6 +204,25 @@ def reject_if_tcp(port: str | None, tool_name: str) -> None:
         )
 
 
+def _remember(port: str, iface: Any) -> None:
+    """Record what this connection saw for the device registry; never fails the connect."""
+    try:
+        my = getattr(iface, "myInfo", None)
+        num = getattr(my, "my_node_num", None)
+        user = ((getattr(iface, "nodesByNum", None) or {}).get(num) or {}).get("user") or {}
+        device_names.record_seen(
+            port,
+            {
+                "node_num": num,
+                "model": user.get("hwModel"),
+                "long_name": user.get("longName"),
+                "short_name": user.get("shortName"),
+            },
+        )
+    except Exception:
+        log.debug("could not record %s in the device registry", port, exc_info=True)
+
+
 def resolve_port(port: str | None) -> str:
     """Pick a port: explicit > sole likely_meshtastic candidate > error.
 
@@ -213,6 +233,14 @@ def resolve_port(port: str | None) -> str:
     if port:
         if is_tcp_port(port):
             return normalize_tcp_endpoint(port)
+        if device_names.looks_like_name(port):
+            attached = [d["port"] for d in devices.list_devices()]
+            try:
+                named = device_names.resolve(port, attached)
+            except LookupError as exc:
+                raise ConnectionError(f"{exc}. Run `devices` to see what is attached.") from exc
+            if named is not None:
+                return named
         return port
     candidates = [d for d in devices.list_devices() if d["likely_meshtastic"]]
     if not candidates:
@@ -284,6 +312,7 @@ def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0
                 noProto=False,
                 timeout=timeout,
             )
+            _remember(resolved, iface)
             yield iface
             ok = True
         finally:
@@ -328,6 +357,7 @@ def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0
             resolved,
             timeout_s + _OPEN_GRACE_S,
         )
+        _remember(resolved, iface)
         yield iface
         ok = True
     finally:

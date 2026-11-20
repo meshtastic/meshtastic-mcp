@@ -312,8 +312,17 @@ def _print_result(data: object, as_json: bool) -> None:
 
 
 def _cmd_devices(args) -> int:
+    from meshtastic_mcp import device_names
     from meshtastic_mcp import devices as _devices
 
+    if args.name:
+        try:
+            rec = device_names.rename(*args.name)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        print(f"{rec['key']} is now {rec['name']}")
+        return 0
     result = _devices.list_devices(include_unknown=args.all)
     if not result:
         print("no devices found" + (" (try --all to see all serial ports)" if not args.all else ""))
@@ -743,6 +752,13 @@ def main(argv=None) -> None:
     # --- read-only device / hardware queries ---
     dev = sub.add_parser("devices", help="list connected Meshtastic devices")
     dev.add_argument("--all", action="store_true", help="include non-Meshtastic serial ports")
+    dev.add_argument(
+        "--name",
+        nargs=2,
+        metavar=("PORT_OR_NAME", "NEW_NAME"),
+        default=None,
+        help="give a radio a name of your choosing",
+    )
     dev.add_argument("--json", action="store_true", help="emit JSON")
 
     brd = sub.add_parser("boards", help="list / inspect PlatformIO board environments")

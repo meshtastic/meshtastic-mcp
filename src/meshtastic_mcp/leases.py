@@ -50,9 +50,15 @@ def _dir() -> Path:
     return d
 
 
+def _store_lock() -> contextlib.AbstractContextManager[None]:
+    return file_lock(_dir() / ".lock")
+
+
 @contextlib.contextmanager
-def _store_lock() -> Iterator[None]:
-    with open(_dir() / ".lock", "a+b") as fh:
+def file_lock(path: Path) -> Iterator[None]:
+    """An exclusive lock on `path` shared by every process on the host."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+b") as fh:
         if sys.platform == "win32":
             import msvcrt
 

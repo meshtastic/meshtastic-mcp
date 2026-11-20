@@ -15,9 +15,19 @@ from typing import Any, Literal, cast
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
-from .. import admin, connection, devices, info, jobs, leases, log_query, recorder_query
+from .. import (
+    admin,
+    connection,
+    device_names,
+    info,
+    jobs,
+    leases,
+    log_query,
+    recorder_query,
+)
 from .. import config_snapshot as config_snapshot_mod
 from .. import confirm as confirm_mod
+from .. import devices as devices_mod
 from .. import doctor as doctor_mod
 from .. import inject as inject_mod
 from ..recorder import get_recorder
@@ -28,6 +38,7 @@ from ..schemas import (
     ConfigSnapshotResult,
     DeviceEntry,
     DeviceInfo,
+    DevicesResult,
     DoctorReport,
     EventsWindow,
     FactoryResetResult,
@@ -103,7 +114,7 @@ def list_devices(
         format: `json` (default) or `table`: Markdown, about 40-60% fewer tokens than JSON
             on a long list.
     """
-    result = devices.list_devices(include_unknown=include_unknown)
+    result = devices_mod.list_devices(include_unknown=include_unknown)
     return _to_markdown_table(result) if format == "table" else cast(list[DeviceEntry], result)
 
 
@@ -963,6 +974,21 @@ def telemetry_timeline(
         port=port,
         max_points=max_points,
     )
+
+
+@app.tool()
+def devices() -> DevicesResult:
+    """The radios on this host by name, attached now or seen before, without opening any.
+
+    A radio is named `<host>/<model>-<last four hex of its node id>` the first time a
+    connection to it succeeds, and keeps that name across reboots, port changes and UF2.
+    Every tool that takes `port` also takes the name. Returns `{devices: [{name, port,
+    attached, node_num, model, long_name, short_name, last_seen, leased_to, key}]}`; the
+    node fields are what the last connection saw, and `name` is null for a radio no
+    connection has reached yet (use its `port`).
+    """
+    attached = [d["port"] for d in devices_mod.list_devices()]
+    return cast(DevicesResult, {"devices": device_names.listing(attached)})
 
 
 @app.tool()

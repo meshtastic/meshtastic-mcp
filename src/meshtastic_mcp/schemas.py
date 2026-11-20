@@ -89,6 +89,23 @@ class LogsWindow(TypedDict, total=False):
     window: QueryWindow
 
 
+class NamedDevice(TypedDict):
+    name: str | None
+    port: str | None
+    attached: bool
+    node_num: int | None
+    model: str | None
+    long_name: str | None
+    short_name: str | None
+    last_seen: float | None
+    leased_to: str | None
+    key: str
+
+
+class DevicesResult(TypedDict):
+    devices: list[NamedDevice]
+
+
 class LeaseInfo(TypedDict):
     device: str
     port: str
