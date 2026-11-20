@@ -18,7 +18,6 @@ Every tool a client loads costs context. Two environment variables shrink what t
 | `discord` | `discord_*`. |
 | `replay` | The simulated device (`replay_*`) and the CoT relay (`cot_relay_*`). |
 | `rf` | The SDR oracle (`rf_*`), the power meter (`pa_*`), the BLE sniffer (`ble_sniff_*`) and vanity keys (`vanity_*`). |
-| `local-model` | Local-model offload and its backend tools. |
 | `sdk` | The experimental Kotlin SDK bridge (`sdk_*`). |
 
 `core` holds only tools that need the base install and a radio over serial or TCP. A test pins it to an allowlist, so a new tool must name its group. `screenshot_set_*` registers with the android or the apple capability and lives in `apple`, so an Android-only session adds `apple` to get it. An unknown name stops the server at startup and lists the valid ones.

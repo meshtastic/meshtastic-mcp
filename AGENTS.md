@@ -39,7 +39,7 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   `_AnnotationTransform` in `server.py`.
 - **where tools live**: `tools/`, one module per toolset group in `toolsets.py` (`core.py`,
   `firmware.py`, `hardware.py`, `android.py`, `apple.py`, `replay.py`, `rf.py`, `discord.py`,
-  `local_model.py`, `sdk.py`). `tools/_app.py` holds the `FastMCP` app, `CAPS` and the
+  `sdk.py`). `tools/_app.py` holds the `FastMCP` app, `CAPS` and the
   capability decorators, and `tools/_shared.py` the helpers several modules use (`_off_loop`,
   `_run_job`, `_raise_if_failed`, `_confirmed_hw_call`). `server.py` imports every tool module,
   which registers its tools, then adds the transforms, starts the recorder and registers the
@@ -66,10 +66,6 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   in the `apple` toolset) serves each app a replay node from one seed, connects both, and
   captures matching Android and iOS screens by deep link in light and dark; see
   `docs/screenshot-set.md`.
-- **local-model capability** (needs a reachable Ollama / OpenAI-compatible `llama-server`, or a
-  `llama` binary to start one): `local_model.py` offload client + `llama_server.py`. Gates the
-  offload tools (`summarize_window` / `vision_oracle` / `triage_window`) and backend bootstrap
-  (`local_model_status` / `local_model_serve` / `local_model_serve_stop`).
 - **sdr capability** (needs the `[sdr]` extra + `librtlsdr` + an attached RTL-SDR): `sdr.py` +
   `rf_oracle.py` RF-compliance oracle (`rf_scan` / `rf_confirm_tx`).
 - **tak capability** (needs the meshtastic-tak SDK, which is not on PyPI: the `tak` dependency
@@ -131,7 +127,7 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   not an MCP capability): `web/` FastAPI backend + `web-ui/` Vue SPA — device registry,
   build/flash queue, recovery ladder, camera streams, bench test runner, Datadog shipping, and
   the nightly bake (scheduled firmware-develop pull → fleet bake + full suite → 2 h mesh soak →
-  local-LLM-assisted analysis → GitHub-issue report; see `docs/nightly.md`).
+  deterministic analysis → GitHub-issue report; see `docs/nightly.md`).
 
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`

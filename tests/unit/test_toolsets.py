@@ -140,7 +140,6 @@ def test_classification_of_known_tools() -> None:
     assert toolsets.toolset_of("cot_relay_start") == "replay"
     assert toolsets.toolset_of("vanity_preview") == "rf"
     assert toolsets.toolset_of("rf_confirm_tx") == "rf"
-    assert toolsets.toolset_of("vision_oracle") == "local-model"
     assert toolsets.toolset_of("ios_boot") == "apple"
     assert toolsets.toolset_of("screenshot_set_start") == "apple"
     assert toolsets.toolset_of("sdk_send_text") == "sdk"

@@ -5,10 +5,7 @@
 
 Deterministic heuristics run over three sources — the pipeline's own
 observation trail, the MCP recorder window the pytest child wrote during the
-suite, and the soak's JSONL capture — and work with no local model at all.
-When a local model is reachable it adds a *behavioral* pass: chunked
-map-reduce summaries of the night's logs and a vision/OCR check of each
-screen snapshot. Model output is always labeled a draft, never a verdict.
+suite, and the soak's JSONL capture.
 
 Log lines are device-authored (remote mesh nodes can inject content into
 them) — evidence is ANSI-stripped, GPS-scrubbed, and only ever rendered
@@ -24,8 +21,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from meshtastic_mcp import local_model, log_query
-from meshtastic_mcp.capabilities import has_local_model
+from meshtastic_mcp import log_query
 
 from ..db import repo_devices as rd
 from . import nightly_soak
@@ -68,102 +64,6 @@ BATTERY_MIN_SAMPLES = 10
 HEAP_SLOPE_WARN = -100.0  # bytes/min
 HEAP_MIN_SAMPLES = 20
 EVIDENCE_MAX_LINES = 10
-
-# Local-model budget: existing offload tools byte-cap prompts around 20-24 KB;
-# stay under that per chunk and cap how many chunks a night may spend.
-LLM_CHUNK_BYTES = 18_000
-LLM_MAX_CHUNKS_PER_DEVICE = 8
-LLM_TIMEOUT_S = 120.0
-
-BEHAVIOR_SYSTEM = (
-    "You are a Meshtastic device-log triage assistant reviewing an overnight "
-    "soak of a private test mesh. Reply with terse bullets only — no preamble. "
-    "Be specific (node ids, portnums, error strings, counts). Flag: reboots, "
-    "retransmission storms, unexpected silence, odd timing, anything a bench "
-    "operator should look at. Say 'nothing notable' if the window is clean."
-)
-VISION_QUESTION = (
-    "Does this device screen show an error, crash, garbled rendering, or a blank/frozen display?"
-)
-
-# BEHAVIOR_SYSTEM tells the model to say "nothing notable" when a window is
-# clean, and small models take that opening even when the window is not clean:
-# in a 3-run bench on raw soak logs, granite4:tiny-h led every single reply with
-# "SOAK window clean, no reboots" and then listed a watchdog reboot underneath.
-# An operator skimming the first line reads the opposite of the truth. Detect
-# that shape and label it rather than depending on which model is configured.
-_ALL_CLEAR_RE = re.compile(
-    r"nothing notable"
-    r"|(?:window|log|soak|night)\b[^.\n]{0,24}\bclean\b"
-    r"|\bno (?:reboots?|issues|anomalies|errors|problems|failures)\b",
-    re.IGNORECASE,
-)
-# "window is not clean" / "far from clean" is an honest dirty report, not a claim.
-_NEGATED_CLEAN_RE = re.compile(
-    r"\b(?:not|isn't|wasn't|never|hardly|far from|other than)\b[^.\n]{0,24}\bclean\b",
-    re.IGNORECASE,
-)
-_ANOMALY_RE = re.compile(
-    # reboot\w* so the verb form counts too — "!a4c1 rebooted twice" is the
-    # same finding as "a reboot on !a4c1", and \breboot\b misses it.
-    r"\b(?:reboot\w*|watchdog|wdt|brownout|crc|retransmi\w*|panic|crash|"
-    r"stack overflow|corrupt|silence|silent|timeout|storm)\b",
-    re.IGNORECASE,
-)
-# A clause that denies something uses anomaly words innocently ("no reboots or
-# unexpected silence observed"), so it must not count as anomaly evidence.
-_NEGATED_CLAUSE_RE = re.compile(r"\b(?:no|not|never|without|n't)\b", re.IGNORECASE)
-# A contrast flips the sentence back to reporting: whatever follows is its own
-# clause, outside the scope of the denial that preceded it.
-_CONTRAST_RE = re.compile(r"\b(?:but|however|although|though|yet|except that)\b", re.IGNORECASE)
-# ...except when the denial IS the finding ("no packets from !abc for 3600s").
-_ABSENCE_ANOMALY_RE = re.compile(
-    r"\bno (?:packets?|traffic|response|data|telemetry|contact|beacons?|heartbeats?)\b",
-    re.IGNORECASE,
-)
-CONTRADICTION_NOTE = (
-    "[guard] model claimed an all-clear but also listed anomalies below; "
-    "trust the bullets, not the claim"
-)
-
-
-def _clauses(text: str) -> list[str]:
-    """Split into clauses so a denial's scope stays local to its own sentence.
-
-    Contrast conjunctions split too: "no reboots, but !a4c1 rebooted twice"
-    is a denial followed by the real finding, and without the split the whole
-    sentence reads as negated — hiding the very evidence the guard looks for.
-    """
-    out: list[str] = []
-    for line in text.splitlines():
-        for sentence in re.split(r"[;.]", line):
-            out.extend(c for c in _CONTRAST_RE.split(sentence) if c.strip())
-    return out
-
-
-def flag_contradictory_all_clear(text: str) -> tuple[str, bool]:
-    """Prefix a warning when model output claims all-clear *and* lists anomalies.
-
-    Returns ``(text, flagged)``. Works clause by clause: a negated clause cannot
-    supply anomaly evidence, so an honest "no reboots or unexpected silence"
-    on a clean window does not trip the check on its own wording, and a negated
-    claim ("window is not clean") is not read as an all-clear. Absence findings
-    ("no packets from X") still count as anomalies.
-    """
-    if not text.strip():
-        return text, False
-    clauses = _clauses(text)
-    claimed = any(_ALL_CLEAR_RE.search(c) and not _NEGATED_CLEAN_RE.search(c) for c in clauses)
-    if not claimed:
-        return text, False
-    for c in clauses:
-        if _ABSENCE_ANOMALY_RE.search(c):
-            return f"{CONTRADICTION_NOTE}\n{text}", True
-        if _NEGATED_CLAUSE_RE.search(c):
-            continue
-        if _ANOMALY_RE.search(c):
-            return f"{CONTRADICTION_NOTE}\n{text}", True
-    return text, False
 
 
 @dataclass
@@ -284,7 +184,6 @@ class Analyzer:
         self._telemetry_slopes()
         self._traffic_loss()
         self._device_rows()
-        await self._behavioral()
         return self.out
 
     # -- deterministic heuristics --------------------------------------------
@@ -700,172 +599,6 @@ class Analyzer:
                     "errors": sum(1 for o in device_obs if o.category == "error_logs"),
                 }
             )
-
-    # -- local-model behavioral pass ------------------------------------------
-
-    async def _behavioral(self) -> None:
-        ready = await asyncio.to_thread(has_local_model)
-        if not ready and self.cfg.llm_autostart:
-            try:
-                from meshtastic_mcp import llama_server
-
-                await asyncio.to_thread(llama_server.serve)
-                ready = await asyncio.to_thread(has_local_model)
-            except Exception as exc:
-                log.info("llama-server autostart failed: %s", exc)
-        if not ready:
-            self.out.observations.append(
-                Observation(
-                    severity="warn",
-                    category="llm_unavailable",
-                    summary="no local model reachable — behavioral analysis skipped",
-                )
-            )
-            return
-        try:
-            await self._behavioral_logs()
-            await self._behavioral_snapshots()
-        except Exception as exc:  # a model hiccup must never sink the report
-            self.out.observations.append(
-                Observation(
-                    severity="warn",
-                    category="llm_unavailable",
-                    summary=f"behavioral analysis aborted: {exc}",
-                )
-            )
-
-    def _chunks_for(self, recs: list[dict]) -> list[str]:
-        chunks: list[str] = []
-        buf: list[str] = []
-        size = 0
-        for r in recs:
-            line = _clean(r.get("line", ""), self.scrubber)
-            if not line:
-                continue
-            size += len(line) + 1
-            buf.append(line)
-            if size >= LLM_CHUNK_BYTES:
-                chunks.append("\n".join(buf))
-                buf, size = [], 0
-            if len(chunks) >= LLM_MAX_CHUNKS_PER_DEVICE:
-                break
-        if buf and len(chunks) < LLM_MAX_CHUNKS_PER_DEVICE:
-            chunks.append("\n".join(buf))
-        return chunks
-
-    async def _behavioral_logs(self) -> None:
-        by_serial = self._soak_lines_by_serial()
-        device_summaries: dict[str, str] = {}
-        flagged_devices: set[str] = set()
-        for serial, recs in by_serial.items():
-            chunks = self._chunks_for(recs)
-            if not chunks:
-                continue
-            parts: list[str] = []
-            for i, chunk in enumerate(chunks):
-                prompt = (
-                    f"Soak log window for device {serial} (part {i + 1}/{len(chunks)}):\n{chunk}"
-                )
-                try:
-                    part = await asyncio.to_thread(
-                        local_model.complete,
-                        prompt,
-                        system=BEHAVIOR_SYSTEM,
-                        lane="fast",
-                        num_predict=300,
-                        timeout=LLM_TIMEOUT_S,
-                    )
-                except local_model.LocalModelError as exc:
-                    log.info("behavioral chunk for %s failed: %s", serial, exc)
-                    continue
-                if part.strip():
-                    parts.append(part.strip())
-            if parts:
-                # Record the flag but feed the model its own raw text: the note
-                # is operator-directed and must not steer the reduce prompt.
-                summary = "\n".join(parts)
-                if flag_contradictory_all_clear(summary)[1]:
-                    flagged_devices.add(serial)
-                device_summaries[serial] = summary
-        if not device_summaries:
-            return
-        det = "\n".join(
-            f"- [{o.severity}] {o.category}: {o.summary}" for o in self.out.observations
-        )
-        fleet_prompt = (
-            "Per-device soak summaries:\n\n"
-            + "\n\n".join(f"## {s}\n{t}" for s, t in device_summaries.items())
-            + f"\n\nDeterministic findings already known:\n{det or '- none'}\n\n"
-            "Give cross-device behavioral observations a bench operator should "
-            "read tomorrow morning. Bullets only."
-        )
-        try:
-            fleet = await asyncio.to_thread(
-                local_model.complete,
-                fleet_prompt,
-                system=BEHAVIOR_SYSTEM,
-                lane="default",
-                num_predict=400,
-                timeout=LLM_TIMEOUT_S,
-            )
-        except local_model.LocalModelError as exc:
-            log.info("behavioral fleet reduce failed: %s", exc)
-            return
-        fleet, fleet_flagged = flag_contradictory_all_clear(fleet)
-        # A device-level contradiction still matters even if the reduce
-        # paraphrased it away, so carry those flags into the severity.
-        flagged = fleet_flagged or bool(flagged_devices)
-        self.out.observations.append(
-            Observation(
-                severity="warn" if flagged else "info",
-                category="behavior",
-                summary=(
-                    "local-model behavioral summary contradicted itself (draft — verify)"
-                    if flagged
-                    else "local-model behavioral summary (draft — verify before acting)"
-                ),
-                evidence=[ln for ln in fleet.splitlines() if ln.strip()][:30],
-                data={
-                    "devices": sorted(device_summaries),
-                    "contradictory": sorted(flagged_devices),
-                },
-            )
-        )
-
-    async def _behavioral_snapshots(self) -> None:
-        snaps = sorted(self.data_dir.glob("snap-*.jpg"))
-        if not snaps:
-            return
-        from meshtastic_mcp import ocr  # import-safe without the [ui] extra
-
-        for snap in snaps:
-            serial = snap.name.split("-")[1] if snap.name.count("-") >= 2 else None
-            try:
-                ocr_text = await asyncio.to_thread(ocr.ocr_text, snap.read_bytes())
-            except Exception:
-                ocr_text = ""
-            try:
-                verdict = await asyncio.to_thread(
-                    local_model.vision_assert, str(snap), VISION_QUESTION
-                )
-            except local_model.LocalModelError as exc:
-                log.info("vision check for %s failed: %s", snap.name, exc)
-                continue
-            if verdict.get("match"):
-                evidence = [f"vision: {verdict.get('evidence') or verdict.get('answer')}"]
-                if ocr_text.strip():
-                    evidence.append(f"ocr: {ocr_text.strip()[:200]}")
-                self.out.observations.append(
-                    Observation(
-                        severity="warn",
-                        category="behavior",
-                        summary=f"screen check flagged {snap.name} "
-                        "(local-model draft — verify before acting)",
-                        device=serial,
-                        evidence=evidence,
-                        data={"snapshot": snap.name},
-                    )
-                )
 
 
 async def analyze(
