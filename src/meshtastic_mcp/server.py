@@ -70,7 +70,6 @@ from .tools._app import android_tool as android_tool
 from .tools._app import app_plane_tool as app_plane_tool
 from .tools._app import apple_tool as apple_tool
 from .tools._app import ble_sniffer_tool as ble_sniffer_tool
-from .tools._app import discord_tool as discord_tool
 from .tools._app import firmware_tool as firmware_tool
 from .tools._app import sdk_tool as sdk_tool
 from .tools._app import sdr_tool as sdr_tool
@@ -162,21 +161,6 @@ from .tools.core import shutdown as shutdown
 from .tools.core import telemetry_timeline as telemetry_timeline
 from .tools.core import triage_bundle as triage_bundle
 from .tools.core import wait_for as wait_for
-from .tools.discord import _DISCORD_CLIENT as _DISCORD_CLIENT
-from .tools.discord import _TRUST_NOTE as _TRUST_NOTE
-from .tools.discord import _discord as _discord
-from .tools.discord import _trust_doc as _trust_doc
-from .tools.discord import discord_channels as discord_channels
-from .tools.discord import discord_context as discord_context
-from .tools.discord import discord_forum_posts as discord_forum_posts
-from .tools.discord import discord_member as discord_member
-from .tools.discord import discord_mentions as discord_mentions
-from .tools.discord import discord_mod as discord_mod
-from .tools.discord import discord_pins as discord_pins
-from .tools.discord import discord_read as discord_read
-from .tools.discord import discord_search as discord_search
-from .tools.discord import discord_status as discord_status
-from .tools.discord import discord_thread as discord_thread
 from .tools.firmware import build as build
 from .tools.firmware import build_poll as build_poll
 from .tools.firmware import build_start as build_start
@@ -491,16 +475,6 @@ _READ_ONLY: set[str] = {
     "sdk_status",  # reports SDK-CLI bridge availability; no mutation
     "sdk_device_info",  # reads device snapshot via the Kotlin SDK CLI; no mutation
     "sdk_list_nodes",  # reads the device node DB via the Kotlin SDK CLI; no mutation
-    "discord_status",  # read-only bridge report; no mutation
-    "discord_channels",
-    "discord_search",
-    "discord_mentions",
-    "discord_read",
-    "discord_context",
-    "discord_thread",
-    "discord_forum_posts",
-    "discord_pins",
-    "discord_member",
 }
 # Destructive: irreversible or device-state-mutating (most are confirm-gated too).
 _DESTRUCTIVE = {
@@ -623,17 +597,6 @@ _IDEMPOTENT_WRITES = {
 # remote mesh nodes (e.g. packet payloads, log lines) — relevant to the
 # lethal-trifecta prompt-injection risk. See SECURITY.md.
 _OPEN_WORLD = {
-    # Discord: every message is user-authored content from a public server (untrusted).
-    "discord_status",
-    "discord_channels",
-    "discord_search",
-    "discord_mentions",
-    "discord_read",
-    "discord_context",
-    "discord_thread",
-    "discord_forum_posts",
-    "discord_pins",
-    "discord_member",
     "android_docs_search",  # queries the live Android Knowledge Base
     "android_docs_fetch",
     "android_version_lookup",  # queries live maven/Android version metadata

@@ -5,8 +5,11 @@
 
 Default (no args): run the MCP server over stdio.
 Subcommands:
-  install [--client C] [--local] [--print]   register this server in an MCP client's config
-                                (default client: claude-code, user scope) + install skills
+  install [--client C] [--local] [--discord] [--print]   register this server in an MCP client's
+                                config (default client: claude-code, user scope) + install skills;
+                                --discord also registers the Discord server
+  discord-serve                 run the read-only Discord MCP server over stdio
+                                (same as the `meshtastic-mcp-discord` script)
   uninstall [--client C] [--purge-skills]    remove the server registration (and optionally skills)
   doctor [--json]               probe external deps and print how to acquire any missing ones
   skills install/uninstall [--dest DIR]      copy/remove the bundled agent skills
@@ -150,6 +153,17 @@ def _server_entry(local: bool, env: dict[str, str]) -> dict:
     return entry
 
 
+def _discord_entry(local: bool, env: dict[str, str]) -> dict:
+    """The mcpServers entry for the Discord server (`meshtastic-mcp-discord`)."""
+    if local:
+        entry: dict = {"command": sys.executable, "args": ["-m", "meshtastic_mcp.discord_server"]}
+    else:
+        entry = {"command": "uvx", "args": ["--from", "meshtastic-mcp", "meshtastic-mcp-discord"]}
+    if env:
+        entry["env"] = env
+    return entry
+
+
 def _load_json_config(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -165,25 +179,30 @@ def _load_json_config(path: Path) -> dict:
 
 def _install(args) -> int:
     name = args.name
-    entry = _server_entry(args.local, dict(args.env or []))
+    env = dict(args.env or [])
+    entry = _server_entry(args.local, env)
+    entries = {name: entry}
+    if args.discord:
+        entries[f"{name}-discord"] = _discord_entry(args.local, env)
     if args.print:
-        print(_json_mod.dumps({"mcpServers": {name: entry}}, indent=2))
+        print(_json_mod.dumps({"mcpServers": entries}, indent=2))
         return 0
     path = Path(args.config) if args.config else _client_config_path(args.client, args.scope)
     config = _load_json_config(path)
     servers = config.setdefault("mcpServers", {})
     if not isinstance(servers, dict):
         raise SystemExit(f"{path}: 'mcpServers' is not an object; refusing to edit.")
-    action = "updated" if name in servers else "registered"
-    servers[name] = entry
+    actions = {n: "updated" if n in servers else "registered" for n in entries}
+    servers.update(entries)
     if args.dry_run:
         print(f"[dry-run] would write to {path}:")
-        print(_json_mod.dumps({"mcpServers": {name: entry}}, indent=2))
+        print(_json_mod.dumps({"mcpServers": entries}, indent=2))
         return 0
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_json_mod.dumps(config, indent=2) + "\n")
-    print(f"{action} MCP server '{name}' in {path}")
-    print(f"  command: {entry['command']} {' '.join(entry['args'])}")
+    for n, e in entries.items():
+        print(f"{actions[n]} MCP server '{n}' in {path}")
+        print(f"  command: {e['command']} {' '.join(e['args'])}")
     if not args.no_skills:
         _skills_install(args.skills_dest)
     print("\nRestart your MCP client to pick up the change.")
@@ -195,10 +214,13 @@ def _uninstall(args) -> int:
     path = Path(args.config) if args.config else _client_config_path(args.client, args.scope)
     config = _load_json_config(path)
     servers = config.get("mcpServers")
-    if isinstance(servers, dict) and name in servers:
-        del servers[name]
+    removed = [n for n in (name, f"{name}-discord") if isinstance(servers, dict) and n in servers]
+    if removed and isinstance(servers, dict):
+        for n in removed:
+            del servers[n]
         path.write_text(_json_mod.dumps(config, indent=2) + "\n")
-        print(f"unregistered MCP server '{name}' from {path}")
+        for n in removed:
+            print(f"unregistered MCP server '{n}' from {path}")
     else:
         print(f"MCP server '{name}' not found in {path}")
     if args.purge_skills:
@@ -631,7 +653,7 @@ def _cmd_completion(args) -> int:
     """Print a shell completion script for bash or zsh."""
     cmds = (
         "install uninstall doctor skills provision devices boards info nodes "
-        "watch replay capture-stats serve completion"
+        "watch replay capture-stats serve discord-serve completion"
     )
     if args.shell == "bash":
         print(f"""# meshtastic-mcp bash completion
@@ -719,6 +741,11 @@ def main(argv=None) -> None:
         type=_env_kv,
         metavar="KEY=VALUE",
         help="env var to bake into the entry (repeatable)",
+    )
+    ins.add_argument(
+        "--discord",
+        action="store_true",
+        help="also register the read-only Discord server as '<name>-discord'",
     )
     ins.add_argument("--no-skills", action="store_true", help="don't also install the skills")
     ins.add_argument("--skills-dest", type=Path, default=_DEFAULT_SKILLS_DEST)
@@ -893,6 +920,11 @@ def main(argv=None) -> None:
     srv.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback)")
     srv.add_argument("--port", type=int, default=8765)
 
+    sub.add_parser(
+        "discord-serve",
+        help="run the read-only Discord MCP server over stdio (tools need a bot token)",
+    )
+
     brg = sub.add_parser(
         "bridge",
         help="serve stdio here and forward to a meshtastic-mcp server (default: this host's)",
@@ -913,6 +945,12 @@ def main(argv=None) -> None:
             serve_mod.serve(args.host, args.port, token)
         except serve_mod.ServerAlreadyRunning as exc:
             raise SystemExit(f"meshtastic-mcp serve: {exc}") from exc
+        raise SystemExit(0)
+
+    if args.cmd == "discord-serve":
+        from meshtastic_mcp.discord_server import app as discord_app
+
+        discord_app.run()
         raise SystemExit(0)
 
     if args.cmd == "doctor":

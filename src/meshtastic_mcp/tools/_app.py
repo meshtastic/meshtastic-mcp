@@ -122,21 +122,6 @@ def sdk_tool(*args: Any, **kwargs: Any):
     return deco
 
 
-def discord_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when a Discord bot token resolves.
-
-    Gates the read-only Discord source tools; installs without a token never
-    advertise them. Content they return is untrusted (public community server).
-    """
-
-    def deco(fn):
-        if CAPS.discord:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
 def vanity_tool(*args: Any, **kwargs: Any):
     """Like `@app.tool()` but only registers when the `mvgrind` grinder is present.
 

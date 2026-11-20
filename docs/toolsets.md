@@ -15,12 +15,11 @@ Every tool a client loads costs context. Two environment variables shrink what t
 | `hardware` | esptool, nrfutil, picotool, uhubctl, `touch_1200bps`, the `nrf52_*` UF2 bootloader tools, the `serial_*` monitor sessions (they run `pio device monitor` in the firmware tree) and `capture_screen` (a webcam and the `[ui]` extra). |
 | `android` | Android emulator and app driving (`android_*`), the ATAK fleet (`atak_*`). |
 | `apple` | iOS Simulator driving (`ios_*`) and `screenshot_set_*`. |
-| `discord` | `discord_*`. |
 | `replay` | The simulated device (`replay_*`, `inject`) and the CoT relay (`cot_relay_*`). |
 | `rf` | The SDR oracle (`rf_*`), the power meter (`pa_*`), the BLE sniffer (`ble_sniff_*`) and vanity keys (`vanity_*`). |
 | `sdk` | The experimental Kotlin SDK bridge (`sdk_*`). |
 
-`core` holds only tools that need the base install and a radio over serial or TCP. A test pins it to an allowlist, so a new tool must name its group. `screenshot_set_*` registers with the android or the apple capability and lives in `apple`, so an Android-only session adds `apple` to get it. An unknown name stops the server at startup and lists the valid ones.
+`core` holds only tools that need the base install and a radio over serial or TCP. A test pins it to an allowlist, so a new tool must name its group. `screenshot_set_*` registers with the android or the apple capability and lives in `apple`, so an Android-only session adds `apple` to get it. An unknown name stops the server at startup and lists the valid ones. The `discord_*` tools are not a group here; the separate `meshtastic-mcp-discord` server serves them ([docs/discord.md](discord.md)).
 
 `core` alone is about a quarter of the full list's size, `READ_ONLY` a little under half, and both together about an eighth. The capabilities active on the host decide the full list; your client's tool list shows what a setting leaves.
 

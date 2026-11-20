@@ -137,7 +137,6 @@ def test_classification_of_known_tools() -> None:
     assert toolsets.toolset_of("nrf52_flash_uf2") == "hardware"
     assert toolsets.toolset_of("android_tap") == "android"
     assert toolsets.toolset_of("atak_fleet_up") == "android"
-    assert toolsets.toolset_of("discord_search") == "discord"
     assert toolsets.toolset_of("cot_relay_start") == "replay"
     assert toolsets.toolset_of("vanity_preview") == "rf"
     assert toolsets.toolset_of("rf_confirm_tx") == "rf"
@@ -181,7 +180,7 @@ def test_toolsets_filter_to_the_named_groups(server) -> None:
     names = _listed(server, {toolsets.TOOLSETS_ENV: "core"})
     assert names
     assert {toolsets.toolset_of(n) for n in names} == {"core"}
-    assert "inspect" in names and "discord_search" not in names
+    assert "inspect" in names
 
 
 def test_the_nrf52_bootloader_tools_come_with_hardware_not_core(server) -> None:
