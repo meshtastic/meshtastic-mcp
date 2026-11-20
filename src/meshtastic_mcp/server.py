@@ -467,6 +467,7 @@ _READ_ONLY: set[str] = {
     "devices",  # reads the name registry and enumerates ports; opens none
     "serial_list",
     "serial_read",  # reads buffered bytes; no write side-effect
+    "inspect",
     "device_info",
     "list_nodes",
     "get_config",
@@ -642,6 +643,7 @@ _OPEN_WORLD = {
     "android_docs_fetch",
     "android_version_lookup",  # queries live maven/Android version metadata
     "list_devices",
+    "inspect",  # node names in the node DB are chosen by whoever owns each radio
     "device_info",
     "list_nodes",
     "get_config",
@@ -826,15 +828,16 @@ _PORT_NOT_A_DEVICE = frozenset(
 
 def _takes_device_port(tool: Tool) -> bool:
     props = (tool.parameters or {}).get("properties", {})
-    return "port" in props and tool.name not in _PORT_NOT_A_DEVICE
+    return ("port" in props or "node" in props) and tool.name not in _PORT_NOT_A_DEVICE
 
 
 async def _with_lease(lease: str | None = None, **kwargs: Any) -> Any:
     from fastmcp.tools.tool_transform import forward
 
-    port = kwargs.get("port")
+    port = kwargs.get("node", kwargs.get("port"))
     try:
-        resolved = connection.resolve_port(port)
+        # A BLE radio has no lease key until the registry records its BLE identity.
+        resolved = None if (port or "").startswith("ble:") else connection.resolve_port(port)
     except connection.ConnectionError:
         resolved = None  # the tool reports the missing or ambiguous port itself
     if resolved is not None:

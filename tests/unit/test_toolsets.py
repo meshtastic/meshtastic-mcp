@@ -23,19 +23,16 @@ _CORE = frozenset(
         "config_diff",
         "config_snapshot",
         "config_snapshots_list",
-        "device_info",
         "devices",
         "doctor",
         "drive_display_poll",
         "drive_display_start",
         "events_window",
         "factory_reset",
-        "get_channel_url",
-        "get_config",
         "inject_frame",
+        "inspect",
         "job",
         "list_devices",
-        "list_nodes",
         "logs_window",
         "mark_event",
         "packets_window",
@@ -116,8 +113,22 @@ def test_named_groups_parse_and_unknown_names_are_rejected() -> None:
         toolsets.parse_toolsets("core,nope")
 
 
+def test_a_minus_entry_drops_a_group() -> None:
+    assert toolsets.parse_toolsets("-legacy") == toolsets.known_toolsets() - {"legacy"}
+    assert toolsets.parse_toolsets("all,-legacy") == toolsets.known_toolsets() - {"legacy"}
+    assert toolsets.parse_toolsets("core,legacy,-legacy") == {"core"}
+    with pytest.raises(toolsets.ToolsetError, match="nope"):
+        toolsets.parse_toolsets("-nope")
+
+
+def test_dropping_legacy_hides_the_old_device_reads(server) -> None:
+    names = _listed(server, {toolsets.TOOLSETS_ENV: "-legacy"})
+    assert "inspect" in names and "device_info" not in names and "get_config" not in names
+
+
 def test_classification_of_known_tools() -> None:
-    assert toolsets.toolset_of("device_info") == "core"
+    assert toolsets.toolset_of("inspect") == "core"
+    assert toolsets.toolset_of("device_info") == "legacy"
     assert toolsets.toolset_of("build_start") == "firmware"
     assert toolsets.toolset_of("esptool_raw") == "hardware"
     assert toolsets.toolset_of("nrf52_flash_uf2") == "hardware"
@@ -167,7 +178,7 @@ def test_toolsets_filter_to_the_named_groups(server) -> None:
     names = _listed(server, {toolsets.TOOLSETS_ENV: "core"})
     assert names
     assert {toolsets.toolset_of(n) for n in names} == {"core"}
-    assert "device_info" in names and "discord_search" not in names
+    assert "inspect" in names and "discord_search" not in names
 
 
 def test_the_nrf52_bootloader_tools_come_with_hardware_not_core(server) -> None:

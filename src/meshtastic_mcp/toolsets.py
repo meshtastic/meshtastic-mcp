@@ -4,8 +4,9 @@
 """Trim the advertised tool list to the groups a session needs.
 
 Every tool schema a client loads costs context. `MESHTASTIC_MCP_TOOLSETS` names the groups to
-expose (default: all) and `MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state.
-A hidden tool is not listed and cannot be called.
+expose (default: all); a `-group` entry drops one, so `-legacy` is every group but `legacy`.
+`MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. A hidden tool is not
+listed and cannot be called.
 """
 
 from __future__ import annotations
@@ -72,6 +73,15 @@ _GROUPS: dict[str, frozenset[str]] = {
             "vanity_preview",
         }
     ),
+    # The pre-1.0 names a `next` tool replaces, kept for clients that still call them.
+    "legacy": frozenset(
+        {
+            "device_info",
+            "get_channel_url",
+            "get_config",
+            "list_nodes",
+        }
+    ),
     "local-model": frozenset(
         {
             "local_model_serve",
@@ -113,16 +123,22 @@ def known_toolsets() -> frozenset[str]:
 
 
 def parse_toolsets(value: str | None) -> frozenset[str] | None:
-    """`None` means every group; otherwise the named groups, which must all exist."""
+    """`None` means every group; otherwise the named groups, which must all exist.
+
+    A `-group` entry removes that group; with no group named, it removes it from all of them.
+    """
     if value is None or not value.strip() or value.strip().lower() == "all":
         return None
-    wanted = frozenset(part.strip().lower() for part in value.split(",") if part.strip())
-    unknown = wanted - known_toolsets()
+    names = [part.strip().lower() for part in value.split(",") if part.strip()]
+    dropped = frozenset(n[1:] for n in names if n.startswith("-"))
+    named = frozenset(n for n in names if not n.startswith("-"))
+    unknown = (named - {"all"} | dropped) - known_toolsets()
     if unknown:
         raise ToolsetError(
             f"unknown toolset(s) {sorted(unknown)}; choose from {sorted(known_toolsets())} or 'all'"
         )
-    return wanted
+    base = known_toolsets() if not named or "all" in named else named
+    return base - dropped
 
 
 def is_visible(

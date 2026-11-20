@@ -17,6 +17,7 @@ from fastmcp.exceptions import ToolError
 
 from .. import (
     admin,
+    backends,
     connection,
     device_names,
     info,
@@ -30,6 +31,7 @@ from .. import confirm as confirm_mod
 from .. import devices as devices_mod
 from .. import doctor as doctor_mod
 from .. import inject as inject_mod
+from ..backends import python as backends_python
 from ..recorder import get_recorder
 from ..schemas import (
     CaptureDisplayResult,
@@ -42,6 +44,7 @@ from ..schemas import (
     DoctorReport,
     EventsWindow,
     FactoryResetResult,
+    InspectResult,
     LeaseInfo,
     LogsWindow,
     NodeEntry,
@@ -174,6 +177,71 @@ def list_nodes(
         ]
         return _to_markdown_table(flat)
     return cast(list[NodeEntry], result)
+
+
+_INSPECT_SECTIONS = frozenset(backends_python.SECTIONS)
+
+
+@app.tool()
+def inspect(
+    node: str | None = None,
+    what: list[str] | str = "summary",
+    detail: Literal["brief", "full"] = "brief",
+    timeout_s: float = 8.0,
+) -> InspectResult:
+    """Read a radio: its summary, config, channels, node database and network state.
+
+    Everything asked for comes over one connection. Config fields at their default value are
+    reported with that value (`region: UNSET`), and a section the radio never sent is null.
+    Sensitive values (keys, PSKs, passwords, PINs) read `<redacted>` when set.
+    `network` is the radio's own report: WiFi, Ethernet, Bluetooth and serial link state,
+    with the IP address; firmware gives no reason for a failed WiFi association.
+    A part that fails is named in `errors` while the others still return.
+
+    Returns `{target, backend, summary?, config?, channels?, nodes?, network?, errors?}`.
+
+    Args:
+        node: A device name from `devices` (`heltec-v3-aa13`, `host/name`), a serial port,
+            `tcp://host[:port]` or `ble:<name or address>` (SDK backend). Omit to use the
+            one attached radio.
+        what: One or more of `summary`, `config`, `channels`, `nodes`, `network`, or a
+            config section such as `lora`, `mqtt` or `config.network`, which reads that
+            section alone. `all` reads every part.
+        detail: `brief` (default) or `full`; `full` adds firmware metadata to the summary and
+            every field of each node record.
+        timeout_s: Seconds to wait for the radio to answer.
+    """
+    items = [what] if isinstance(what, str) else list(what)
+    parts: list[str] = []
+    sections: list[str] = []
+    for item in items:
+        name = item.strip().lower()
+        section = name.removeprefix("config.")
+        if name == "all":
+            parts.extend(backends.PARTS)
+        elif name in backends.PARTS:
+            parts.append(name)  # `network` here is the link state, not the config section
+        elif section in _INSPECT_SECTIONS:
+            sections.append(section)
+        else:
+            raise ToolError(
+                f"what={item!r}: choose from {list(backends.PARTS)}, `all`, "
+                "or a config section such as `lora` or `config.network`"
+            )
+    if sections and "config" not in parts:
+        parts.append("config")
+    elif "config" in parts:
+        sections = []
+    try:
+        backend = backends.for_target(node)
+        result = backend.read(node, list(dict.fromkeys(parts)), sections or None, detail, timeout_s)
+    except (backends.BackendError, connection.ConnectionError) as exc:
+        raise ToolError(str(exc)) from exc
+    result["backend"] = backend.name
+    errors = result.get("errors") or {}
+    if errors and not any(p in result for p in parts):
+        raise ToolError("; ".join(f"{p}: {e}" for p, e in errors.items()))
+    return cast(InspectResult, result)
 
 
 # ---------- Device interaction: writes ------------------------------------
