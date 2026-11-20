@@ -90,8 +90,10 @@ def device_key(port: str) -> str:
 
 
 def _usb_key(real: str, ports: list[Any]) -> str | None:
+    # No PID: an nRF52 bootloader enumerates with another PID than its app (0x0029 against
+    # 0x8029) but keeps the serial, and the lease has to follow the board into DFU.
     def ident(info: Any) -> str:
-        return f"{info.vid or 0:04x}:{info.pid or 0:04x}:{info.serial_number}"
+        return f"{info.vid or 0:04x}:{info.serial_number}"
 
     for info in ports:
         if os.path.realpath(info.device) != real or not info.serial_number:
@@ -104,6 +106,36 @@ def _usb_key(real: str, ports: list[Any]) -> str | None:
             key += "@" + str(info.location).split(":")[0]
         return key
     return None
+
+
+def _serial_of(key: str) -> str | None:
+    if not key.startswith("usb:"):
+        return None
+    return key.split(":", 2)[2].split("@")[0]
+
+
+def _key_for(port: str) -> str:
+    """`device_key`, except that a port no longer enumerated (a board in UF2 mode or between
+    app and bootloader) maps to the live lease claimed on it: by the path it was claimed
+    under, or by its USB serial in the by-id name."""
+    key = device_key(port)
+    if not key.startswith("dev:"):
+        return key
+    now = time.time()
+    real = os.path.realpath(port)
+    name = os.path.basename(port)
+    for path in _dir().glob("*.json"):
+        record = _read(path)
+        if not _live(record, now):
+            continue
+        assert record is not None
+        serial = record.get("serial") or ""
+        claimed = record.get("port", "")
+        if claimed == port or os.path.realpath(claimed) == real:
+            return str(record["device"])
+        if len(serial) >= 8 and serial in name:
+            return str(record["device"])
+    return key
 
 
 def _path(key: str) -> Path:
@@ -137,10 +169,10 @@ def claim(
     """Take a device, or renew the lease `lease` on it. Raises `LeaseError` if another holds it."""
     if not 0 < ttl_s <= MAX_TTL_S:
         raise LeaseError(f"ttl_s must be between 1 and {MAX_TTL_S}")
-    key = device_key(port)
-    path = _path(key)
     now = time.time()
     with _store_lock():
+        key = _key_for(port)
+        path = _path(key)
         current = _read(path)
         if _live(current, now):
             assert current is not None
@@ -155,6 +187,7 @@ def claim(
             "lease": "lease_" + secrets.token_urlsafe(12),
             "device": key,
             "port": port,
+            "serial": _serial_of(key),
             "holder": holder or "",
             "host": socket.gethostname(),
             "claimed_at": now,
@@ -210,7 +243,7 @@ def break_lease(port_or_device: str) -> dict[str, Any] | None:
     """Drop the lease on a device, whoever holds it. For a human, never an agent tool."""
     path = _path(port_or_device)
     if not path.exists():
-        path = _path(device_key(port_or_device))
+        path = _path(_key_for(port_or_device))
     with _store_lock():
         record = _read(path)
         path.unlink(missing_ok=True)
@@ -219,7 +252,7 @@ def break_lease(port_or_device: str) -> dict[str, Any] | None:
 
 def check(port: str, lease: str | None) -> None:
     """Refuse a device call on `port` unless it is unleased or `lease` holds it."""
-    path = _path(device_key(port))
+    path = _path(_key_for(port))
     now = time.time()
     record = _read(path)
     if not _live(record, now):
