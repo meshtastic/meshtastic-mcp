@@ -1593,6 +1593,34 @@ Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
 | `port` | string | `null` | Serial port, passed as `--port`; omit to leave it to `args` or esptool. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. Only destructive subcommands ask. |
 
+### `install`
+
+Destructive.
+
+Install firmware on a board, picking the flasher from the board, and read back its version.
+
+`source` is `{"env": "<pio env>"}` (build from the firmware tree; ESP32 OTA-updates the
+app and keeps config, `erase=True` does a full erase and factory flash; nRF52 and RP2040
+upload through PlatformIO, which does the bootloader touch) or `{"file": "<path>"}`
+(`.uf2` through the nRF52 UF2 drive, entering UF2 mode first; `.zip` through nrfutil DFU;
+`.bin` written at 0x0 by esptool). After a good write it waits for the board to answer and
+returns the `firmware_version` it now reports. Requires confirm=True, or the user's answer
+when the client can ask; `erase` is irreversible. Runs as a `flashes` job: after a cancel
+or timeout follow its `job_id` with `job`, since a flash cannot be stopped mid-write.
+
+Returns `{job_id, method, exit_code, stdout_tail, stderr_tail, back?, firmware_version?,
+error?}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `port` | string | required | The board's serial port, ideally its `/dev/serial/by-id` path. |
+| `source` | object | required | `{"env": ...}` or `{"file": ...}`. A git ref or a release is not installed here yet: build it in the firmware tree, or download it, and pass the file. |
+| `erase` | boolean | `false` | Erase the whole flash first (ESP32 builds and `.bin` files). |
+| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
+| `userprefs` | object | `null` | `USERPREFS_*` values baked into a build. |
+| `build_flags` | object | `null` | `-D` macros for a build. |
+
 ### `nrf52_backup_firmware`
 
 Read-only, idempotent, open world.
