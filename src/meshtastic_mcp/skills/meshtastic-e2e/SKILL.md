@@ -11,7 +11,7 @@ test stimulates one plane and asserts on the *other*.
 
 | Plane | Stimulus | Oracle (observation) |
 |---|---|---|
-| **Device** (Meshtastic MCP) | `send_text`, `set_config`, `push_fake_nodedb`, `send_input_event`, `uhubctl_cycle`, traceroute | recorder `packets_window` / `telemetry_timeline` / `logs_window` / `events_window`, `device_info`, `list_nodes`, serial logs, `capture_screen`+OCR |
+| **Device** (Meshtastic MCP) | `send`, `configure`, `push_fake_nodedb`, `send_input_event`, `uhubctl_cycle`, `send(request="traceroute")` | `wait_for`, `query`, recorder `packets_window` / `telemetry_timeline` / `logs_window` / `events_window`, `inspect`, serial logs, `capture_screen`+OCR |
 | **App — Android** (android CLI + adb) | `adb shell input tap/text/swipe`, `android run` | `android layout --diff`, `android screen capture [--annotate]` |
 | **App — Android, agent-driven** (Artemis MCP) | `mobile_run_task` runs a whole journey out of context | **none — never its own oracle**; the device plane decides (see `references/journeys.md`) |
 | **App — Apple** (xcrun simctl + idb) | `idb ui tap/text`, `simctl install/launch` | `idb ui describe-all`, `simctl io screenshot` |
@@ -198,7 +198,7 @@ Type+send in the app; assert the wire truth on the tester radio's recorder.
 
 `push_fake_nodedb` (or a real beacon) on the DUT radio → assert the node appears in the
 app's node list (`android layout` over the nodes screen, match long_name/short_name).
-Backstop the device truth with `list_nodes`.
+Backstop the device truth with `inspect(what="nodes")`.
 
 ## Loop 4 — config write-back (app → device)
 

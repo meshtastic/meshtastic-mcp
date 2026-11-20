@@ -3,7 +3,7 @@
 Change a setting in the app; assert it persisted on the DUT radio (RAM *and* NVS).
 
 **Stimulus:** app config screen toggles a value (region, role, channel name, hop limit…)  
-**Oracle:** MCP `get_config` on the DUT reflects it; survives a `reboot` (NVS proof)
+**Oracle:** MCP `inspect` on the DUT reflects it; survives a `reboot` (NVS proof)
 
 ## Steps
 
@@ -30,7 +30,7 @@ Verdict: `LOOP config-writeback PASS field=<x> value=<new> persisted=<yes|no>`.
 
 ## Important — port contention
 
-If the phone is connected to the DUT over **serial**, the MCP `get_config` call and the app
+If the phone is connected to the DUT over **serial**, the MCP `inspect` call and the app
 **cannot hold the same serial port at once** (exclusive lock). Resolve by either:
 - DUT over **BLE/TCP** to the app, serial free for MCP reads, **or**
 - read config via the app's own UI as the oracle and use MCP only when the app is disconnected.
@@ -38,7 +38,7 @@ If the phone is connected to the DUT over **serial**, the MCP `get_config` call 
 ## What to test
 
 - Round-trip a value the app owns: `lora.hop_limit`, `lora.region`, device `role`, a channel
-  name / URL (`get_channel_url` / `set_channel_url`).
+  name / URL (`inspect(what="url")` / `set_channel_url`).
 - Negative case: set an invalid value in the app → assert the device rejects/clamps it and the
   app surfaces the error (no silent divergence).
 

@@ -112,7 +112,7 @@ dut = apple_sim.tcp_dut_address(4403)  # "127.0.0.1:4403"
 
 # 4. Inbound loop (device → app):
 TOKEN = f"E2E-{int(time.time())}"
-# tester (:4404) sends via mesh_e2e.py / send_text ...
+# tester (:4404) sends via mesh_e2e.py / send ...
 assert apple_sim.poll_for_text(TOKEN, udid=udid, timeout=30)  # app rendered it → PASS
 ```
 

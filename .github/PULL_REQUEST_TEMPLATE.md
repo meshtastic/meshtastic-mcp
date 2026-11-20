@@ -11,5 +11,7 @@
 
 - [ ] Gates pass (ruff, mypy — no new `ignore_errors`/`# noqa`, pytest unit tier)
 - [ ] New MCP tools have read/destructive/openWorld annotations; destructive ones take `confirm`
+- [ ] Changed a tool? Ran `meshtastic-mcp docs generate` and committed `docs/tools.md`
+- [ ] Skills name only tools a default session lists (no `legacy` names)
 - [ ] Core changes import/run with no firmware checkout
 - [ ] DCO sign-off (`git commit -s`)
