@@ -1,14 +1,14 @@
 intent,expected_tool
 "What's missing to run the emulator e2e on this machine?",doctor
 "List the radios plugged in",list_devices
-"Show this node's firmware version and identity",device_info
-"Who's in the mesh / show the node database",list_nodes
-"Read the LoRa config",get_config
+"Show this node's firmware version and identity",inspect
+"Who's in the mesh / show the node database",inspect
+"Read the LoRa config",inspect
 "Set the region to EU868",set_config
 "Send 'hello mesh' to everyone on the primary channel",send_text
 "Reboot the radio",reboot
 "Wipe everything including BLE bonds and the identity key",factory_reset
-"Get the shareable channel URL",get_channel_url
+"Get the shareable channel URL",inspect
 "What TEXT_MESSAGE_APP packets crossed the wire in the last 2 minutes?",packets_window
 "Show the firmware log lines around now",logs_window
 "Plot battery/temperature over the last hour",telemetry_timeline

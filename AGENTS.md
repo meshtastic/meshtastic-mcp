@@ -11,7 +11,10 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 ## Architecture: portable core + gated capabilities
 
 - **core** (always registered): `devices`, `serial_session`, `registry`, `connection`
-  (serial + TCP), `info`, `admin`, `recorder/` + `log_query` + `recorder_query` (`query`, read-only DuckDB SQL over the
+  (serial + TCP), `info`, `admin`, `backends/` (what the device tools run on a radio:
+  `python` in process, `sdk` through the Kotlin SDK CLI for `ble:` targets or with
+  `MESHTASTIC_MCP_BACKEND=sdk`; each returns plain dicts, and `protodict` reports default
+  values and withholds fields the protos mark `sensitive`), `recorder/` + `log_query` + `recorder_query` (`query`, read-only DuckDB SQL over the
   recorder's streams), `replay/` (simulated-device
   streaming + `sim` synthetic mesh + `fuzz` adversary layer), `inject` (frame injection into
   real hardware — see below), `input_events`, `camera`/`ocr`, `display_mirror`
@@ -353,10 +356,12 @@ meshtastic-mcp nodes <port>                 # mesh peers
 ```
 Or via MCP tools when already in an MCP session:
 ```
-list_devices()                      # find ports; note port + likely_meshtastic
-device_info(port=<port>)            # firmware version, region, node num, primary channel
-list_nodes(port=<port>)             # mesh peers visible to this node
+devices()                           # the attached radios by name; opens no port
+inspect(node=<name>)                # firmware version, region, node num, primary channel
+inspect(node=<name>, what=["lora", "nodes", "network"])  # one connection for all three
 ```
+`device_info`, `list_nodes`, `get_config` and `get_channel_url` are the opt-in `legacy`
+toolset: hidden unless `MESHTASTIC_MCP_TOOLSETS` names it (`all,legacy`), removed in 1.1.
 
 **Build / flash without timing out**
 ```

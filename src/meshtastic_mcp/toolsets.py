@@ -4,8 +4,10 @@
 """Trim the advertised tool list to the groups a session needs.
 
 Every tool schema a client loads costs context. `MESHTASTIC_MCP_TOOLSETS` names the groups to
-expose (default: all) and `MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state.
-A hidden tool is not listed and cannot be called.
+expose. Unset or `all` exposes every group but the opt-in `legacy`, which a client gets by
+naming it; a `-group` entry drops one.
+`MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. A hidden tool is not
+listed and cannot be called.
 """
 
 from __future__ import annotations
@@ -72,6 +74,15 @@ _GROUPS: dict[str, frozenset[str]] = {
             "vanity_preview",
         }
     ),
+    # The pre-1.0 names a `next` tool replaces. Opt-in: only a client that names it gets them.
+    "legacy": frozenset(
+        {
+            "device_info",
+            "get_channel_url",
+            "get_config",
+            "list_nodes",
+        }
+    ),
     "local-model": frozenset(
         {
             "local_model_serve",
@@ -93,6 +104,9 @@ _PREFIXES: dict[str, tuple[str, ...]] = {
     "sdk": ("sdk_",),
 }
 
+# Groups the default leaves out.
+OPT_IN = frozenset({"legacy"})
+
 
 class ToolsetError(ValueError):
     """An unknown toolset name was requested."""
@@ -112,28 +126,41 @@ def known_toolsets() -> frozenset[str]:
     return frozenset({CORE, *_GROUPS, *_PREFIXES})
 
 
-def parse_toolsets(value: str | None) -> frozenset[str] | None:
-    """`None` means every group; otherwise the named groups, which must all exist."""
+def default_toolsets() -> frozenset[str]:
+    return known_toolsets() - OPT_IN
+
+
+def parse_toolsets(value: str | None) -> frozenset[str]:
+    """The groups to expose: every group but the opt-in ones, or the named groups.
+
+    A `-group` entry removes that group; with no group named, it removes it from the default.
+    """
     if value is None or not value.strip() or value.strip().lower() == "all":
-        return None
-    wanted = frozenset(part.strip().lower() for part in value.split(",") if part.strip())
-    unknown = wanted - known_toolsets()
+        return default_toolsets()
+    names = [part.strip().lower() for part in value.split(",") if part.strip()]
+    dropped = frozenset(n[1:] for n in names if n.startswith("-"))
+    named = frozenset(n for n in names if not n.startswith("-"))
+    unknown = (named - {"all"} | dropped) - known_toolsets()
     if unknown:
         raise ToolsetError(
             f"unknown toolset(s) {sorted(unknown)}; choose from {sorted(known_toolsets())} or 'all'"
         )
-    return wanted
+    if named and "all" not in named:
+        base = named
+    else:
+        base = default_toolsets() | (named - {"all"})
+    return base - dropped
 
 
 def is_visible(
     name: str,
-    toolsets: frozenset[str] | None,
+    toolsets: frozenset[str],
     read_only: bool,
     read_only_names: Collection[str],
 ) -> bool:
     if read_only and name not in read_only_names:
         return False
-    return toolsets is None or toolset_of(name) in toolsets
+    return toolset_of(name) in toolsets
 
 
 def read_only_requested(env: Mapping[str, str]) -> bool:
@@ -154,7 +181,7 @@ class ToolsetTransform(Transform):
 
     @property
     def active(self) -> bool:
-        return self._toolsets is not None or self._read_only
+        return self._toolsets != known_toolsets() or self._read_only
 
     def _visible(self, name: str) -> bool:
         return is_visible(name, self._toolsets, self._read_only, self._read_only_names())

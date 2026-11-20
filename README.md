@@ -27,9 +27,9 @@ uvx meshtastic-mcp doctor          # check what's available
 Inside Claude Code (or any MCP client registered with `meshtastic`):
 
 ```
-list_devices()                          → find your device port
-device_info(port="/dev/cu.usbmodem101") → firmware, region, node count
-list_nodes(port="/dev/cu.usbmodem101")  → mesh peers
+devices()                               → the attached radios, by name
+inspect(node="heltec-v3-aa13")          → firmware, region, node count
+inspect(node="heltec-v3-aa13", what=["lora", "nodes"])  → LoRa config and mesh peers
 set_debug_log_api(port="/dev/cu.usbmodem101", enabled=True)
 send_text(port="/dev/cu.usbmodem101", text="hello mesh", wait_for_tx=True)  → tx_confirmed
 ```
@@ -113,7 +113,7 @@ with no firmware checkout. Optional capabilities activate when their prerequisit
 
 | Capability | Prerequisite | Adds |
 |---|---|---|
-| **core** | none | discovery, serial+TCP transport, `device_info`/`list_nodes`/admin/`send_text`/reboot, recorder + log/telemetry/packet/event queries, **replay** (simulated TCP device + synthetic mesh + fuzzer), input-events, uhubctl, `esptool`/`nrfutil`/`picotool`, the nRF52 bootloader's UF2 drive (`nrf52_*`) |
+| **core** | none | discovery, serial+TCP transport, `inspect`/admin/`send_text`/reboot, recorder + log/telemetry/packet/event queries, **replay** (simulated TCP device + synthetic mesh + fuzzer), input-events, uhubctl, `esptool`/`nrfutil`/`picotool`, the nRF52 bootloader's UF2 drive (`nrf52_*`) |
 | **firmware** | `MESHTASTIC_FIRMWARE_ROOT` + PlatformIO `pio` | build / clean / flash / OTA / board enum / userPrefs |
 | **android** | `android` CLI + `adb` | Android-emulator + native-node orchestration for hardware-free e2e |
 | **apple** | `xcrun` (+ `idb` for UI) | iOS Simulator / macOS-app orchestration for hardware-free e2e (`ios_*`); `screenshot_set_*` registers with this or android and captures matching Android and iOS screens, see [docs/screenshot-set.md](docs/screenshot-set.md) |

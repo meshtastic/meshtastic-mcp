@@ -115,11 +115,11 @@ def _tool(name: str, read_only: bool):
 
 
 def test_client_filter_applies_this_clients_read_only_and_toolsets() -> None:
-    tools = [_tool("device_info", True), _tool("reboot", False), _tool("build", False)]
+    tools = [_tool("inspect", True), _tool("reboot", False), _tool("build", False)]
     read_only = bridge.ClientFilter({"MESHTASTIC_MCP_READ_ONLY": "1"})
-    assert [t.name for t in asyncio.run(read_only.list_tools(tools))] == ["device_info"]
+    assert [t.name for t in asyncio.run(read_only.list_tools(tools))] == ["inspect"]
     core = bridge.ClientFilter({"MESHTASTIC_MCP_TOOLSETS": "core"})
-    assert [t.name for t in asyncio.run(core.list_tools(tools))] == ["device_info", "reboot"]
+    assert [t.name for t in asyncio.run(core.list_tools(tools))] == ["inspect", "reboot"]
     assert len(asyncio.run(bridge.ClientFilter({}).list_tools(tools))) == 3
 
 
@@ -204,13 +204,13 @@ def test_the_default_stdio_entry_bridges_to_the_hosts_server(served) -> None:
         async with _stdio(served.env) as client:
             tools = {t.name: t for t in await client.list_tools()}
             assert "replay_start" not in tools  # the server's `core`, so bridged
-            assert "lease" in tools["device_info"].input_schema["properties"]
+            assert "lease" in tools["inspect"].input_schema["properties"]
             held = await client.call_tool(
                 "claim", {"port": "tcp://bench-fake:4403", "holder": "bridge test"}
             )
             lease = held.structured_content["lease"]
             refused = await client.call_tool(
-                "device_info", {"port": "tcp://bench-fake:4403"}, raise_on_error=False
+                "inspect", {"node": "tcp://bench-fake:4403"}, raise_on_error=False
             )
             assert refused.is_error and "bridge test" in refused.content[0].text
             await client.call_tool("release", {"lease": lease})
@@ -222,7 +222,7 @@ def test_the_default_stdio_entry_bridges_to_the_hosts_server(served) -> None:
 
         async with _stdio(served.env, {"MESHTASTIC_MCP_READ_ONLY": "1"}) as client:
             names = {t.name for t in await client.list_tools()}
-            assert "device_info" in names and "claim" not in names and "reboot" not in names
+            assert "inspect" in names and "claim" not in names and "reboot" not in names
 
     asyncio.run(run())
 

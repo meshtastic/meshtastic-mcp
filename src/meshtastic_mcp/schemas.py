@@ -52,6 +52,18 @@ class DeviceInfo(TypedDict, total=False):
     display: Any
 
 
+class InspectResult(TypedDict):
+    target: Any
+    backend: str
+    summary: NotRequired[dict[str, Any]]
+    config: NotRequired[dict[str, Any]]
+    channels: NotRequired[list[dict[str, Any]]]
+    url: NotRequired[dict[str, str]]
+    nodes: NotRequired[list[dict[str, Any]]]
+    network: NotRequired[dict[str, Any]]
+    errors: NotRequired[dict[str, str]]
+
+
 class NodeUser(TypedDict, total=False):
     long_name: str | None
     short_name: str | None
