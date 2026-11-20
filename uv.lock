@@ -1910,7 +1910,7 @@ wheels = [
 [[package]]
 name = "meshtastic"
 version = "2.7.11"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/meshtastic/python.git?branch=master#84db1913f2f9c5f2a6df257079c90d5aa8452a31" }
 dependencies = [
     { name = "bleak" },
     { name = "packaging" },
@@ -1920,10 +1920,6 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "tabulate" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/de/79/4c8d282e792f35b4895611a27b236153f3dac31f3d46e87f35fe46d6de7f/meshtastic-2.7.11.tar.gz", hash = "sha256:41a8c84b577daff173d36db9fdbc8bf2c7228b58e580474e9f53802ed8ea7d4a", size = 376814, upload-time = "2026-07-17T17:37:11.881Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/86/8d/8f89a75f195aca9241208f2fb26c76ea18d51f2e43fee252875ac4debc85/meshtastic-2.7.11-py3-none-any.whl", hash = "sha256:adb020f2cd7ace53896c6bf487f2d2136498dd88052c41a2aa6fb7a4634971b5", size = 428444, upload-time = "2026-07-17T17:37:10.352Z" },
 ]
 
 [[package]]
@@ -2019,7 +2015,7 @@ requires-dist = [
     { name = "fastmcp", extras = ["tasks"], marker = "extra == 'tasks'", specifier = ">=4.1,<5" },
     { name = "fastmcp", extras = ["tasks"], marker = "extra == 'test'", specifier = ">=4.1,<5" },
     { name = "mcp", specifier = ">=2" },
-    { name = "meshtastic", specifier = ">=2.7.8" },
+    { name = "meshtastic", git = "https://github.com/meshtastic/python.git?branch=master" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "numpy", marker = "extra == 'sdr'", specifier = ">=1.26" },
     { name = "numpy", marker = "extra == 'ui'", specifier = ">=1.26" },

@@ -126,6 +126,12 @@ tak = [
     "meshtastic-tak @ git+https://github.com/meshtastic/TAKPacket-SDK.git#subdirectory=python",
 ]
 
+# `next` develops and tests against meshtastic-python's master, so a library change reaches the
+# bench before its release does. uv reads this source for a checkout and the lock; the published
+# metadata keeps the PyPI requirement above.
+[tool.uv.sources]
+meshtastic = { git = "https://github.com/meshtastic/python.git", branch = "master" }
+
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
