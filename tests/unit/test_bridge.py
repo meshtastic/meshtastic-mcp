@@ -115,11 +115,11 @@ def _tool(name: str, read_only: bool):
 
 
 def test_client_filter_applies_this_clients_read_only_and_toolsets() -> None:
-    tools = [_tool("inspect", True), _tool("reboot", False), _tool("build", False)]
+    tools = [_tool("inspect", True), _tool("admin", False), _tool("build", False)]
     read_only = bridge.ClientFilter({"MESHTASTIC_MCP_READ_ONLY": "1"})
     assert [t.name for t in asyncio.run(read_only.list_tools(tools))] == ["inspect"]
     core = bridge.ClientFilter({"MESHTASTIC_MCP_TOOLSETS": "core"})
-    assert [t.name for t in asyncio.run(core.list_tools(tools))] == ["inspect", "reboot"]
+    assert [t.name for t in asyncio.run(core.list_tools(tools))] == ["inspect", "admin"]
     assert len(asyncio.run(bridge.ClientFilter({}).list_tools(tools))) == 3
 
 
@@ -222,7 +222,7 @@ def test_the_default_stdio_entry_bridges_to_the_hosts_server(served) -> None:
 
         async with _stdio(served.env, {"MESHTASTIC_MCP_READ_ONLY": "1"}) as client:
             names = {t.name for t in await client.list_tools()}
-            assert "inspect" in names and "claim" not in names and "reboot" not in names
+            assert "inspect" in names and "claim" not in names and "admin" not in names
 
     asyncio.run(run())
 

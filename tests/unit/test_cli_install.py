@@ -25,6 +25,7 @@ def _args(**kw):
         "config": None,
         "name": "meshtastic",
         "local": False,
+        "discord": False,
         "env": None,
         "no_skills": True,
         "skills_dest": Path("/nonexistent"),
@@ -74,6 +75,26 @@ def test_uninstall_removes_only_our_entry(tmp_path):
     cli._uninstall(_args(config=str(cfg)))
     servers = json.loads(cfg.read_text())["mcpServers"]
     assert "meshtastic" not in servers and "other" in servers
+
+
+def test_install_discord_registers_the_second_server_and_uninstall_removes_it(tmp_path):
+    cfg = tmp_path / "mcp.json"
+    cli._install(_args(config=str(cfg), discord=True))
+    servers = json.loads(cfg.read_text())["mcpServers"]
+    assert servers["meshtastic-discord"]["args"] == [
+        "--from",
+        "meshtastic-mcp",
+        "meshtastic-mcp-discord",
+    ]
+    cli._uninstall(_args(config=str(cfg)))
+    assert json.loads(cfg.read_text())["mcpServers"] == {}
+
+
+def test_install_discord_local_uses_the_module(tmp_path):
+    cfg = tmp_path / "mcp.json"
+    cli._install(_args(config=str(cfg), discord=True, local=True))
+    entry = json.loads(cfg.read_text())["mcpServers"]["meshtastic-discord"]
+    assert entry["args"] == ["-m", "meshtastic_mcp.discord_server"]
 
 
 def test_install_refuses_invalid_json(tmp_path):

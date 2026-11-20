@@ -31,7 +31,7 @@ devices()                               → the attached radios, by name
 inspect(node="heltec-v3-aa13")          → firmware, region, node count
 inspect(node="heltec-v3-aa13", what=["lora", "nodes"])  → LoRa config and mesh peers
 configure(node="heltec-v3-aa13", changes={"security.debug_log_api_enabled": True})
-send_text(port="heltec-v3-aa13", text="hello mesh", wait_for_tx=True)  → tx_confirmed
+send(node="heltec-v3-aa13", text="hello mesh", wait_for_tx=True)  → tx_confirmed
 ```
 
 A node never sees its own transmission on the receive path, so `packets_window` cannot confirm a
@@ -113,15 +113,14 @@ with no firmware checkout. Optional capabilities activate when their prerequisit
 
 | Capability | Prerequisite | Adds |
 |---|---|---|
-| **core** | none | discovery, serial+TCP transport, `inspect`/admin/`send_text`/reboot, recorder + log/telemetry/packet/event queries, **replay** (simulated TCP device + synthetic mesh + fuzzer), input-events, uhubctl, `esptool`/`nrfutil`/`picotool`, the nRF52 bootloader's UF2 drive (`nrf52_*`) |
+| **core** | none | discovery, serial+TCP transport, `inspect`/`configure`/`send`/reboot, recorder + log/telemetry/packet/event queries, **replay** (simulated TCP device + synthetic mesh + fuzzer), input-events, uhubctl, `esptool`/`nrfutil`/`picotool`, the nRF52 bootloader's UF2 drive (`nrf52_*`) |
 | **firmware** | `MESHTASTIC_FIRMWARE_ROOT` + PlatformIO `pio` | build / clean / flash / OTA / board enum / userPrefs |
 | **android** | `android` CLI + `adb` | Android-emulator + native-node orchestration for hardware-free e2e |
 | **apple** | `xcrun` (+ `idb` for UI) | iOS Simulator / macOS-app orchestration for hardware-free e2e (`ios_*`); `screenshot_set_*` registers with this or android and captures matching Android and iOS screens, see [docs/screenshot-set.md](docs/screenshot-set.md) |
-| **local-model** | a reachable Ollama or OpenAI-compatible `llama-server` (or a `llama` binary to start one) | offload tools that push token-heavy work onto a local GPU: summarize/triage recorder windows, e2e-failure first pass, and an offline **vision oracle**; see [docs/local-models.md](docs/local-models.md) |
 | **sdr** | `[sdr]` extra (bundles `pyrtlsdrlib`, a prebuilt librtlsdr) + an RTL-SDR dongle | RF-compliance oracle: `rf_scan` occupancy checks and `rf_confirm_tx` on-air verification, no second radio needed; see [docs/rf-oracle.md](docs/rf-oracle.md). *macOS/Homebrew note:* a system `librtlsdr` from Homebrew is the osmocom fork and lacks `rtlsdr_set_dithering`, so `import rtlsdr` fails; the bundled `pyrtlsdrlib` avoids this and is preferred by pyrtlsdr's loader. |
 | **tak** | the meshtastic-tak SDK, which is not on PyPI: install it with the command `doctor` prints, or `uv sync --group tak` in a checkout | real TAKPacketV2 zstd wire compression for the replay sim's TAK squad (`profile tak.wire="v2"`) and its CoT stream to ATAK |
 | **sdk-cli** *(experimental)* | Kotlin SDK headless CLI | alternate device-IO backend over the JVM CLI; see [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md) |
-| **discord** | a read-only bot token (`$DISCORD_BOT_TOKEN` or `<user-config-dir>/meshtastic-mcp/discord.token`; `doctor` prints the path) | read the Meshtastic Discord server: server-side search, history, threads/forum posts, pins, mentions of you, with a per-message role-derived `trust` tier (`discord_*`); stdlib only, never posts; see [docs/discord.md](docs/discord.md) |
+| **discord** (own server, `meshtastic-mcp-discord`) | a read-only bot token (`$DISCORD_BOT_TOKEN` or `<user-config-dir>/meshtastic-mcp/discord.token`; `doctor` prints the path) | read the Meshtastic Discord server: server-side search, history, threads/forum posts, pins, mentions of you, with a per-message role-derived `trust` tier (`discord_*`, served by the separate `meshtastic-mcp-discord` server, not the device server); stdlib only, never posts; see [docs/discord.md](docs/discord.md) |
 | **ble-sniffer** | an [nRF Sniffer for Bluetooth LE](https://www.nordicsemi.com/Products/Development-tools/nRF-Sniffer-for-Bluetooth-LE) dongle (Nordic VID `0x1915`/PID `0x522A`) + Nordic's `nrfutil-ble-sniffer` plugin | capture the **phone-to-node BLE link** from outside both ends (`ble_sniff_start`/`_poll`/`_stop`), the independent oracle for when the app says "no devices found" and the node says "advertising". `ble_sniff_status` is core. Receive-only; output is untrusted (a BLE name is arbitrary text from any radio in range); see [docs/ble-sniffer.md](docs/ble-sniffer.md) |
 | **mvgrind** | the [`mvgrind`](https://github.com/miketweaver/mvgrind) binary + an OpenCL driver | grind a **vanity NodeNum or app color** on the GPU (`vanity_grind_start`/`_poll`/`_stop`): a node's number is `crc32(x25519_public_key)` and the apps paint it with the low 24 bits, so a chosen id or color means searching the keyspace. `vanity_preview` and `vanity_apply` are core, so a key ground elsewhere still applies here; see [docs/vanity.md](docs/vanity.md) |
 
@@ -185,6 +184,25 @@ requires Python ≤ 3.12).
 All scripts clone fresh if no source dir is provided, accept `--ref` to pin a git sha/tag/branch,
 and print a machine-readable `<component>-sha=<sha>` line for CI provenance.
 
+
+## Tools
+
+Each tool's parameters and description are in [docs/tools.md](docs/tools.md), generated from the
+server's registered tools. The toolsets, as `MESHTASTIC_MCP_TOOLSETS` names them:
+
+<!-- BEGIN GENERATED TOOLSETS: `meshtastic-mcp docs generate` -->
+| Toolset | Tools |
+| --- | --- |
+| `core` | [`admin`](docs/tools.md#admin), [`capture_display`](docs/tools.md#capture_display), [`claim`](docs/tools.md#claim), [`config_diff`](docs/tools.md#config_diff), [`config_snapshot`](docs/tools.md#config_snapshot), [`config_snapshots_list`](docs/tools.md#config_snapshots_list), [`configure`](docs/tools.md#configure), [`devices`](docs/tools.md#devices), [`doctor`](docs/tools.md#doctor), [`drive_display_poll`](docs/tools.md#drive_display_poll), [`drive_display_start`](docs/tools.md#drive_display_start), [`events_window`](docs/tools.md#events_window), [`inject_frame`](docs/tools.md#inject_frame), [`inspect`](docs/tools.md#inspect), [`job`](docs/tools.md#job), [`list_devices`](docs/tools.md#list_devices), [`logs_window`](docs/tools.md#logs_window), [`mark_event`](docs/tools.md#mark_event), [`packets_window`](docs/tools.md#packets_window), [`query`](docs/tools.md#query), [`recorder_export`](docs/tools.md#recorder_export), [`recorder_pause`](docs/tools.md#recorder_pause), [`recorder_resume`](docs/tools.md#recorder_resume), [`recorder_status`](docs/tools.md#recorder_status), [`release`](docs/tools.md#release), [`send`](docs/tools.md#send), [`send_input_event`](docs/tools.md#send_input_event), [`set_channel_url`](docs/tools.md#set_channel_url), [`telemetry_timeline`](docs/tools.md#telemetry_timeline), [`triage_bundle`](docs/tools.md#triage_bundle), [`wait_for`](docs/tools.md#wait_for) |
+| `android` | [`android_clear_logcat`](docs/tools.md#android_clear_logcat), [`android_docs_fetch`](docs/tools.md#android_docs_fetch), [`android_docs_search`](docs/tools.md#android_docs_search), [`android_find_text`](docs/tools.md#android_find_text), [`android_poll_for_text`](docs/tools.md#android_poll_for_text), [`android_read_logcat`](docs/tools.md#android_read_logcat), [`android_render_compose_preview`](docs/tools.md#android_render_compose_preview), [`android_resolve`](docs/tools.md#android_resolve), [`android_screenshot`](docs/tools.md#android_screenshot), [`android_swipe`](docs/tools.md#android_swipe), [`android_tap`](docs/tools.md#android_tap), [`android_type_text`](docs/tools.md#android_type_text), [`android_ui_dump`](docs/tools.md#android_ui_dump), [`android_version_lookup`](docs/tools.md#android_version_lookup), [`atak_drive_route`](docs/tools.md#atak_drive_route), [`atak_drive_stop`](docs/tools.md#atak_drive_stop), [`atak_fleet_down`](docs/tools.md#atak_fleet_down), [`atak_fleet_status`](docs/tools.md#atak_fleet_status), [`atak_fleet_up`](docs/tools.md#atak_fleet_up), [`atak_share_item`](docs/tools.md#atak_share_item) |
+| `apple` | [`ios_boot`](docs/tools.md#ios_boot), [`ios_list_simulators`](docs/tools.md#ios_list_simulators), [`ios_open_url`](docs/tools.md#ios_open_url), [`ios_screenshot`](docs/tools.md#ios_screenshot), [`ios_tap`](docs/tools.md#ios_tap), [`ios_type_text`](docs/tools.md#ios_type_text), [`ios_ui_dump`](docs/tools.md#ios_ui_dump), [`screenshot_set_poll`](docs/tools.md#screenshot_set_poll), [`screenshot_set_start`](docs/tools.md#screenshot_set_start) |
+| `firmware` | [`build`](docs/tools.md#build), [`build_poll`](docs/tools.md#build_poll), [`build_start`](docs/tools.md#build_start), [`clean`](docs/tools.md#clean), [`erase_and_flash`](docs/tools.md#erase_and_flash), [`flash_poll`](docs/tools.md#flash_poll), [`flash_start`](docs/tools.md#flash_start), [`get_board`](docs/tools.md#get_board), [`list_boards`](docs/tools.md#list_boards), [`pio_flash`](docs/tools.md#pio_flash), [`push_fake_nodedb`](docs/tools.md#push_fake_nodedb), [`update_flash`](docs/tools.md#update_flash), [`userprefs_get`](docs/tools.md#userprefs_get), [`userprefs_manifest`](docs/tools.md#userprefs_manifest), [`userprefs_reset`](docs/tools.md#userprefs_reset), [`userprefs_set`](docs/tools.md#userprefs_set), [`userprefs_testing_profile`](docs/tools.md#userprefs_testing_profile) |
+| `hardware` | [`capture_screen`](docs/tools.md#capture_screen), [`esptool_chip_info`](docs/tools.md#esptool_chip_info), [`esptool_erase_flash`](docs/tools.md#esptool_erase_flash), [`install`](docs/tools.md#install), [`nrf52_backup_firmware`](docs/tools.md#nrf52_backup_firmware), [`nrf52_bootloader_info`](docs/tools.md#nrf52_bootloader_info), [`nrf52_enter_uf2`](docs/tools.md#nrf52_enter_uf2), [`nrf52_factory_erase`](docs/tools.md#nrf52_factory_erase), [`nrf52_flash_uf2`](docs/tools.md#nrf52_flash_uf2), [`nrfutil_dfu`](docs/tools.md#nrfutil_dfu), [`picotool_info`](docs/tools.md#picotool_info), [`picotool_load`](docs/tools.md#picotool_load), [`serial_close`](docs/tools.md#serial_close), [`serial_list`](docs/tools.md#serial_list), [`serial_open`](docs/tools.md#serial_open), [`serial_read`](docs/tools.md#serial_read), [`touch_1200bps`](docs/tools.md#touch_1200bps), [`uhubctl_cycle`](docs/tools.md#uhubctl_cycle), [`uhubctl_list`](docs/tools.md#uhubctl_list), [`uhubctl_power`](docs/tools.md#uhubctl_power), [`vendor`](docs/tools.md#vendor) |
+| `replay` | [`cot_relay_start`](docs/tools.md#cot_relay_start), [`cot_relay_status`](docs/tools.md#cot_relay_status), [`cot_relay_stop`](docs/tools.md#cot_relay_stop), [`inject`](docs/tools.md#inject), [`replay_fuzz_presets`](docs/tools.md#replay_fuzz_presets), [`replay_start`](docs/tools.md#replay_start), [`replay_status`](docs/tools.md#replay_status), [`replay_stop`](docs/tools.md#replay_stop) |
+| `rf` | [`ble_sniff_poll`](docs/tools.md#ble_sniff_poll), [`ble_sniff_start`](docs/tools.md#ble_sniff_start), [`ble_sniff_status`](docs/tools.md#ble_sniff_status), [`ble_sniff_stop`](docs/tools.md#ble_sniff_stop), [`pa_measure`](docs/tools.md#pa_measure), [`pa_meter_status`](docs/tools.md#pa_meter_status), [`pa_sweep`](docs/tools.md#pa_sweep), [`rf_confirm_tx`](docs/tools.md#rf_confirm_tx), [`rf_scan`](docs/tools.md#rf_scan), [`vanity_apply`](docs/tools.md#vanity_apply), [`vanity_grind_poll`](docs/tools.md#vanity_grind_poll), [`vanity_grind_start`](docs/tools.md#vanity_grind_start), [`vanity_grind_stop`](docs/tools.md#vanity_grind_stop), [`vanity_preview`](docs/tools.md#vanity_preview) |
+| `sdk` | [`sdk_device_info`](docs/tools.md#sdk_device_info), [`sdk_list_nodes`](docs/tools.md#sdk_list_nodes), [`sdk_send_text`](docs/tools.md#sdk_send_text), [`sdk_status`](docs/tools.md#sdk_status) |
+| `legacy` | [`device_info`](docs/tools.md#device_info), [`esptool_raw`](docs/tools.md#esptool_raw), [`factory_reset`](docs/tools.md#factory_reset), [`get_channel_url`](docs/tools.md#get_channel_url), [`get_config`](docs/tools.md#get_config), [`list_nodes`](docs/tools.md#list_nodes), [`nrfutil_raw`](docs/tools.md#nrfutil_raw), [`picotool_raw`](docs/tools.md#picotool_raw), [`reboot`](docs/tools.md#reboot), [`replay_inject`](docs/tools.md#replay_inject), [`replay_inject_beacon`](docs/tools.md#replay_inject_beacon), [`replay_inject_client_notification`](docs/tools.md#replay_inject_client_notification), [`replay_inject_fileinfo`](docs/tools.md#replay_inject_fileinfo), [`replay_inject_traceroute`](docs/tools.md#replay_inject_traceroute), [`replay_inject_waypoint`](docs/tools.md#replay_inject_waypoint), [`send_text`](docs/tools.md#send_text), [`set_config`](docs/tools.md#set_config), [`set_debug_log_api`](docs/tools.md#set_debug_log_api), [`set_owner`](docs/tools.md#set_owner), [`shutdown`](docs/tools.md#shutdown) |
+<!-- END GENERATED TOOLSETS -->
 ## Destructive tools ask first
 
 Tools that reboot, erase, reflash or rewrite a board take `confirm`. Without it, a client that
@@ -228,7 +246,7 @@ dropping DTR as the nRF52 core needs, and fails unless adafruit-nrfutil printed
 `Device programmed.`. A board left sitting in serial DFU takes the package with no touch:
 
 ```
-nrfutil_raw(args=["dfu", "serial", "--package", "fw.zip", "--port", "/dev/ttyACM0",
+vendor(tool="nrfutil", args=["dfu", "serial", "--package", "fw.zip", "--port", "/dev/ttyACM0",
                   "-b", "115200", "--singlebank"], confirm=True)
 ```
 
@@ -245,8 +263,8 @@ shares one owner of the serial ports, the recorder and the jobs. See [docs/serve
 
 `MESHTASTIC_MCP_TOOLSETS=core,firmware` exposes only the named groups, and
 `MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. The groups are `core` (the
-portable device set), `firmware`, `hardware`, `android`, `apple`, `discord`, `replay`, `rf`,
-`local-model` and `sdk`. A capability decides whether a tool registers and a toolset decides
+portable device set), `firmware`, `hardware`, `android`, `apple`, `replay`, `rf`
+and `sdk`. A capability decides whether a tool registers and a toolset decides
 whether a session lists it, so the vendor flash tools and the `nrf52_*` tools register with the
 core capability but list under `hardware`. See [docs/toolsets.md](docs/toolsets.md).
 
@@ -284,9 +302,7 @@ replay_start(
 replay_start(source="defcon", sim_profile={"bots": {"count": 17}})  # BBS bots + tapback storms
 replay_start(source="meshcon", fuzz="adversary")  # lace it with bad actors
 replay_start(source="capture.db", announce_interval=30)  # in-app "Replay Clock" progress
-replay_inject(
-    sid, "waypoint", {"lat": 37, "lon": -122, "geofence_radius": 500, "notify_on_enter": True}
-)
+inject(sid, "waypoint", lat=37, lon=-122, geofence_radius=500, notify_on_enter=True)
 replay_status()
 replay_stop()
 ```
@@ -325,7 +341,7 @@ replay_stop()
   attendees, tapback (emoji-reaction) storms incl. one legendary 100+-reaction broadcast, per-bot
   beacons, and attendee→bot traceroute pairs. Layered on after the RF-observer stage so the
   app-facing exchanges arrive intact.
-- **Live injection** (`replay_inject`): push exact packets into a running session to drive app
+- **Live injection** (`inject`): push exact packets into a running session to drive app
   features on demand — a waypoint with a geofence, a node position crossing it, a text, a NodeInfo,
   or `raw`. Builders (`replay/build.py`) set proto fields the bundled lib predates (e.g. geofence)
   via raw-wire append; `fuzz=True` injects a deliberately malformed packet (shares the fuzzer's

@@ -36,6 +36,7 @@ log = logging.getLogger("meshtastic_mcp.connection")
 
 DEFAULT_TCP_PORT = 4403
 TCP_SCHEME = "tcp://"
+BLE_SCHEME = "ble:"
 TCP_HOST_ENV = "MESHTASTIC_MCP_TCP_HOST"
 
 # Upper bound on `connect(linger_s=...)`. The linger holds the exclusive port
@@ -272,6 +273,12 @@ def resolve_port(port: str | None) -> str:
     if port:
         if is_tcp_port(port):
             return normalize_tcp_endpoint(port)
+        if port.startswith(BLE_SCHEME):
+            target = port[len(BLE_SCHEME) :]
+            address = (
+                device_names.ble_target(target) if device_names.looks_like_name(target) else None
+            )
+            return BLE_SCHEME + (address or target)
         if device_names.looks_like_name(port):
             attached = [d["port"] for d in devices.list_devices()]
             try:
@@ -295,6 +302,78 @@ def resolve_port(port: str | None) -> str:
             f"Multiple Meshtastic devices detected ({ports}). Specify `port` explicitly."
         )
     return candidates[0]["port"]
+
+
+# Radios this process holds over BLE, by registry key. A serial open turns a radio's BLE off,
+# so a serial open of one of these is refused, and a BLE connect to a radio held over serial.
+_ble_held: dict[str, str] = {}
+_serial_held: dict[str, str] = {}
+
+
+def _device_key_or_none(port: str) -> str | None:
+    from . import leases
+
+    try:
+        return leases.device_key(port)
+    except Exception:
+        return None
+
+
+def _held_over_ble(port: str) -> str | None:
+    key = _device_key_or_none(port)
+    return _ble_held.get(key) if key is not None else None
+
+
+@contextmanager
+def _connect_ble(target: str, timeout_s: float, linger_s: float) -> Iterator:
+    from meshtastic.ble_interface import BLEInterface  # type: ignore[import-untyped]
+
+    ident = target[len(BLE_SCHEME) :]
+    key = device_names.key_for_ble(ident)
+    if key is not None and key in _serial_held:
+        raise ConnectionError(
+            f"{target} is open over serial ({_serial_held[key]}) in this server, and a serial "
+            "connection turns the radio's BLE off. Use the serial port, or wait for it to close."
+        )
+    lock = registry.port_lock(target)
+    if not lock.acquire(blocking=False):
+        raise ConnectionError(
+            f"{target} is busy: another device operation is in flight. Retry shortly."
+        )
+    iface = None
+    ok = False
+    try:
+        # A BLE connect scans first (about 10 s) before the config handshake.
+        iface = _open_bounded(
+            lambda: _resending(BLEInterface)(address=ident, noProto=False, timeout=int(timeout_s)),
+            target,
+            timeout_s + 20.0,
+        )
+        # meshtastic-python keeps the address the scan matched on its bleak client.
+        bleak_client = getattr(getattr(iface, "client", None), "bleak_client", None)
+        address = getattr(bleak_client, "address", None) or ident
+        num = getattr(getattr(iface, "myInfo", None), "my_node_num", None)
+        if num is not None:
+            try:
+                rec = device_names.record_ble(num, address, ident if ident != address else None)
+                key = rec["key"] if rec else key
+            except Exception:
+                log.debug("could not record the BLE identity of %s", target, exc_info=True)
+        if key is not None:
+            _ble_held[key] = target
+        yield iface
+        ok = True
+    finally:
+        if key is not None:
+            _ble_held.pop(key, None)
+        if ok and linger_s > 0:
+            time.sleep(linger_s)
+        if iface is not None:
+            _close_bounded(iface)
+        try:
+            lock.release()
+        except RuntimeError:
+            pass
 
 
 @contextmanager
@@ -327,6 +406,11 @@ def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0
     resolved = resolve_port(port)
     timeout = int(timeout_s)
     linger_s = max(0.0, min(linger_s, _MAX_LINGER_S))
+
+    if resolved.startswith(BLE_SCHEME):
+        with _connect_ble(resolved, timeout_s, linger_s) as iface:
+            yield iface
+        return
 
     if is_tcp_port(resolved):
         from meshtastic.tcp_interface import (
@@ -371,6 +455,13 @@ def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0
         SerialInterface,  # type: ignore[import-untyped]
     )
 
+    over_ble = _held_over_ble(resolved)
+    if over_ble is not None:
+        raise ConnectionError(
+            f"{resolved} is held over BLE ({over_ble}) in this server, and a serial open would "
+            "turn its BLE off. Wait for that connection to close."
+        )
+
     active = registry.active_session_for_port(resolved)
     if active is not None:
         raise ConnectionError(
@@ -397,6 +488,9 @@ def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0
             timeout_s + _OPEN_GRACE_S,
         )
         _remember(resolved, iface)
+        serial_key = _device_key_or_none(resolved)
+        if serial_key is not None:
+            _serial_held[serial_key] = resolved
         yield iface
         ok = True
     finally:
@@ -406,6 +500,7 @@ def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0
             time.sleep(linger_s)
         if iface is not None:
             _close_bounded(iface)
+        _serial_held.pop(_device_key_or_none(resolved) or "", None)
         try:
             lock.release()
         except RuntimeError:

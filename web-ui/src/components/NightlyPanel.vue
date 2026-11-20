@@ -78,7 +78,6 @@ const draft = reactive({
   prebuild: true,
   force_bake: true,
   soak_hours: 2,
-  llm_autostart: false,
   recovery_allow_reflash: true,
 });
 const reportDraft = reactive({ enabled: true, repo: "", auto_create_repo: false });
@@ -96,7 +95,6 @@ watch(
       prebuild: s.config.prebuild,
       force_bake: s.config.force_bake,
       soak_hours: s.config.soak_hours,
-      llm_autostart: s.config.llm_autostart,
       recovery_allow_reflash: s.config.recovery_allow_reflash,
     });
     seeded = true;
@@ -257,10 +255,6 @@ async function testDelivery() {
           self-update mcp
         </label>
         <label class="flex items-center gap-2 text-slate-400">
-          <input type="checkbox" v-model="draft.llm_autostart" class="accent-indigo-500" />
-          auto-start local LLM
-        </label>
-        <label class="flex items-center gap-2 text-slate-400">
           <input type="checkbox" v-model="draft.recovery_allow_reflash" class="accent-indigo-500" />
           recovery may reflash
         </label>
@@ -286,7 +280,7 @@ async function testDelivery() {
         Each night: pull firmware <code>develop</code> into the nightly checkout, self-update
         meshtastic-mcp (restart + resume), bake every connected board onto the private
         <code>McpTest</code> channel, run the full suite, soak the mesh while collecting logs +
-        camera snapshots, analyze (local LLM when reachable), then post the report.
+        camera snapshots, analyze, then post the report.
       </p>
     </div>
 
