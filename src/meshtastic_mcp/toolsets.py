@@ -47,6 +47,9 @@ _GROUPS: dict[str, frozenset[str]] = {
             "userprefs_testing_profile",
         }
     ),
+    # One entry point over the android, apple and desktop app drivers. A group of its own, so a
+    # session can take it without the emulator and simulator tools, or drop it with `-app`.
+    "app": frozenset({"app", "app_view"}),
     "hardware": frozenset(
         {
             "capture_screen",

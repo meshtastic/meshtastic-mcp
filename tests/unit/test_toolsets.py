@@ -138,6 +138,8 @@ def test_classification_of_known_tools() -> None:
     assert toolsets.toolset_of("nrf52_flash_uf2") == "hardware"
     assert toolsets.toolset_of("android_tap") == "android"
     assert toolsets.toolset_of("atak_fleet_up") == "android"
+    assert toolsets.toolset_of("app") == "app"
+    assert toolsets.toolset_of("app_view") == "app"
     assert toolsets.toolset_of("discord_search") == "discord"
     assert toolsets.toolset_of("cot_relay_start") == "replay"
     assert toolsets.toolset_of("vanity_preview") == "rf"

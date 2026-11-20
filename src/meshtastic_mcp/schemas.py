@@ -439,3 +439,14 @@ class BleSniffStatus(TypedDict):
     capture_dir: str
     transmit_supported: Annotated[bool, Field(description="always false")]
     active_captures: list[BleActiveCapture]
+
+
+# ---------- App driving -----------------------------------------------------
+
+
+class AppResult(TypedDict):
+    """`app` and `app_view` result."""
+
+    platform: str
+    action: str
+    result: Annotated[Any, Field(description="what the backing tool returns; its shape varies")]

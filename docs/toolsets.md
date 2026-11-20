@@ -15,6 +15,7 @@ Every tool a client loads costs context. Two environment variables shrink what t
 | `hardware` | esptool, nrfutil, picotool, uhubctl, `touch_1200bps`, the `nrf52_*` UF2 bootloader tools, the `serial_*` monitor sessions (they run `pio device monitor` in the firmware tree) and `capture_screen` (a webcam and the `[ui]` extra). |
 | `android` | Android emulator and app driving (`android_*`), the ATAK fleet (`atak_*`). |
 | `apple` | iOS Simulator driving (`ios_*`) and `screenshot_set_*`. |
+| `app` | `app_view` and `app`: one entry point over the Android, iOS and desktop app drivers. Always registered; desktop actions need `MESHTASTIC_MCP_DESKTOP_URL`. |
 | `discord` | `discord_*`. |
 | `replay` | The simulated device (`replay_*`) and the CoT relay (`cot_relay_*`). |
 | `rf` | The SDR oracle (`rf_*`), the power meter (`pa_*`), the BLE sniffer (`ble_sniff_*`) and vanity keys (`vanity_*`). |
