@@ -61,6 +61,19 @@ class Backend(Protocol):
         """
         ...
 
+    def send(
+        self,
+        target: str | None,
+        to: str | int | None,
+        payload: dict[str, Any],
+        channel: int,
+        want_ack: bool,
+        hop_limit: int | None,
+        wait_s: float,
+    ) -> dict[str, Any]:
+        """Send one of `text`, `position`, `waypoint` or `request` (`payload` has one key)."""
+        ...
+
 
 def for_target(target: str | None) -> Backend:
     """The backend that serves `target`."""

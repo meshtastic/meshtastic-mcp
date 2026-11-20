@@ -45,7 +45,7 @@ _CORE = frozenset(
         "recorder_resume",
         "recorder_status",
         "send_input_event",
-        "send_text",
+        "send",
         "set_channel_url",
         "shutdown",
         "telemetry_timeline",

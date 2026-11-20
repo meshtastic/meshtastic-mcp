@@ -84,6 +84,7 @@ _GROUPS: dict[str, frozenset[str]] = {
             "set_config",
             "set_debug_log_api",
             "set_owner",
+            "send_text",
         }
     ),
     "local-model": frozenset(

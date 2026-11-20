@@ -53,6 +53,7 @@ from ..schemas import (
     QueryResult,
     RebootResult,
     SendInputEventResult,
+    SendResult,
     SendTextResult,
     SetChannelUrlResult,
     SetConfigResult,
@@ -565,6 +566,76 @@ def _confirm_tx(
             )
         return None, None, reason
     return False, None, "firmware logs were captured but showed no 'Started Tx' for this packet"
+
+
+@app.tool()
+def send(
+    node: str | None = None,
+    to: str | int | None = None,
+    text: str | None = None,
+    position: dict[str, float] | None = None,
+    waypoint: dict[str, Any] | None = None,
+    request: Literal["traceroute", "telemetry"] | None = None,
+    channel: int = 0,
+    want_ack: bool = False,
+    hop_limit: int | None = None,
+    wait_s: float = 30.0,
+    wait_for_tx: bool = False,
+) -> SendResult:
+    """Send a text, position or waypoint over the mesh, or ask a node for a traceroute or telemetry.
+
+    Pass exactly one of `text`, `position`, `waypoint` or `request`. A request waits up to
+    `wait_s` and returns the node's answer as `reply` (null if none came). A direct text with
+    `want_ack=True` waits for the routing ACK: `delivery` is `delivered` (the destination
+    acknowledged), `relayed` (only our radio heard a neighbor rebroadcast it), `nak:<reason>`
+    or `no_ack`. A broadcast is never acknowledged; `wait_for_tx=True` looks for the
+    firmware's `Started Tx` log line instead, which needs `security.debug_log_api_enabled`.
+    A radio cannot see its own sends in `packets_window`; check a second radio with
+    `wait_for`.
+
+    Returns `{target, packet_id, destination, kind, delivery?, ack_from?, reply?, waited_s?,
+    tx_confirmed?, tx_unconfirmed_reason?}`.
+
+    Args:
+        node: The radio to send from: a device name from `devices`, a serial port,
+            `tcp://host[:port]`, or `ble:<name>` (SDK backend, text only); omit for the one
+            attached radio.
+        to: The destination node id (`!3a14aa13`) or number; omit to broadcast.
+        text: A text message.
+        position: `{latitude, longitude, altitude?}` to send as a position.
+        waypoint: `{name, latitude, longitude, description?, icon?, expire?}`.
+        request: `traceroute` or `telemetry` (device metrics), sent to `to`.
+        channel: The channel index to send on.
+        want_ack: Ask the destination to acknowledge a direct text.
+        hop_limit: Hops the packet may take; omit for the radio's setting.
+        wait_s: Seconds to wait for an ACK or a reply.
+        wait_for_tx: For a broadcast text, also wait for evidence that it was transmitted.
+    """
+    given = {
+        k: v
+        for k, v in (
+            ("text", text),
+            ("position", position),
+            ("waypoint", waypoint),
+            ("request", request),
+        )
+        if v is not None
+    }
+    if len(given) != 1:
+        raise ToolError("pass exactly one of `text`, `position`, `waypoint` or `request`")
+    try:
+        result = backends.for_target(node).send(
+            node, to, given, channel, want_ack, hop_limit, min(wait_s, 50.0)
+        )
+    except (backends.BackendError, connection.ConnectionError) as exc:
+        raise ToolError(str(exc)) from exc
+    if wait_for_tx and text is not None:
+        confirmed, latency_s, reason = _confirm_tx(result.get("packet_id"), node, 30.0)
+        result["tx_confirmed"] = confirmed
+        result["tx_latency_s"] = latency_s
+        if reason is not None:
+            result["tx_unconfirmed_reason"] = reason
+    return cast(SendResult, result)
 
 
 @app.tool()

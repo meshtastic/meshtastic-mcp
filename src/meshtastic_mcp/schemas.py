@@ -78,6 +78,20 @@ class ConfigureResult(TypedDict):
     errors: NotRequired[dict[str, str]]
 
 
+class SendResult(TypedDict):
+    target: Any
+    destination: Any
+    kind: str
+    packet_id: NotRequired[Any]
+    delivery: NotRequired[str | None]
+    ack_from: NotRequired[Any]
+    reply: NotRequired[Any]
+    waited_s: NotRequired[float]
+    tx_confirmed: NotRequired[bool | None]
+    tx_latency_s: NotRequired[float | None]
+    tx_unconfirmed_reason: NotRequired[str]
+
+
 class NodeUser(TypedDict, total=False):
     long_name: str | None
     short_name: str | None
