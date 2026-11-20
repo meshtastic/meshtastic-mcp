@@ -121,6 +121,26 @@ def test_packet_id_check_takes_is_before_the_number() -> None:
     assert not runner.check_answer(task, "I couldn't find it, so I have no packet id.")
 
 
+def test_reject_reads_only_the_opening_paragraph() -> None:
+    task = next(t for t in runner.load_tasks() if t.id == "send-text-seen-on-peer")
+    ok = (
+        "The RAK4631 received it. The packet id is **1334983123**.\n\n"
+        "The send tool couldn't confirm the transmission because debug logging was off."
+    )
+    assert runner.check_answer(task, ok)
+    assert not runner.check_answer(task, "I couldn't find it on the RAK.\n\nSent id 1334983123.")
+
+
+def test_ble_answer_may_name_the_serial_port_it_did_not_use() -> None:
+    task = next(t for t in runner.load_tasks() if t.id == "ble-connect-list-nodes")
+    assert runner.check_answer(
+        task,
+        "I connected over Bluetooth LE, not the radio's serial port /dev/ttyUSB0. "
+        "Nodes: !3a14aa13 Meshtastic 18c4",
+    )
+    assert not runner.check_answer(task, "BLE didn't connect, so I listed !3a14aa13 instead.")
+
+
 def test_task_ports_come_from_the_radios_a_task_needs() -> None:
     task = next(t for t in runner.load_tasks() if t.id == "send-text-seen-on-peer")
     values = {"heltec_port": "/dev/a", "rak_port": "/dev/b", "other_port": "/dev/c"}

@@ -164,9 +164,15 @@ def parse_stream(lines: list[str]) -> RunStats:
 
 
 def check_answer(task: Task, result_text: str) -> bool:
-    """Matches ``pattern`` and not ``reject`` (default: the agent saying it failed)."""
+    """Matches ``pattern`` and its opening paragraph does not match ``reject``.
+
+    ``reject`` (default: the agent saying it failed) reads only the opening paragraph, where
+    an agent states its outcome; a side note further down such as "the send tool couldn't
+    confirm the transmission" does not fail a correct answer.
+    """
     reject = task.check.get("reject", DEFAULT_REJECT)
-    if reject and re.search(reject, result_text):
+    headline = result_text.strip().split("\n\n", 1)[0]
+    if reject and re.search(reject, headline):
         return False
     return re.search(task.check["pattern"], result_text) is not None
 
