@@ -53,6 +53,7 @@ _CORE = frozenset(
         "shutdown",
         "telemetry_timeline",
         "triage_bundle",
+        "wait_for",
     }
 )
 

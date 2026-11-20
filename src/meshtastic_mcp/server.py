@@ -162,6 +162,7 @@ from .tools.core import set_owner as set_owner
 from .tools.core import shutdown as shutdown
 from .tools.core import telemetry_timeline as telemetry_timeline
 from .tools.core import triage_bundle as triage_bundle
+from .tools.core import wait_for as wait_for
 from .tools.discord import _DISCORD_CLIENT as _DISCORD_CLIENT
 from .tools.discord import _TRUST_NOTE as _TRUST_NOTE
 from .tools.discord import _discord as _discord
@@ -479,6 +480,7 @@ _READ_ONLY: set[str] = {
     "packets_window",
     "events_window",
     "query",
+    "wait_for",  # holds a connection open while it watches; changes nothing
     "recorder_status",
     "replay_status",  # reads replay-session run-state; never mutates
     "cot_relay_status",  # reads relay run-state (peers/counts); never mutates
@@ -705,6 +707,7 @@ _OPEN_WORLD = {
     "logs_window",
     "packets_window",
     "query",
+    "wait_for",
     # UI/log content sourced from the running app, which can echo remote
     # mesh-node data (node names, text messages) — same lethal-trifecta
     # concern as logs_window/packets_window.
