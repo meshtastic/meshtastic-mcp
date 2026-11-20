@@ -280,7 +280,8 @@ def test_find_uf2_drives_lowercase_names_and_dedup(tmp_path):
     mounts = f"/dev/sdb {d} vfat rw 0 0\n"
     res = nb.find_uf2_drives(roots=[tmp_path / "vol"], mounts=mounts, platform="linux")
     assert res["count"] == 1
-    assert res["drives"][0]["current_uf2"].endswith("current.uf2")
+    # A case-insensitive filesystem (macOS) resolves the upper-case name to this file too.
+    assert res["drives"][0]["current_uf2"].lower().endswith("current.uf2")
 
 
 def test_default_roots_per_platform(monkeypatch):
