@@ -25,7 +25,7 @@
     "needs": ["heltec", "rak"],
     "risk": "mutating",
     "prompt": "Send the text 'eval-{nonce}' as a broadcast from the {heltec} radio, then find that text in the packets the {rak} radio received and tell me the packet id.",
-    "check": {"kind": "answer_regex", "pattern": "(?i)(packet )?id\\W+(0x)?[0-9a-f]{4,}"}
+    "check": {"kind": "answer_regex", "pattern": "(?i)(packet )?id\\W+((is|was)\\W+)?(0x)?[0-9a-f]{4,}"}
   },
   {
     "id": "ble-connect-list-nodes",

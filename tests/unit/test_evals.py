@@ -114,6 +114,13 @@ def test_ble_task_needs_the_transport_named_and_rejects_a_serial_fallback() -> N
     assert not runner.check_answer(task, "BLE failed, so I read !3a14aa13 over serial instead")
 
 
+def test_packet_id_check_takes_is_before_the_number() -> None:
+    task = next(t for t in runner.load_tasks() if t.id == "send-text-seen-on-peer")
+    assert runner.check_answer(task, "The packet id is **526303450** (hex `0x1f5edcda`).")
+    assert runner.check_answer(task, "Received with packet id 1110588778.")
+    assert not runner.check_answer(task, "I couldn't find it, so I have no packet id.")
+
+
 def test_task_ports_come_from_the_radios_a_task_needs() -> None:
     task = next(t for t in runner.load_tasks() if t.id == "send-text-seen-on-peer")
     values = {"heltec_port": "/dev/a", "rak_port": "/dev/b", "other_port": "/dev/c"}
