@@ -87,9 +87,9 @@ def test_usb_key_is_the_serial_and_adds_the_hub_path_only_when_the_serial_is_gen
     cp1 = _port("/dev/ttyUSB0", "0001", "1-2.3.1")
     cp2 = _port("/dev/ttyUSB1", "0001", "1-2.4")
     ports = [rak, cp1, cp2]
-    assert leases._usb_key("/dev/ttyACM2", ports) == "usb:239a:ea60:7885014CB2C5B186"
-    assert leases._usb_key("/dev/ttyUSB0", ports) == "usb:10c4:ea60:0001@1-2.3.1"
-    assert leases._usb_key("/dev/ttyUSB1", ports) == "usb:10c4:ea60:0001@1-2.4"
+    assert leases._usb_key("/dev/ttyACM2", ports) == "usb:239a:7885014CB2C5B186"
+    assert leases._usb_key("/dev/ttyUSB0", ports) == "usb:10c4:0001@1-2.3.1"
+    assert leases._usb_key("/dev/ttyUSB1", ports) == "usb:10c4:0001@1-2.4"
     assert leases._usb_key("/dev/ttyUSB9", ports) is None
 
 
@@ -226,3 +226,32 @@ def test_cli_lists_and_breaks_leases(store: Path, capsys) -> None:
         cli.main(["leases", "--break", PORT])
     assert broke.value.code == 0
     assert leases.active() == []
+
+
+RAK_BY_ID = "/dev/serial/by-id/usb-RAKwireless_WisCore_RAK4631_Board_7885014CB2C5B186-if00"
+
+
+def _rak(device: str, pid: int) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        device=device, vid=0x239A, pid=pid, serial_number="7885014CB2C5B186", location="1-2.3.3:1.0"
+    )
+
+
+def test_a_lease_survives_the_board_leaving_for_uf2_or_dfu(monkeypatch) -> None:
+    from serial.tools import list_ports
+
+    monkeypatch.setattr(list_ports, "comports", lambda: [_rak(RAK_BY_ID, 0x8029)])
+    held = leases.claim(RAK_BY_ID, holder="flasher")
+    # In UF2 mode the app's port is gone entirely.
+    monkeypatch.setattr(list_ports, "comports", lambda: [])
+    leases.check(RAK_BY_ID, held["lease"])
+    with pytest.raises(LeaseError, match="flasher"):
+        leases.check(RAK_BY_ID, None)
+    # In the serial bootloader it is back under another path and PID.
+    boot = "/dev/serial/by-id/usb-RAKWireless_WisBlock_RAK4631_7885014CB2C5B186-if00"
+    monkeypatch.setattr(list_ports, "comports", lambda: [_rak(boot, 0x0029)])
+    leases.check(boot, held["lease"])
+    with pytest.raises(LeaseError, match="flasher"):
+        leases.check(boot, None)
