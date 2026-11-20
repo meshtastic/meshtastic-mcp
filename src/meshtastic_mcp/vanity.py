@@ -557,4 +557,6 @@ def data_dir() -> Path:
     return config.mcp_data_dir() / "grinds"
 
 
-jobs.register_poller("grinds", lambda job_id, tail: grind_poll(job_id, tail_lines=tail))
+jobs.register_poller(
+    "grinds", lambda job_id, tail: grind_poll(job_id, tail_lines=tail), private=True
+)

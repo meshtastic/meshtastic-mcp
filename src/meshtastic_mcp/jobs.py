@@ -395,11 +395,16 @@ async def run_sync(
 
 Poller = Callable[[str, int], dict[str, Any]]
 _pollers: dict[str, Poller] = {}
+# Kinds whose results are secret (a grind's hits are private keys). `serve` shares one
+# registry among clients, so `listing` leaves them out: only the caller holding the id reads one.
+_private_kinds: set[str] = set()
 
 
-def register_poller(kind: str, fn: Poller) -> None:
+def register_poller(kind: str, fn: Poller, *, private: bool = False) -> None:
     """Make `view` return `fn(job_id, tail_lines)` for jobs of `kind`, with the domain's fields."""
     _pollers[kind] = fn
+    if private:
+        _private_kinds.add(kind)
 
 
 def view(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
@@ -417,9 +422,10 @@ def settled(job_id: str) -> bool:
 
 
 def listing() -> list[dict[str, Any]]:
-    """Every job this server knows, newest first, without logs."""
+    """Every job this server knows except private kinds, newest first, without logs."""
     now = time.time()
     with LOCK:
+        visible = [s for s in _active.values() if s["kind"] not in _private_kinds]
         rows = [
             {
                 "job_id": s["job_id"],
@@ -428,9 +434,9 @@ def listing() -> list[dict[str, Any]]:
                 "status": s["status"],
                 "elapsed_s": round((s["finished_at"] or now) - s["started_at"], 1),
             }
-            for s in _active.values()
+            for s in visible
         ]
-        order = {s["job_id"]: s["started_at"] for s in _active.values()}
+        order = {s["job_id"]: s["started_at"] for s in visible}
     return sorted(rows, key=lambda r: order[r["job_id"]], reverse=True)
 
 

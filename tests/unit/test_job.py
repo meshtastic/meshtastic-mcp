@@ -79,6 +79,15 @@ def test_unknown_id_and_bad_wait_are_tool_errors(core) -> None:
         asyncio.run(core.job(started["job_id"], wait_s=60))
 
 
+def test_the_listing_never_hands_out_a_grind_id(core) -> None:
+    from meshtastic_mcp import vanity  # noqa: F401  (registers grinds as private)
+
+    grind = jobs.start("grinds", "pattern dc80", _sleeper(0))
+    listed = {j["job_id"] for j in asyncio.run(core.job())["jobs"]}
+    assert grind["job_id"] not in listed
+    assert asyncio.run(core.job(grind["job_id"], wait_s=5))["job_id"] == grind["job_id"]
+
+
 def test_no_id_lists_jobs_newest_first(core) -> None:
     first = jobs.start("widgets", "first", _sleeper(0))
     time.sleep(0.01)
