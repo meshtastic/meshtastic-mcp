@@ -61,6 +61,18 @@ class Backend(Protocol):
         """
         ...
 
+    def admin(
+        self,
+        target: str | None,
+        action: str,
+        node_id: str | int | None,
+        seconds: int,
+        wait_back: bool,
+        timeout_s: float,
+    ) -> dict[str, Any]:
+        """Run a radio-level `action`; `wait_back` waits for a restarted radio to answer."""
+        ...
+
 
 def for_target(target: str | None) -> Backend:
     """The backend that serves `target`."""

@@ -15,8 +15,8 @@ from typing import Any, Literal, cast
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
+from .. import admin as admin_mod
 from .. import (
-    admin,
     backends,
     connection,
     device_names,
@@ -34,6 +34,7 @@ from .. import inject as inject_mod
 from ..backends import python as backends_python
 from ..recorder import get_recorder
 from ..schemas import (
+    AdminResult,
     CaptureDisplayResult,
     ClaimResult,
     ConfigDiffResult,
@@ -328,7 +329,7 @@ def set_owner(
             Meshtastic device.
     """
     return cast(
-        SetOwnerResult, admin.set_owner(long_name=long_name, short_name=short_name, port=port)
+        SetOwnerResult, admin_mod.set_owner(long_name=long_name, short_name=short_name, port=port)
     )
 
 
@@ -348,7 +349,7 @@ def get_config(section: str | None = None, port: str | None = None) -> dict[str,
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
     """
-    return admin.get_config(section=section, port=port)
+    return admin_mod.get_config(section=section, port=port)
 
 
 @app.tool()
@@ -371,7 +372,7 @@ def set_config(path: str, value: Any, port: str | None = None) -> SetConfigResul
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
     """
-    return cast(SetConfigResult, admin.set_config(path=path, value=value, port=port))
+    return cast(SetConfigResult, admin_mod.set_config(path=path, value=value, port=port))
 
 
 @app.tool()
@@ -386,7 +387,7 @@ def get_channel_url(include_all: bool = False, port: str | None = None) -> dict[
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
     """
-    return admin.get_channel_url(include_all=include_all, port=port)
+    return admin_mod.get_channel_url(include_all=include_all, port=port)
 
 
 @app.tool()
@@ -403,7 +404,7 @@ def set_channel_url(url: str, port: str | None = None) -> SetChannelUrlResult:
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
     """
-    return cast(SetChannelUrlResult, admin.set_channel_url(url=url, port=port))
+    return cast(SetChannelUrlResult, admin_mod.set_channel_url(url=url, port=port))
 
 
 @app.tool()
@@ -423,7 +424,7 @@ def set_debug_log_api(enabled: bool, port: str | None = None) -> dict[str, Any]:
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
     """
-    return admin.set_debug_log_api(enabled=enabled, port=port)
+    return admin_mod.set_debug_log_api(enabled=enabled, port=port)
 
 
 # ---------- Config snapshots + diff ---------------------------------------
@@ -605,7 +606,7 @@ def send_text(
             ~4 s politeness delay and the airtime finish before the port resets, which
             would drop a queued broadcast.
     """
-    result = admin.send_text(
+    result = admin_mod.send_text(
         text=text,
         to=to,
         channel_index=channel_index,
@@ -719,6 +720,80 @@ async def inject_frame(
     )
 
 
+_ADMIN_GATED = {
+    "reboot": ("restart the radio on {node}", False),
+    "shutdown": (
+        "power off the radio on {node}; it stays off until a button press or power cycle",
+        False,
+    ),
+    "factory_reset": ("reset every setting on {node} to its default", True),
+    "factory_reset_full": ("wipe {node}: settings, node DB, keys and identity", True),
+    "reset_nodedb": ("clear the node DB on {node}", True),
+}
+
+
+@app.tool()
+async def admin(
+    ctx: Context,
+    action: Literal[
+        "reboot",
+        "shutdown",
+        "factory_reset",
+        "factory_reset_full",
+        "reset_nodedb",
+        "favorite",
+        "unfavorite",
+        "ignore",
+        "unignore",
+        "remove_node",
+    ],
+    node: str | None = None,
+    node_id: str | int | None = None,
+    seconds: int = 3,
+    wait_back: bool = True,
+    confirm: bool = False,
+    timeout_s: float = 45.0,
+) -> AdminResult:
+    """Restart, power off or reset a radio, or edit its node DB.
+
+    `reboot`, `shutdown`, `factory_reset`, `factory_reset_full` and `reset_nodedb` need
+    `confirm=True` or the user's answer; the three resets are irreversible. `favorite`,
+    `unfavorite`, `ignore`, `unignore` and `remove_node` act on `node_id` in the radio's node
+    DB and need no confirmation. After a restart, `wait_back` waits until the radio answers
+    again: `back` says it did, and `restarted` is read from its uptime. `factory_reset` keeps
+    the identity and keys; `factory_reset_full` replaces them.
+
+    Returns `{target, action, ok, node_id?, back?, restarted?, uptime_s?, error?}`.
+
+    Args:
+        action: What to do.
+        node: The radio: a device name from `devices`, a serial port or `tcp://host[:port]`;
+            omit for the one attached radio.
+        node_id: The node in this radio's DB that a node-DB action names (`!c2c91376`).
+        seconds: Delay before a `reboot` or `shutdown`.
+        wait_back: After a restart, wait until the radio answers again.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+        timeout_s: Seconds the whole call may take, the wait included.
+    """
+    gated = _ADMIN_GATED.get(action)
+    if gated is not None:
+        what, irreversible = gated
+        pending = await confirm_mod.gate(
+            ctx, what.format(node=node or "the default radio"), confirm, irreversible=irreversible
+        )
+        if pending is not None:
+            return cast(AdminResult, pending)
+    try:
+        backend = backends.for_target(node)
+        result = await _off_loop(
+            lambda: backend.admin(node, action, node_id, seconds, wait_back, min(timeout_s, 55.0))
+        )
+    except (backends.BackendError, connection.ConnectionError) as exc:
+        raise ToolError(str(exc)) from exc
+    return cast(AdminResult, result)
+
+
 @app.tool()
 async def reboot(
     ctx: Context, port: str | None = None, confirm: bool = False, seconds: int = 10
@@ -743,7 +818,7 @@ async def reboot(
         return cast(RebootResult, pending)
     return cast(
         RebootResult,
-        await _off_loop(lambda: admin.reboot(port=port, confirm=True, seconds=seconds)),
+        await _off_loop(lambda: admin_mod.reboot(port=port, confirm=True, seconds=seconds)),
     )
 
 
@@ -771,7 +846,7 @@ async def shutdown(
         return cast(ShutdownResult, pending)
     return cast(
         ShutdownResult,
-        await _off_loop(lambda: admin.shutdown(port=port, confirm=True, seconds=seconds)),
+        await _off_loop(lambda: admin_mod.shutdown(port=port, confirm=True, seconds=seconds)),
     )
 
 
@@ -805,7 +880,7 @@ async def factory_reset(
         return cast(FactoryResetResult, pending)
     return cast(
         FactoryResetResult,
-        await _off_loop(lambda: admin.factory_reset(port=port, confirm=True, full=full)),
+        await _off_loop(lambda: admin_mod.factory_reset(port=port, confirm=True, full=full)),
     )
 
 
@@ -835,7 +910,7 @@ def send_input_event(
     """
     return cast(
         SendInputEventResult,
-        admin.send_input_event(
+        admin_mod.send_input_event(
             event_code=event_code,
             kb_char=kb_char,
             touch_x=touch_x,
