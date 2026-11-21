@@ -206,3 +206,15 @@ def test_hidden_tool_cannot_be_resolved(server) -> None:
 
     assert asyncio.run(transform.get_tool("factory_reset", call_next)) is None
     assert asyncio.run(transform.get_tool("list_devices", call_next)) is not None
+
+
+@pytest.mark.parametrize("name", ["discord", "local-model", "-discord"])
+def test_a_retired_group_warns_instead_of_stopping_the_server(name, caplog) -> None:
+    with caplog.at_level("WARNING", logger="meshtastic_mcp.toolsets"):
+        groups = toolsets.parse_toolsets(f"core,{name}")
+    assert groups == frozenset({"core"})
+    assert name.lstrip("-") in caplog.text
+
+
+def test_naming_only_a_retired_group_exposes_nothing() -> None:
+    assert toolsets.parse_toolsets("discord") == frozenset()
