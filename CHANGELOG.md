@@ -15,6 +15,8 @@ All notable changes are documented here. Format loosely follows
 - **A stdio client on the bench host bridges to a running `serve`** - so one server owns the
   radios. `MESHTASTIC_MCP_STANDALONE=1` runs a separate server anyway.
 - **`duckdb` is a core dependency** - for the recorder's `query` and `wait_for`.
+- **Every tool call leaves a server-log line** - on stderr, with the tool, its target radio, the
+  duration and, on failure, the reason. Argument values other than the target are never logged.
 
 ### Removed
 - **The local-model tools** - `summarize_window`, `vision_oracle`, `triage_window` and the

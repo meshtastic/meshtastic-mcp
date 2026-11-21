@@ -56,6 +56,7 @@ from . import registry as registry
 from . import rf_oracle as rf_oracle
 from . import serial_session as serial_session
 from . import vanity as vanity
+from .call_log import CallLogMiddleware
 from .recorder import get_recorder
 from .replay import ReplayParams as ReplayParams
 from .schemas import DeviceEntry as DeviceEntry
@@ -263,6 +264,7 @@ log = logging.getLogger(__name__)
 
 
 app.add_transform(toolsets.ToolsetTransform(os.environ, lambda: _READ_ONLY))
+app.add_middleware(CallLogMiddleware())
 
 
 def _start_recorder() -> None:

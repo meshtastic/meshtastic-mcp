@@ -2,6 +2,8 @@
 
 Each entry gives the symptom, the cause and the fix. `meshtastic-mcp doctor` is the first thing to run when a tool fails and the cause is not obvious.
 
+The server logs one line per tool call to stderr: the tool, its target radio, the duration and, on failure, the reason a client saw. Under `serve` on a systemd host, read it with `journalctl --user -u meshtastic-mcp.service`; under a stdio client, it is in the client's MCP server log.
+
 ## A port is busy
 
 Symptom: a tool fails with `Port <port> is busy: another device operation is in flight. Retry shortly.`
