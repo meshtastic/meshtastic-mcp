@@ -84,9 +84,9 @@ def test_sim_status_reaches_replay_status(server, calls) -> None:
 def test_toolset_classification() -> None:
     for name in ("sim", "sim_status"):
         assert toolsets.toolset_of(name) == "replay"
-    for name in ("replay_start", "replay_stop", "replay_status"):
+    for name in ("replay_start", "replay_stop", "replay_status", "replay_inject"):
         assert toolsets.toolset_of(name) == "legacy"
-    assert toolsets.toolset_of("replay_inject") == "replay"
+    assert toolsets.toolset_of("inject") == "replay"
 
 
 def test_annotations(server) -> None:

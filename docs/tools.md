@@ -523,76 +523,6 @@ Returns `{ok, channels_imported}`.
 | `url` | string | required | A Meshtastic channel URL, such as `inspect(what="url")` returns. |
 | `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
 
-### `sim`
-
-Destructive.
-
-Start or stop a simulated Meshtastic TCP device that streams a capture to an app.
-
-`action="start"` serves a simulated radio: an app, an AVD at `10.0.2.2:<port>`, or the
-Python library connects to `host:port` and gets a paced packet stream restamped to now.
-Read it with `sim_status`. `action="stop"` ends one session, or every session without
-`session_id`. Pacing, highest first: `duration`, then `rate`, then `speed`. Give
-concurrent sessions distinct `observer_num`s. `start` takes every parameter but
-`session_id`, `stop` takes only `session_id`, and passing a start parameter to `stop` is
-an error. Every parameter and example: docs/replay.md.
-
-Returns the session status for `start`: `{id, capture, listen, connect, mode,
-packets_total, packets_sent, connected, ...}`; `{stopped}`, the ids it stopped, for `stop`.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `action` | `start` \| `stop` | required | `start` serves a session, `stop` ends one or all. |
-| `session_id` | string | `null` | `stop` only: session to stop; omit to stop all. |
-| `source` | string | `null` | `start` only: `meshcon`/`sim`, `burningman`, `defcon`, `conference-stress` (generated meshes), a `*.db`/`*.db.gz` SQLite capture or a recorder `*.jsonl`. Default `meshcon`. |
-| `kind` | string | `null` | `start` only: `auto` infers it from `source`; or `sim`, `sqlite`, `jsonl`. Default `auto`. |
-| `host` | string | `null` | `start` only: listen address; `0.0.0.0` (the default) serves every interface. |
-| `port` | integer | `null` | `start` only: TCP port the session listens on for the app. Default 4403. |
-| `speed` | number | `null` | `start` only: multiplier on the capture's own cadence. Default 1.0. |
-| `rate` | number | `null` | `start` only: steady packets per second, ignoring capture timing; wins over `speed`. |
-| `duration` | number | `null` | `start` only: play the whole window in N wall-clock seconds; wins over `rate`. |
-| `max_gap` | number | `null` | `start` only: cap on idle seconds between packets. Default 20. |
-| `start` | string | `null` | `start` only: window start, ISO-8601 (UTC when no zone is given). |
-| `end` | string | `null` | `start` only: window end, ISO-8601. |
-| `loop` | boolean | `null` | `start` only: repeat the window when it ends. Default false. |
-| `limit_nodes` | integer | `null` | `start` only: cap on a file source's node DB. Default 200. |
-| `node_delay` | number | `null` | `start` only: seconds between NodeInfos during the node DB download. Default 0.01. |
-| `channels` | list of object | `null` | `start` only: channel list that splits a SQLite capture by OTA hash with real PSKs, each `{"name", "psk", "primary", "ota_hashes", "catch_all"}`. |
-| `announce_interval` | number | `null` | `start` only: seconds between "Replay Clock" progress posts to the busiest channel; 0 (the default) is off. |
-| `stats_interval` | number | `null` | `start` only: seconds between the connected node's LocalStats updates; 0 keeps only the initial snapshot. Default 5. |
-| `dupe_every` | integer | `null` | `start` only: simulate a duplicate radio receive every Nth packet; 0 (the default) is off. |
-| `modem_preset` | string | `null` | `start` only: advertised LoRa preset. Default `LONG_FAST`. |
-| `firmware_edition` | string | `null` | `start` only: the app's event banner, such as `VANILLA` (the default), `DEFCON`, `BURNING_MAN` or `HAMVENTION`. |
-| `firmware_version` | string | `null` | `start` only: reported firmware build; omit for the edition's default. |
-| `observer_lat` | integer | `null` | `start` only: connected node's latitude in 1e-7 degrees; omit for the capture's median position. |
-| `observer_lon` | integer | `null` | `start` only: connected node's longitude in 1e-7 degrees; omit for the capture's median position. |
-| `observer_num` | integer | `null` | `start` only: this session's node number; omit for the process default (`MESHTASTIC_REPLAY_OBSERVER_NUM`). |
-| `sim_nodes` | integer | `null` | `start` only: node count of a generated mesh. Default 800. |
-| `sim_days` | integer | `null` | `start` only: days of traffic a generated mesh spans, ending now unless `start` is set. Default 3. |
-| `sim_seed` | integer | `null` | `start` only: seed for a generated mesh. Default 1337. |
-| `sim_profile` | string \| object | `null` | `start` only: overrides deep-merged over a generated preset, as a dict or JSON object, never a file path. |
-| `fuzz` | string \| object | `null` | `start` only: makes the stream hostile: a preset (`light`, `parser`, `adversary`, `chaos`) or a dict of overrides with an optional `preset` base. |
-| `fuzz_seed` | integer | `null` | `start` only: fuzz seed, so a crash reproduces. Default 0. |
-| `mdns` | boolean | `null` | `start` only: advertise the session over mDNS as `_meshtastic._tcp`; omit for on unless bound to loopback only. |
-| `local_metrics_interval` | number | `null` | `start` only: seconds between the connected node's `DEVICE_METRICS` packets; 0 is off. Default 300. |
-| `clock_anchor` | integer | `null` | `start` only: epoch seconds the window's last packet is stamped as, so sessions sharing it show identical times; omit to stamp each packet now. |
-| `hold` | boolean | `null` | `start` only: play the window once per connection, then stay connected and quiet; ignored with `loop`. Default false. |
-| `beacon_listen` | boolean | `null` | `start` only: advertise the mesh beacon module as listening, so the app keeps `MESH_BEACON_APP` packets. Default false. |
-
-### `sim_status`
-
-Read-only, idempotent.
-
-Status of simulated radio sessions: connection state, packets sent and total, mode.
-
-Returns one session's `{id, capture, listen, connect, mode, target_rate,
-achieved_rate, packets_total, packets_sent, injected, connected, client, ended, error,
-fuzz, mdns, ...}`, `{sessions: [...]}` for all, or `{error}` for an unknown id.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `session_id` | string | `null` | One session's id; omit for every running session. |
-
 ### `telemetry_timeline`
 
 Read-only, idempotent.
@@ -1958,6 +1888,76 @@ Use the returned names as the `fuzz=` argument to `sim(action="start")`, or pass
 dict like `{"preset": "parser", "drop": 0.1}` to override individual rates.
 
 Returns `{presets: {name: {category: rate}}, usage}`.
+
+### `sim`
+
+Destructive.
+
+Start or stop a simulated Meshtastic TCP device that streams a capture to an app.
+
+`action="start"` serves a simulated radio: an app, an AVD at `10.0.2.2:<port>`, or the
+Python library connects to `host:port` and gets a paced packet stream restamped to now.
+Read it with `sim_status`. `action="stop"` ends one session, or every session without
+`session_id`. Pacing, highest first: `duration`, then `rate`, then `speed`. Give
+concurrent sessions distinct `observer_num`s. `start` takes every parameter but
+`session_id`, `stop` takes only `session_id`, and passing a start parameter to `stop` is
+an error. Every parameter and example: docs/replay.md.
+
+Returns the session status for `start`: `{id, capture, listen, connect, mode,
+packets_total, packets_sent, connected, ...}`; `{stopped}`, the ids it stopped, for `stop`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `action` | `start` \| `stop` | required | `start` serves a session, `stop` ends one or all. |
+| `session_id` | string | `null` | `stop` only: session to stop; omit to stop all. |
+| `source` | string | `null` | `start` only: `meshcon`/`sim`, `burningman`, `defcon`, `conference-stress` (generated meshes), a `*.db`/`*.db.gz` SQLite capture or a recorder `*.jsonl`. Default `meshcon`. |
+| `kind` | string | `null` | `start` only: `auto` infers it from `source`; or `sim`, `sqlite`, `jsonl`. Default `auto`. |
+| `host` | string | `null` | `start` only: listen address; `0.0.0.0` (the default) serves every interface. |
+| `port` | integer | `null` | `start` only: TCP port the session listens on for the app. Default 4403. |
+| `speed` | number | `null` | `start` only: multiplier on the capture's own cadence. Default 1.0. |
+| `rate` | number | `null` | `start` only: steady packets per second, ignoring capture timing; wins over `speed`. |
+| `duration` | number | `null` | `start` only: play the whole window in N wall-clock seconds; wins over `rate`. |
+| `max_gap` | number | `null` | `start` only: cap on idle seconds between packets. Default 20. |
+| `start` | string | `null` | `start` only: window start, ISO-8601 (UTC when no zone is given). |
+| `end` | string | `null` | `start` only: window end, ISO-8601. |
+| `loop` | boolean | `null` | `start` only: repeat the window when it ends. Default false. |
+| `limit_nodes` | integer | `null` | `start` only: cap on a file source's node DB. Default 200. |
+| `node_delay` | number | `null` | `start` only: seconds between NodeInfos during the node DB download. Default 0.01. |
+| `channels` | list of object | `null` | `start` only: channel list that splits a SQLite capture by OTA hash with real PSKs, each `{"name", "psk", "primary", "ota_hashes", "catch_all"}`. |
+| `announce_interval` | number | `null` | `start` only: seconds between "Replay Clock" progress posts to the busiest channel; 0 (the default) is off. |
+| `stats_interval` | number | `null` | `start` only: seconds between the connected node's LocalStats updates; 0 keeps only the initial snapshot. Default 5. |
+| `dupe_every` | integer | `null` | `start` only: simulate a duplicate radio receive every Nth packet; 0 (the default) is off. |
+| `modem_preset` | string | `null` | `start` only: advertised LoRa preset. Default `LONG_FAST`. |
+| `firmware_edition` | string | `null` | `start` only: the app's event banner, such as `VANILLA` (the default), `DEFCON`, `BURNING_MAN` or `HAMVENTION`. |
+| `firmware_version` | string | `null` | `start` only: reported firmware build; omit for the edition's default. |
+| `observer_lat` | integer | `null` | `start` only: connected node's latitude in 1e-7 degrees; omit for the capture's median position. |
+| `observer_lon` | integer | `null` | `start` only: connected node's longitude in 1e-7 degrees; omit for the capture's median position. |
+| `observer_num` | integer | `null` | `start` only: this session's node number; omit for the process default (`MESHTASTIC_REPLAY_OBSERVER_NUM`). |
+| `sim_nodes` | integer | `null` | `start` only: node count of a generated mesh. Default 800. |
+| `sim_days` | integer | `null` | `start` only: days of traffic a generated mesh spans, ending now unless `start` is set. Default 3. |
+| `sim_seed` | integer | `null` | `start` only: seed for a generated mesh. Default 1337. |
+| `sim_profile` | string \| object | `null` | `start` only: overrides deep-merged over a generated preset, as a dict or JSON object, never a file path. |
+| `fuzz` | string \| object | `null` | `start` only: makes the stream hostile: a preset (`light`, `parser`, `adversary`, `chaos`) or a dict of overrides with an optional `preset` base. |
+| `fuzz_seed` | integer | `null` | `start` only: fuzz seed, so a crash reproduces. Default 0. |
+| `mdns` | boolean | `null` | `start` only: advertise the session over mDNS as `_meshtastic._tcp`; omit for on unless bound to loopback only. |
+| `local_metrics_interval` | number | `null` | `start` only: seconds between the connected node's `DEVICE_METRICS` packets; 0 is off. Default 300. |
+| `clock_anchor` | integer | `null` | `start` only: epoch seconds the window's last packet is stamped as, so sessions sharing it show identical times; omit to stamp each packet now. |
+| `hold` | boolean | `null` | `start` only: play the window once per connection, then stay connected and quiet; ignored with `loop`. Default false. |
+| `beacon_listen` | boolean | `null` | `start` only: advertise the mesh beacon module as listening, so the app keeps `MESH_BEACON_APP` packets. Default false. |
+
+### `sim_status`
+
+Read-only, idempotent.
+
+Status of simulated radio sessions: connection state, packets sent and total, mode.
+
+Returns one session's `{id, capture, listen, connect, mode, target_rate,
+achieved_rate, packets_total, packets_sent, injected, connected, client, ended, error,
+fuzz, mdns, ...}`, `{sessions: [...]}` for all, or `{error}` for an unknown id.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | `null` | One session's id; omit for every running session. |
 
 ## rf
 
