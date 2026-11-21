@@ -105,8 +105,7 @@ _GROUPS: dict[str, frozenset[str]] = {
         }
     ),
     # `sim` and `sim_status` match no `replay_` prefix.
-    "replay": frozenset({"sim", "sim_status"}),
-    "replay": frozenset({"inject"}),
+    "replay": frozenset({"inject", "sim", "sim_status"}),
 }
 _PREFIXES: dict[str, tuple[str, ...]] = {
     "android": ("android_", "atak_"),
