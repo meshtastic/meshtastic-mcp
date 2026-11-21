@@ -11,6 +11,7 @@ helper is re-exported, so `server.<name>` still reaches it.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math as math
 import os
@@ -796,25 +797,51 @@ _PORT_NOT_A_DEVICE = frozenset(
 )
 
 
+# Tools that can find a board on their own when no port is given, so they must name one while
+# another session holds a lease. Their `args` may carry the port instead.
+_FINDS_ITS_OWN_BOARD = frozenset(
+    {
+        "esptool_raw",
+        "nrf52_factory_erase",
+        "nrf52_flash_uf2",
+        "nrfutil_raw",
+        "picotool_raw",
+        "vendor",
+    }
+)
+_PORT_FLAGS = ("--port", "-p")
+
+
+def _port_in_args(args: Any) -> str | None:
+    if not isinstance(args, list):
+        return None
+    for flag, value in itertools.pairwise(args):
+        if flag in _PORT_FLAGS and isinstance(value, str):
+            return value
+    return None
+
+
 def _takes_device_port(tool: Tool) -> bool:
     props = (tool.parameters or {}).get("properties", {})
     return ("port" in props or "node" in props) and tool.name not in _PORT_NOT_A_DEVICE
 
 
-async def _with_lease(lease: str | None = None, **kwargs: Any) -> Any:
+async def _with_lease_for(tool_name: str, lease: str | None, kwargs: dict[str, Any]) -> Any:
     from fastmcp.tools.tool_transform import forward
 
-    port = kwargs.get("node", kwargs.get("port"))
+    port = kwargs.get("node", kwargs.get("port")) or _port_in_args(kwargs.get("args"))
     try:
         # A BLE radio has no lease key until the registry records its BLE identity.
         resolved = None if (port or "").startswith("ble:") else connection.resolve_port(port)
     except connection.ConnectionError:
         resolved = None  # the tool reports the missing or ambiguous port itself
-    if resolved is not None:
-        try:
+    try:
+        if resolved is not None:
             await anyio.to_thread.run_sync(leases.check, resolved, lease)
-        except leases.LeaseError as exc:
-            raise ToolError(str(exc)) from exc
+        elif not port and tool_name in _FINDS_ITS_OWN_BOARD:
+            await anyio.to_thread.run_sync(leases.check_any, lease)
+    except leases.LeaseError as exc:
+        raise ToolError(str(exc)) from exc
     token = leases.CURRENT.set(lease)
     try:
         return await forward(**kwargs)
@@ -830,6 +857,11 @@ _LEASE_ARG_DOC = (
 def _lease_aware(tool: Tool) -> Tool:
     if not _takes_device_port(tool):
         return tool
+    name = tool.name
+
+    async def _with_lease(lease: str | None = None, **kwargs: Any) -> Any:
+        return await _with_lease_for(name, lease, kwargs)
+
     wrapped = Tool.from_tool(tool, transform_fn=_with_lease)
     props = dict(wrapped.parameters.get("properties", {}))
     if "lease" in props:

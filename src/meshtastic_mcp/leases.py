@@ -270,6 +270,22 @@ def check(port: str, lease: str | None) -> None:
         raise LeaseError(_held_message(record, now))
 
 
+def check_any(lease: str | None) -> None:
+    """Refuse a device call that names no port while someone else leases a device here."""
+    now = time.time()
+    with _store_lock():
+        records = [_read(path) for path in _dir().glob("*.json")]
+    for record in records:
+        if _live(record, now):
+            assert record is not None
+            if record["lease"] != lease:
+                raise LeaseError(
+                    "this call names no port, so it could reach a leased device: "
+                    + _held_message(record, now)
+                    + " Pass `port` to name the board."
+                )
+
+
 def _held_message(record: dict[str, Any], now: float) -> str:
     who = record.get("holder") or "another session"
     left = int(record["expires_at"] - now)
