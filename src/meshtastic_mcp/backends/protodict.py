@@ -48,3 +48,15 @@ def to_dict(msg: Message) -> dict[str, Any]:
         always_print_fields_with_no_presence=True,
     )
     return _redact(data, msg.DESCRIPTOR)
+
+
+def sensitive_paths(descriptor: Descriptor, prefix: str) -> frozenset[str]:
+    """Dot-paths under `prefix` of every field the protos mark sensitive."""
+    paths: set[str] = set()
+    for field in descriptor.fields:
+        path = f"{prefix}.{field.name}"
+        if _sensitive(field):
+            paths.add(path)
+        elif field.message_type is not None and not field.is_repeated:
+            paths |= sensitive_paths(field.message_type, path)
+    return frozenset(paths)

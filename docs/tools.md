@@ -90,6 +90,7 @@ Returns `{from, to, changed: {path: {from, to}}, added, removed, identical}`.
 | `name_a` | string | required | The snapshot to diff from. |
 | `name_b` | string | `null` | The snapshot to diff to; omit to diff `name_a` against the current live device config, captured on the fly. |
 | `port` | string | `null` | Serial port or `tcp://host[:port]` for a live diff; omit to auto-select the one likely Meshtastic device. |
+| `reveal_secrets` | boolean | `false` | Show keys and passwords that changed; by default their values read `<redacted>`, so the diff says only that one changed. |
 
 ### `config_snapshot`
 

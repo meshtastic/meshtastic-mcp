@@ -460,7 +460,10 @@ def config_snapshots_list() -> list[dict[str, Any]]:
 
 @app.tool()
 def config_diff(
-    name_a: str, name_b: str | None = None, port: str | None = None
+    name_a: str,
+    name_b: str | None = None,
+    port: str | None = None,
+    reveal_secrets: bool = False,
 ) -> ConfigDiffResult:
     """Diff two config snapshots, or one snapshot against the live device.
 
@@ -474,8 +477,13 @@ def config_diff(
             device config, captured on the fly.
         port: Serial port or `tcp://host[:port]` for a live diff; omit to auto-select the
             one likely Meshtastic device.
+        reveal_secrets: Show keys and passwords that changed; by default their values read
+            `<redacted>`, so the diff says only that one changed.
     """
-    return cast(ConfigDiffResult, config_snapshot_mod.diff(name_a, name_b, port=port))
+    return cast(
+        ConfigDiffResult,
+        config_snapshot_mod.diff(name_a, name_b, port=port, reveal_secrets=reveal_secrets),
+    )
 
 
 def _confirm_tx(

@@ -91,3 +91,23 @@ def test_list_snapshots_returns_metadata():
     out = config_snapshot.list_snapshots()
     names = {s["name"] for s in out}
     assert "snap1" in names
+
+
+def test_diff_withholds_a_changed_secret_unless_asked():
+    _write_snapshot(
+        "before", {"moduleConfig": {"mqtt": {"password": "old"}}, "localConfig": {"lora": {}}}
+    )
+    _write_snapshot(
+        "after",
+        {
+            "moduleConfig": {"mqtt": {"password": "new"}},
+            "localConfig": {"lora": {}, "security": {"private_key": "c2VjcmV0"}},
+        },
+    )
+    result = config_snapshot.diff("before", "after")
+    assert result["changed"] == {
+        "moduleConfig.mqtt.password": {"from": "<redacted>", "to": "<redacted>"}
+    }
+    assert result["added"] == {"localConfig.security.private_key": "<redacted>"}
+    shown = config_snapshot.diff("before", "after", reveal_secrets=True)
+    assert shown["changed"]["moduleConfig.mqtt.password"] == {"from": "old", "to": "new"}

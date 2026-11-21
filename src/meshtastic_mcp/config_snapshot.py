@@ -147,7 +147,29 @@ def _flatten(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     return flat
 
 
-def diff(name_a: str, name_b: str | None = None, port: str | None = None) -> dict[str, Any]:
+def _secret_paths() -> frozenset[str]:
+    from meshtastic.protobuf import localonly_pb2
+
+    from .backends.protodict import sensitive_paths
+
+    return sensitive_paths(localonly_pb2.LocalConfig.DESCRIPTOR, "localConfig") | sensitive_paths(
+        localonly_pb2.LocalModuleConfig.DESCRIPTOR, "moduleConfig"
+    )
+
+
+def _withhold(path: str, value: Any, secrets: frozenset[str]) -> Any:
+    from .backends.protodict import REDACTED
+
+    # An empty value stays, so "no password set" is still visible.
+    return REDACTED if path in secrets and value not in ("", 0, [], None) else value
+
+
+def diff(
+    name_a: str,
+    name_b: str | None = None,
+    port: str | None = None,
+    reveal_secrets: bool = False,
+) -> dict[str, Any]:
     """Diff two snapshots, or a snapshot against the live device.
 
     If `name_b` is None, snapshot `name_a` is diffed against the current live
@@ -172,6 +194,15 @@ def diff(name_a: str, name_b: str | None = None, port: str | None = None) -> dic
     }
     added = {k: flat_b[k] for k in keys_b - keys_a}
     removed = {k: flat_a[k] for k in keys_a - keys_b}
+    if not reveal_secrets:
+        # A snapshot holds keys and passwords in clear; the diff says that one changed, not to what.
+        secrets = _secret_paths()
+        changed = {
+            k: {"from": _withhold(k, v["from"], secrets), "to": _withhold(k, v["to"], secrets)}
+            for k, v in changed.items()
+        }
+        added = {k: _withhold(k, v, secrets) for k, v in added.items()}
+        removed = {k: _withhold(k, v, secrets) for k, v in removed.items()}
 
     return {
         "from": name_a,
