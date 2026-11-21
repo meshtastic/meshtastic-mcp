@@ -3,7 +3,7 @@
 Change a setting in the app; assert it persisted on the DUT radio (RAM *and* NVS).
 
 **Stimulus:** app config screen toggles a value (region, role, channel name, hop limit…)  
-**Oracle:** MCP `inspect` on the DUT reflects it; survives a `reboot` (NVS proof)
+**Oracle:** MCP `inspect` on the DUT reflects it; survives `admin(action="reboot")` (NVS proof)
 
 ## Steps
 

@@ -27,7 +27,7 @@ host (macOS)
 
 - **Device plane:** `meshtastic_mcp.emulator.native_node` (unchanged — see `topology.md`).
 - **App plane:** `meshtastic_mcp.emulator.apple_sim` — wraps `xcrun simctl` + `idb`:
-  - `list_simulators()` / `ensure_booted("iPhone")` / `shutdown()` — lifecycle (simctl)
+  - `list_simulators()` / `ensure_booted("iPhone")` / `apple_sim.shutdown()` — lifecycle (simctl)
   - `install_app(app_path)` / `launch(bundle_id)` / `is_app_installed()` — deploy (simctl)
   - `ui_dump()` — accessibility tree via `idb ui describe-all` (the `android layout` analog)
   - `tap` / `type_text` — input via `idb ui tap` / `idb ui text`

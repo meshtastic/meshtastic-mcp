@@ -70,14 +70,14 @@ inspect(node=N, what="url")                          # the shareable channel URL
 set_channel_url(url=U, port=P)
 ```
 `configure` snapshots first and reads every change back over a fresh connection, so
-`verified: true` means it stuck; no `reboot` is needed to commit. Fields the firmware changed
+`verified: true` means it stuck; no restart is needed to commit. Fields the firmware changed
 on its own (a region change caps `tx_power`) come back as `side_effects`. Region
 (`lora.region`) and `network.enabled_protocols` are the two that bite; see `meshtastic-e2e`
 `topology.md`.
 
 ## Destructive tools and confirmation
 
-`reboot`, `shutdown`, `factory_reset`, the flash tools, the `nrf52_*` writers, `uhubctl_power`
+`admin` (restarts, power-off and resets), the flash tools, the `nrf52_*` writers, `uhubctl_power`
 (off) / `uhubctl_cycle`, `vanity_apply` and the destructive `esptool`/`nrfutil`/`picotool` calls
 take `confirm`.
 
@@ -86,7 +86,7 @@ take `confirm`.
 - A refusal naming `confirm=True` means this client cannot ask (subagents, `claude -p`). Tell
   the user what will happen and pass `confirm=True` only after they agree. Never retry with it
   on your own.
-- With `MESHTASTIC_MCP_CONFIRM=human` on the server, irreversible tools (`factory_reset`,
+- With `MESHTASTIC_MCP_CONFIRM=human` on the server, irreversible tools (`admin` resets,
   `erase_and_flash`, `nrf52_factory_erase`, `vanity_apply`, destructive vendor calls) ask even
   with `confirm=True`; "cannot ask" then means the user must run it from a client that can.
 - `vendor(tool="esptool", args=["flash_id"])` and other harmless subcommands never ask.
@@ -368,7 +368,7 @@ Two things that bite in practice:
 2. A config write lives in RAM until a reboot commits it; re-read after the reboot.
 3. Destructive tools ask the user when the client can; never pass `confirm=True` for an action
    the user has not agreed to.
-4. `factory_reset(full=true)` wipes BLE bonds + the identity key; `full=false` keeps them.
+4. `admin(action="factory_reset_full")` wipes BLE bonds + the identity key; `action="factory_reset"` keeps them.
 5. Prefer the recorder windows over ad-hoc reads: they're timestamped and align with app snapshots.
 6. A canceled flash keeps writing; follow its `job_id` with `flash_poll` before touching the board.
 7. Never apply a ground key whose `verified` is false, and never apply one without telling the

@@ -40,7 +40,7 @@ connect, send) on `android`, `ios` or `desktop`. Android and iOS actions call th
 `android_*` and `ios_*` tools, which stay available. `desktop` forwards to the debug desktop
 app's own loopback MCP server (start the app with `MESHTASTIC_MCP_PORT=<port>`, point
 `MESHTASTIC_MCP_DESKTOP_URL` at `http://127.0.0.1:<port>/mcp`); it has `connection_state`,
-`nodes`, `connect` and `send_text`, no UI.
+`nodes`, `connect` and a text send, no UI.
 
 The device plane (`mesh_e2e.py`, native nodes, recorder) is platform-neutral and shared; only
 the app plane differs (Android CLI+adb, Apple `xcrun simctl`+`idb`, or the Compose Hot Reload
@@ -215,7 +215,7 @@ persisted on the DUT radio:
 ```bash
 $MCP -c "from meshtastic_mcp import admin,json; print(json.dumps(admin.get_config('lora', port='$DUT')))"
 ```
-Reboot the radio (`reboot` MCP tool) and re-read to prove NVS persistence, not just RAM.
+Reboot the radio (`admin(action="reboot")`) and re-read to prove NVS persistence, not just RAM.
 
 ## Loop 5 — resilience / fault injection
 
