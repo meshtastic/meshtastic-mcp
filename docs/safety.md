@@ -21,7 +21,7 @@ The gate runs before the tool takes a port lock or starts a job. An answer count
 - Asks for: `reboot`, `shutdown`, `inject_frame`, `pa_sweep`, `uhubctl_power` (`off` only), `uhubctl_cycle`, `push_fake_nodedb` (`target="hardware"` only), `pio_flash`, `flash_start`, `update_flash`, `nrf52_enter_uf2`, `nrf52_flash_uf2`.
 - Irreversible, so `human` policy asks even with `confirm=True`: `factory_reset`, `erase_and_flash`, `vanity_apply`, `atak_fleet_down` with `delete_clones=True`, `nrf52_factory_erase`, and the destructive `esptool_*`, `nrfutil_*` and `picotool_*` calls.
 
-The vendor tools look at their subcommand first. `esptool_raw(args=["flash_id"])` never asks; `esptool_raw(args=["erase_flash"])` does. The check reads every non-flag argument, so `["--port", "/dev/x", "erase_flash"]` is caught too. Under `human` policy every destructive vendor call asks.
+The vendor tools look at their subcommand first. `esptool_raw(args=["flash_id"])` never asks; `esptool_raw(args=["erase_flash"])` does. Only a short list of read-only subcommands runs without asking (esptool `chip_id`, `flash_id`, `read_mac` and the like, nrfutil `version` and `device list`, picotool `info`); any subcommand the list does not name asks, and counts as irreversible under `human` policy.
 
 ### Over HTTP
 

@@ -282,3 +282,35 @@ def test_a_lease_survives_the_board_leaving_for_uf2_or_dfu(monkeypatch) -> None:
     leases.check(boot, held["lease"])
     with pytest.raises(LeaseError, match="flasher"):
         leases.check(boot, None)
+
+
+def test_picotool_load_has_no_port_and_is_refused_while_another_lease_is_held(server) -> None:
+    leases.claim(PORT, holder="eval run")
+    refused = _call(server, "picotool_load", {"uf2_path": "/nowhere.uf2", "confirm": True})
+    assert refused.is_error and "names no port" in refused.content[0].text
+
+
+def test_args_naming_two_ports_are_refused(server) -> None:
+    # esptool, like argparse, takes the last `--port`; a mine-then-victim pair would pass a
+    # check of the first.
+    leases.claim(PORT, holder="eval run")
+    for args in (
+        ["-p", "/dev/mine", "--port", PORT, "erase-flash"],
+        ["--port=/dev/mine", "--port", PORT, "erase-flash"],
+    ):
+        refused = _call(server, "vendor", {"tool": "esptool", "args": args, "confirm": True})
+        assert refused.is_error and "more than one port" in refused.content[0].text
+
+
+def test_a_macos_tty_alias_is_the_same_board_as_its_cu_device(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from serial.tools import list_ports
+
+    board = SimpleNamespace(
+        device="/dev/cu.usbmodem1101", serial_number="E1A2B3C4D5E6F708", vid=0x239A, location="0-1"
+    )
+    monkeypatch.setattr(list_ports, "comports", lambda: [board])
+    leases.claim("/dev/cu.usbmodem1101", holder="eval run")
+    with pytest.raises(LeaseError, match="leased to eval run"):
+        leases.check("/dev/tty.usbmodem1101", None)

@@ -86,6 +86,9 @@ def device_key(port: str) -> str:
     if is_tcp_port(port):
         return "tcp:" + normalize_tcp_endpoint(port)
     real = os.path.realpath(port)
+    # macOS lists each serial device twice; /dev/tty.X and /dev/cu.X are one board.
+    if real.startswith("/dev/tty."):
+        real = "/dev/cu." + real[len("/dev/tty.") :]
     try:
         from serial.tools import list_ports
 

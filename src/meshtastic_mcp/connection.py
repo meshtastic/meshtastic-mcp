@@ -385,6 +385,30 @@ def _connect_ble(target: str, timeout_s: float, linger_s: float) -> Iterator:
 
 @contextmanager
 def connect(port: str | None = None, timeout_s: float = 8.0, linger_s: float = 0.0) -> Iterator:
+    """Open a meshtastic interface (serial, TCP or BLE) and always close it.
+
+    meshtastic-python answers some bad input by printing to stdout and calling `sys.exit`;
+    on stdio that print corrupts the MCP stream and the exit ends the server. Every call
+    made inside this block gets the refusal back as a `ToolError` instead.
+    """
+    import io
+    from contextlib import redirect_stdout
+
+    from fastmcp.exceptions import ToolError
+
+    printed = io.StringIO()
+    try:
+        with redirect_stdout(printed), _connect(port, timeout_s, linger_s) as iface:
+            yield iface
+    except SystemExit as exc:
+        said = printed.getvalue().strip() or f"exit {exc.code}"
+        raise ToolError(
+            f"meshtastic-python refused the request: {said}. Check the arguments and retry."
+        ) from None
+
+
+@contextmanager
+def _connect(port: str | None, timeout_s: float, linger_s: float) -> Iterator:
     """Open a meshtastic interface (serial or TCP) and always close it.
 
     For serial: raises `ConnectionError` immediately if another serial
