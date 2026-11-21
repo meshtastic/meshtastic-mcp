@@ -346,9 +346,9 @@ async def esptool_raw(
 ) -> dict[str, Any]:
     """Pass-through to `esptool`.
 
-    Destructive subcommands (write_flash, erase_flash, erase_region, merge_bin) require
-    confirm=True, or the user's answer when the client can ask; other subcommands run
-    without asking. Prefer the high-level `pio_flash` / `erase_and_flash` / `update_flash`
+    Read-only subcommands (chip_id, flash_id, read_mac, read_flash_status, get_security_info,
+    image_info, version) run at once; any other needs confirm=True, or the user's answer when
+    the client can ask. Prefer the high-level `pio_flash` / `erase_and_flash` / `update_flash`
     tools where possible; they know board-specific offsets and protocols.
 
     Security: `args` is passed directly to the esptool binary. All arguments must come from
@@ -361,7 +361,7 @@ async def esptool_raw(
         args: The esptool arguments, from a trusted source only.
         port: Serial port, passed as `--port`; omit to leave it to `args` or esptool.
         confirm: `True` once the user agreed; omitted, a client that can ask prompts the
-            human. Only destructive subcommands ask.
+            human. Only subcommands that are not read-only ask.
     """
     return await _confirmed_hw_call(
         ctx, lambda c: hw_tools.esptool_raw(args, port=port, confirm=c), confirm
@@ -397,8 +397,9 @@ async def nrfutil_dfu(
 async def nrfutil_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
     """Pass-through to `nrfutil`.
 
-    dfu/settings subcommands require confirm=True, or the user's answer when the client can
-    ask. Recovers an nRF52 left sitting in serial DFU, with no touch, as
+    Only `version`, `list`, `device list`, `device device-info` and `device core-info` run
+    at once; anything else needs confirm=True, or the user's answer when the client can ask.
+    Recovers an nRF52 left sitting in serial DFU, with no touch, as
     `args=["dfu", "serial", "--package", "<zip>", "--port", "/dev/ttyACM0",
     "-b", "115200", "--singlebank"]` (adafruit-nrfutil).
 
@@ -410,7 +411,7 @@ async def nrfutil_raw(ctx: Context, args: list[str], confirm: bool = False) -> d
     Args:
         args: The nrfutil arguments, from a trusted source only.
         confirm: `True` once the user agreed; omitted, a client that can ask prompts the
-            human. Only dfu/settings subcommands ask.
+            human. Only calls outside the read-only list ask.
     """
     return await _confirmed_hw_call(ctx, lambda c: hw_tools.nrfutil_raw(args, confirm=c), confirm)
 
@@ -432,9 +433,9 @@ async def vendor(
 ) -> dict[str, Any]:
     """Run esptool, nrfutil or picotool with arguments, for what `install` and `admin` do not do.
 
-    A read-only subcommand runs at once. One that erases or writes (esptool `erase_flash`,
-    `write_flash`, nrfutil `dfu`, picotool `load` and so on) needs `confirm=True` or the
-    user's answer, and counts as irreversible. A failed command is a tool error carrying both
+    A read-only subcommand (esptool `flash_id`, nrfutil `device list`, picotool `info` and the
+    like) runs at once. Any other needs `confirm=True` or the user's answer, and counts as
+    irreversible. A failed command is a tool error carrying both
     output tails. Prefer `install` to flash firmware and `admin` for radio actions.
 
     Returns `{exit_code, stdout_tail, stderr_tail, duration_s, ...}`.
@@ -485,8 +486,8 @@ async def picotool_load(ctx: Context, uf2_path: str, confirm: bool = False) -> d
 async def picotool_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
     """Pass-through to `picotool`.
 
-    load/reboot/save/erase require confirm=True, or the user's answer when the client can
-    ask; other subcommands run without asking.
+    Only `info`, `version` and `help` run at once; anything else needs confirm=True, or the
+    user's answer when the client can ask.
 
     Security: `args` is passed directly to the picotool binary. All arguments must come
     from a trusted source; do not allow untrusted content to flow into argument lists.
@@ -496,7 +497,7 @@ async def picotool_raw(ctx: Context, args: list[str], confirm: bool = False) -> 
     Args:
         args: The picotool arguments, from a trusted source only.
         confirm: `True` once the user agreed; omitted, a client that can ask prompts the
-            human. Only load/reboot/save/erase ask.
+            human. Only calls outside info, version and help ask.
     """
     return await _confirmed_hw_call(ctx, lambda c: hw_tools.picotool_raw(args, confirm=c), confirm)
 

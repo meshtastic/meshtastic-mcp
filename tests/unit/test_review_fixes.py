@@ -288,3 +288,41 @@ def test_a_flash_tool_logs_its_job_id_to_the_client(server, monkeypatch) -> None
     result = asyncio.run(run())
     job_id = result.structured_content["job_id"]
     assert any(job_id in m and "flash_poll" in m for m in messages), messages
+
+
+@pytest.mark.parametrize(
+    ("tool", "binary", "args"),
+    [
+        ("esptool_raw", "esptool_bin", ["write-flash-status", "--non-volatile", "0x7c"]),
+        ("esptool_raw", "esptool_bin", ["write_mem", "0x3ff00000", "0x1", "0xff"]),
+        ("esptool_raw", "esptool_bin", ["-p", "/dev/x", "load-ram", "stub.bin"]),
+        ("esptool_raw", "esptool_bin", ["burn_efuse", "JTAG_DISABLE"]),
+        ("nrfutil_raw", "nrfutil_bin", ["device", "recover"]),
+        ("nrfutil_raw", "nrfutil_bin", ["device", "erase", "--all"]),
+        ("nrfutil_raw", "nrfutil_bin", ["--serial-number", "123", "device", "program"]),
+        ("picotool_raw", "picotool_bin", ["otp", "set", "0x10", "1"]),
+        ("picotool_raw", "picotool_bin", ["--bus", "1", "uf2", "convert", "a.elf", "b.uf2"]),
+    ],
+)
+def test_a_subcommand_off_the_read_only_list_asks(monkeypatch, tool, binary, args) -> None:
+    monkeypatch.setattr(hw_tools.config, binary, lambda: "bin")
+    monkeypatch.setattr(hw_tools, "_run", lambda *a, **k: pytest.fail("ran without confirm"))
+    with pytest.raises(hw_tools.ConfirmRequired):
+        getattr(hw_tools, tool)(args)
+
+
+@pytest.mark.parametrize(
+    ("tool", "binary", "args"),
+    [
+        ("esptool_raw", "esptool_bin", ["--chip", "esp32s3", "-b", "921600", "chip-id"]),
+        ("esptool_raw", "esptool_bin", ["read_mac"]),
+        ("esptool_raw", "esptool_bin", ["--help"]),
+        ("nrfutil_raw", "nrfutil_bin", ["device", "list"]),
+        ("nrfutil_raw", "nrfutil_bin", ["version"]),
+        ("picotool_raw", "picotool_bin", ["info", "-a"]),
+    ],
+)
+def test_a_read_only_subcommand_runs_without_asking(monkeypatch, tool, binary, args) -> None:
+    monkeypatch.setattr(hw_tools.config, binary, lambda: "bin")
+    monkeypatch.setattr(hw_tools, "_run", lambda b, a, **k: {"exit_code": 0, "args": a})
+    assert getattr(hw_tools, tool)(args)["exit_code"] == 0
