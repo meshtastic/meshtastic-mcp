@@ -20,20 +20,6 @@ from fastmcp.server.middleware import Middleware
 log = logging.getLogger("meshtastic_mcp.calls")
 
 _TARGET_ARGS = ("node", "port", "device", "target", "serial")
-# Polled reads that would bury the failures at INFO.
-_QUIET = frozenset(
-    {
-        "build_poll",
-        "flash_poll",
-        "events_window",
-        "logs_window",
-        "packets_window",
-        "recorder_status",
-        "sim_status",
-        "replay_status",
-        "wait_for",
-    }
-)
 
 
 class _StderrHandler(logging.StreamHandler):  # type: ignore[type-arg]
@@ -145,6 +131,5 @@ class CallLogMiddleware(Middleware):
             raise
         elapsed = time.monotonic() - start
         job = _job_id(result)
-        level = logging.DEBUG if name in _QUIET else logging.INFO
-        log.log(level, "%s ok in %.2fs%s", head, elapsed, f" job={job}" if job else "")
+        log.info("%s ok in %.2fs%s", head, elapsed, f" job={job}" if job else "")
         return result

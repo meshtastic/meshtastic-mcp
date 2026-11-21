@@ -80,10 +80,10 @@ def test_success_logs_one_info_line_with_the_job_id(caplog_calls) -> None:
     assert "target=rak" in rec.getMessage() and "job=job-7" in rec.getMessage()
 
 
-def test_polled_reads_log_at_debug(caplog_calls) -> None:
+def test_polled_reads_log_at_info(caplog_calls) -> None:
     _call(_app(), "build_poll", {"build_id": "b"})
     rec = next(r for r in caplog_calls.records if "tool=build_poll" in r.getMessage())
-    assert rec.levelno == logging.DEBUG
+    assert rec.levelno == logging.INFO
 
 
 def test_lines_go_to_stderr_not_stdout(capsys: pytest.CaptureFixture[str]) -> None:
