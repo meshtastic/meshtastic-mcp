@@ -89,7 +89,7 @@ take `confirm`.
 - With `MESHTASTIC_MCP_CONFIRM=human` on the server, irreversible tools (`factory_reset`,
   `erase_and_flash`, `nrf52_factory_erase`, `vanity_apply`, destructive vendor calls) ask even
   with `confirm=True`; "cannot ask" then means the user must run it from a client that can.
-- `esptool_raw(args=["flash_id"])` and other harmless subcommands never ask.
+- `vendor(tool="esptool", args=["flash_id"])` and other harmless subcommands never ask.
 
 ## Vanity identity (chosen node id / app colour)
 
@@ -168,7 +168,7 @@ power-cycled.
 **nRF52 by serial DFU**: `nrfutil_dfu(port=P, package_path=ZIP)` touches the board into DFU
 itself and fails unless adafruit-nrfutil printed `Device programmed.`. A board left sitting in
 serial DFU takes the package with no touch:
-`nrfutil_raw(args=["dfu", "serial", "--package", ZIP, "--port", "/dev/ttyACM0", "-b", "115200", "--singlebank"], confirm=True)`.
+`vendor(tool="nrfutil", args=["dfu", "serial", "--package", ZIP, "--port", "/dev/ttyACM0", "-b", "115200", "--singlebank"], confirm=True)`.
 
 `touch_1200bps(port=P)` bounces nRF52, ESP32-S3 and RP2040 boards into their bootloader and
 reports the bootloader's port. Chip-specific escape hatches when pio can't help:
@@ -346,7 +346,7 @@ Two things that bite in practice:
 
 - **The content varies shot to shot.** Node counts, battery percentage and the clock all move,
   so a set captured over several minutes looks inconsistent. `push_fake_nodedb` (and
-  `replay_start` for a simulated mesh) give every screenshot the same mesh; `configure(changes={"owner.long_name": ...})` fixes
+  `sim(action="start")` for a simulated mesh) give every screenshot the same mesh; `configure(changes={"owner.long_name": ...})` fixes
   the device name.
 - **Real screens leak real data.** Node long_names, positions and message text from your own
   mesh end up in the image. Seed a fake node DB before capturing anything destined for a public

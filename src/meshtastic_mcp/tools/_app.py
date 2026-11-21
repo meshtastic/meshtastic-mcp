@@ -75,35 +75,6 @@ def apple_tool(*args: Any, **kwargs: Any):
     return deco
 
 
-def local_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when a local Ollama model is reachable.
-
-    Gates the optional offload tools (summarize/triage recorder windows) so they
-    aren't advertised — and can't error — when no local model is available.
-    """
-
-    def deco(fn):
-        if CAPS.local_model:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
-def local_serve_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but registers when a local backend is reachable *or* a
-    `llama`/`llama-server` binary is present — so the bootstrap/status tools show
-    up even before any model is up (their whole job is to bring one up).
-    """
-
-    def deco(fn):
-        if CAPS.local_model or CAPS.llama_server:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
 def sdr_tool(*args: Any, **kwargs: Any):
     """Like `@app.tool()` but only registers when the sdr capability is active.
 
@@ -145,21 +116,6 @@ def sdk_tool(*args: Any, **kwargs: Any):
 
     def deco(fn):
         if CAPS.sdk_cli:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
-def discord_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when a Discord bot token resolves.
-
-    Gates the read-only Discord source tools; installs without a token never
-    advertise them. Content they return is untrusted (public community server).
-    """
-
-    def deco(fn):
-        if CAPS.discord:
             return app.tool(*args, **kwargs)(fn)
         return fn
 

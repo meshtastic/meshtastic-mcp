@@ -1,6 +1,6 @@
 # Replay: a simulated Meshtastic device
 
-`replay_start` serves a capture as a radio over TCP, the inverse of the recorder. An app, an Android emulator at `10.0.2.2:<port>`, or the meshtastic Python library connects to `host:port`, does the want-config handshake, and receives a paced stream of packets restamped to "now", as from a real radio. Each session runs in a background thread. The call returns the session status (id, listen address, totals); `replay_status` polls it and `replay_stop` tears it down. `meshtastic-mcp replay` serves the same from a shell.
+`sim(action="start")` serves a capture as a radio over TCP, the inverse of the recorder. An app, an Android emulator at `10.0.2.2:<port>`, or the meshtastic Python library connects to `host:port`, does the want-config handshake, and receives a paced stream of packets restamped to "now", as from a real radio. Each session runs in a background thread. The call returns the session status (id, listen address, totals); `sim_status` polls it and `sim(action="stop")` tears it down. `start` takes the parameters below plus nothing else; `stop` takes only `session_id`, and a start parameter passed to `stop` is an error. `meshtastic-mcp replay` serves the same from a shell.
 
 ## Sources
 
@@ -22,7 +22,7 @@ Highest priority first:
 2. `rate` sends a steady number of packets per second and ignores the capture's timing.
 3. `speed` multiplies the original cadence, with idle gaps capped at `max_gap` seconds.
 
-Pacing is deadline-anchored, so drift does not accumulate and a requested rate is delivered. `replay_status` reports `target_rate` against the live `achieved_rate`, so a stress run checks itself.
+Pacing is deadline-anchored, so drift does not accumulate and a requested rate is delivered. `sim_status` reports `target_rate` against the live `achieved_rate`, so a stress run checks itself.
 
 `start` and `end` (ISO-8601, UTC when no zone is given) window the capture. `loop` restarts at the end. `limit_nodes` caps the node DB of a file source.
 
@@ -69,7 +69,7 @@ The RF gateway observer set by `sim_profile["observer"]` is not the connected no
 
 ## Discovery
 
-`mdns` advertises the session over mDNS/Bonjour as `_meshtastic._tcp` with the `shortname` and `id` TXT records real firmware publishes, so apps list it in network discovery (as `RPLY_4331`) with no manual IP entry. The default `None` is on unless the session binds loopback only. It is best effort: it prefers the `zeroconf` package, falls back to `dns-sd` or `avahi-publish-service`, and otherwise reports a hint under `mdns` in `replay_status`.
+`mdns` advertises the session over mDNS/Bonjour as `_meshtastic._tcp` with the `shortname` and `id` TXT records real firmware publishes, so apps list it in network discovery (as `RPLY_4331`) with no manual IP entry. The default `None` is on unless the session binds loopback only. It is best effort: it prefers the `zeroconf` package, falls back to `dns-sd` or `avahi-publish-service`, and otherwise reports a hint under `mdns` in `sim_status`.
 
 ## Fuzzing
 
@@ -82,46 +82,45 @@ The RF gateway observer set by `sim_profile["observer"]` is not the connected no
 | `adversary` | Spoofing, flooding, forged ACKs, rogue ADMIN, evil-twin impersonation. |
 | `chaos` | Everything, frame corruption included. |
 
-`fuzz_seed` seeds it so a crash reproduces. `replay_status` reports fuzz activity (counts and recent events) under `fuzz`. `replay_fuzz_presets` lists the presets with the fault categories each enables.
+`fuzz_seed` seeds it so a crash reproduces. `sim_status` reports fuzz activity (counts and recent events) under `fuzz`. `replay_fuzz_presets` lists the presets with the fault categories each enables.
 
 ## Injecting packets into a running session
 
-The inject tools emit packets on a live session's connection, through the same send path as the stream, to drive app features on demand. They are the targeted counterpart to the fuzzer's random campaigns. Unless `from_node` is given, the sender is a synthetic injector node.
+`inject` emits packets on a live session's connection, through the same send path as the stream, to drive app features on demand. It is the targeted counterpart to the fuzzer's random campaigns. Unless `from_node` is given, the sender is a synthetic injector node.
 
-`replay_inject(session_id, kind, args)` builds a packet from a high-level `kind`:
+`inject(session_id, kind, ...)` sends one thing per call, chosen by `kind`. Each kind takes only its own parameters and refuses another kind's. The `text`, `position`, `nodeinfo` and `raw` kinds take `args`, `from_node`, `to_node`, `channel`, `count` and `fuzz`:
 
 | `kind` | `args` |
 | --- | --- |
-| `waypoint` | `lat`, `lon`, `name`, `geofence_radius` (m), `bbox` `[south, west, north, east]`, `notify_on_enter`, `notify_on_exit`, `notify_favorites_only`, `icon` |
 | `position` | `lat`, `lon`, `altitude` |
-| `text` | `body` |
+| `text` | `body`, and `reply_id` with `emoji` for a tapback |
 | `nodeinfo` | `id`, `long_name`, `short_name`, `hw_model`, `role` |
 | `raw` | `portnum`, `payload_hex` |
+
+`packet` takes the same parameters plus `packet_kind`, the builder's name for any other packet, such as `traceroute` with `route`, `snr_towards`, `route_back`, `snr_back` and a `request_id` in `args`. The remaining kinds (`waypoint`, `beacon`, `client_notification`, `fileinfo`, `traceroute`) take typed parameters, described below.
 
 `fuzz=True` runs each packet through the session's active fuzz mutator first, to inject a deliberately malformed packet. `count` repeats the inject.
 
 A geofence test: start a session, then
 
 ```python
-replay_inject(
+inject(
     sid,
     "waypoint",
-    {
-        "lat": 37.0,
-        "lon": -122.0,
-        "geofence_radius": 500,
-        "notify_on_enter": True,
-        "notify_on_exit": True,
-        "name": "Test",
-    },
+    lat=37.0,
+    lon=-122.0,
+    geofence_radius=500,
+    notify_on_enter=True,
+    notify_on_exit=True,
+    name="Test",
 )
-replay_inject(sid, "position", {"lat": 37.0, "lon": -122.0}, from_node=tracker)
+inject(sid, "position", args={"lat": 37.0, "lon": -122.0}, from_node=tracker)
 ```
 
-The wrappers below build one packet type with typed arguments:
+The typed kinds build one packet type each:
 
-- `replay_inject_waypoint` sends `WAYPOINT_APP` (portnum 8) with full geofence support: `geofence_radius` (a circle in meters), `bbox` (the waypoint's `bounding_box`, `[south, west, north, east]` in decimal degrees), either or both, plus `notify_on_enter`, `notify_on_exit` and `notify_favorites_only`, so an app's enter and exit alerts (the Apple app's, for one) can be exercised without hardware. Follow it with `replay_inject(sid, "position", {"lat": ..., "lon": ...}, from_node=tracker)` to move a synthetic node across the boundary.
-- `replay_inject_beacon` sends `MESH_BEACON_APP` (portnum 37), the same packet as `replay_inject(sid, "beacon", ...)`, which lets an app (the Apple app among others) exercise Local Mesh Discovery (capturing beacons, adding a beacon's preset or channel to a scan, offering "switch to this channel") without beaconing hardware. `message` is the beacon text (at most 100 bytes on real firmware); `offer_channel_name` and `offer_channel_psk_hex` advertise a channel the app can offer to switch to; `offer_region` and `offer_preset` advertise the beaconed mesh's LoRa region and preset.
-- `replay_inject_traceroute` sends an unsolicited `TRACEROUTE_APP` RouteDiscovery reply. It carries no `request_id`, and an app shows a traceroute response only for a request it sent (Android's `TracerouteHandlerImpl.isOurRequest`), so the app records it as an observed traceroute. To test the request UI (hop list, SNR coloring, map flyover), send a traceroute from the app; the engine answers it with the matching `request_id`. `destination_node` is the node the reply comes from. `route` lists the node numbers along the path, destination last; without it a synthetic origin, relay and destination path is used so the UI has hops to render. `snr_towards` and `snr_back` are per-hop SNR values; omit them and the reply carries none, so pass them to test SNR coloring.
-- `replay_inject_fileinfo` sends a raw `FileInfo` FromRadio message. It is a handshake-only FromRadio variant (`STATE_SEND_FILEMANIFEST`) with no MeshPacket envelope, which real firmware sends only during the config handshake. Most app handlers do not gate on handshake state, so this exercises that path in a long-running session: many entries with `count` (each gets a distinct `file_name` suffix, to probe whether a client caps its manifest), or malformed ones (a huge `file_name`, a negative `size_bytes`).
-- `replay_inject_client_notification` sends a `ClientNotification`, a top-level FromRadio with no MeshPacket envelope that firmware pushes for events the client must surface. A healthy device cannot produce them on demand, so this drives the app's notification UI. `variant` is `low_entropy_key` (the default: the pre-2.8 weak-key detection, "Compromised keys were detected and regenerated.", which pairs with the firmware fix that rejects a restored weak key), `duplicated_public_key` (another node advertises a key that duplicates a known one), `key_verification_number_request`, `key_verification_number_inform` or `key_verification_final` (the three steps of contact key verification; `nonce`, `remote_longname`, `security_number`, `verification_characters` and `is_sender` fill their fields), or `text` (only `message` and `level`). `message` overrides the canned text, which follows firmware's wording; `level` is `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`. `count` repeats it.
+- `inject(kind="waypoint")` sends `WAYPOINT_APP` (portnum 8) with full geofence support: `geofence_radius` (a circle in meters), `bbox` (the waypoint's `bounding_box`, `[south, west, north, east]` in decimal degrees), either or both, plus `notify_on_enter`, `notify_on_exit` and `notify_favorites_only`, so an app's enter and exit alerts (the Apple app's, for one) can be exercised without hardware. Follow it with `inject(sid, "position", args={"lat": ..., "lon": ...}, from_node=tracker)` to move a synthetic node across the boundary.
+- `inject(kind="beacon")` sends `MESH_BEACON_APP` (portnum 37), which lets an app (the Apple app among others) exercise Local Mesh Discovery (capturing beacons, adding a beacon's preset or channel to a scan, offering "switch to this channel") without beaconing hardware. `message` is the beacon text (at most 100 bytes on real firmware); `offer_channel_name` and `offer_channel_psk_hex` advertise a channel the app can offer to switch to; `offer_region` and `offer_preset` advertise the beaconed mesh's LoRa region and preset.
+- `inject(kind="traceroute")` sends an unsolicited `TRACEROUTE_APP` RouteDiscovery reply. It carries no `request_id`, and an app shows a traceroute response only for a request it sent (Android's `TracerouteHandlerImpl.isOurRequest`), so the app records it as an observed traceroute. To test the request UI (hop list, SNR coloring, map flyover), send a traceroute from the app; the engine answers it with the matching `request_id`. `destination_node` is the node the reply comes from. `route` lists the node numbers along the path, destination last; without it a synthetic origin, relay and destination path is used so the UI has hops to render. `snr_towards` and `snr_back` are per-hop SNR values; omit them and the reply carries none, so pass them to test SNR coloring.
+- `inject(kind="fileinfo")` sends a raw `FileInfo` FromRadio message. It is a handshake-only FromRadio variant (`STATE_SEND_FILEMANIFEST`) with no MeshPacket envelope, which real firmware sends only during the config handshake. Most app handlers do not gate on handshake state, so this exercises that path in a long-running session: many entries with `count` (each gets a distinct `file_name` suffix, to probe whether a client caps its manifest), or malformed ones (a huge `file_name`, a negative `size_bytes`).
+- `inject(kind="client_notification")` sends a `ClientNotification`, a top-level FromRadio with no MeshPacket envelope that firmware pushes for events the client must surface. A healthy device cannot produce them on demand, so this drives the app's notification UI. `variant` is `low_entropy_key` (the default: the pre-2.8 weak-key detection, "Compromised keys were detected and regenerated.", which pairs with the firmware fix that rejects a restored weak key), `duplicated_public_key` (another node advertises a key that duplicates a known one), `key_verification_number_request`, `key_verification_number_inform` or `key_verification_final` (the three steps of contact key verification; `nonce`, `remote_longname`, `security_number`, `verification_characters` and `is_sender` fill their fields), or `text` (only `message` and `level`). `message` overrides the canned text, which follows firmware's wording; `level` is `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`. `count` repeats it.
