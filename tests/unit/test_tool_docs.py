@@ -8,7 +8,7 @@ entry that parameter's inputSchema `description`, and drops every other section 
 `Example:`, an admonition such as a line ending in a colon above an indented block) along with
 anything after it. Claude Code shows the model the description and the inputSchema, not the
 outputSchema, so a result shape belongs in the description and a parameter's prose in `Args:`.
-Runs over every tool `tools/` defines, gated or not, so a host without a capability still checks
+Runs over every tool `tools/` and `discord_server.py` define, gated or not, so a host without a capability still checks
 its tools.
 """
 
@@ -28,10 +28,15 @@ def _tool_functions() -> dict[str, Callable[..., Any]]:
     # Deferred: importing `server` starts the recorder (see test_tool_annotations).
     from meshtastic_mcp import server
 
-    tools_dir = Path(server.__file__).parent / "tools"
+    package_dir = Path(server.__file__).parent
+    sources = [
+        (source, f"meshtastic_mcp.tools.{source.stem}")
+        for source in sorted((package_dir / "tools").glob("*.py"))
+    ]
+    sources.append((package_dir / "discord_server.py", "meshtastic_mcp.discord_server"))
     found: dict[str, Callable[..., Any]] = {}
-    for source in sorted(tools_dir.glob("*.py")):
-        module = importlib.import_module(f"meshtastic_mcp.tools.{source.stem}")
+    for source, module_name in sources:
+        module = importlib.import_module(module_name)
         for node in ast.parse(source.read_text(encoding="utf-8")).body:
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and any(
                 _is_tool_decorator(d) for d in node.decorator_list

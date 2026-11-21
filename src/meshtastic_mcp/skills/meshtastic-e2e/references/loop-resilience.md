@@ -58,6 +58,6 @@ bond unless that's the scenario you're testing.
 ## Failure triage
 
 - App never marks offline → app liveness/last-heard threshold too lax, or it's reading a
-  cached node. Cross-check `device_info`/`list_nodes` on a *different* radio for ground truth.
+  cached node. Cross-check `inspect` on a *different* radio for ground truth.
 - Recovers on device but app stays offline → app reconnect/refresh bug.
 - `my_node_num` changed after power restore → NVS/identity problem on the radio (not the app).

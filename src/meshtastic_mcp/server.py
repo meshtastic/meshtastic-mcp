@@ -70,10 +70,7 @@ from .tools._app import android_tool as android_tool
 from .tools._app import app_plane_tool as app_plane_tool
 from .tools._app import apple_tool as apple_tool
 from .tools._app import ble_sniffer_tool as ble_sniffer_tool
-from .tools._app import discord_tool as discord_tool
 from .tools._app import firmware_tool as firmware_tool
-from .tools._app import local_serve_tool as local_serve_tool
-from .tools._app import local_tool as local_tool
 from .tools._app import sdk_tool as sdk_tool
 from .tools._app import sdr_tool as sdr_tool
 from .tools._app import tasks_mod as tasks_mod
@@ -112,6 +109,7 @@ from .tools.android import atak_fleet_down as atak_fleet_down
 from .tools.android import atak_fleet_status as atak_fleet_status
 from .tools.android import atak_fleet_up as atak_fleet_up
 from .tools.android import atak_share_item as atak_share_item
+from .tools.app_drive import app_view as app_view
 from .tools.apple import _IOS_SCREENSHOT_DIR as _IOS_SCREENSHOT_DIR
 from .tools.apple import ios_boot as ios_boot
 from .tools.apple import ios_list_simulators as ios_list_simulators
@@ -164,21 +162,6 @@ from .tools.core import shutdown as shutdown
 from .tools.core import telemetry_timeline as telemetry_timeline
 from .tools.core import triage_bundle as triage_bundle
 from .tools.core import wait_for as wait_for
-from .tools.discord import _DISCORD_CLIENT as _DISCORD_CLIENT
-from .tools.discord import _TRUST_NOTE as _TRUST_NOTE
-from .tools.discord import _discord as _discord
-from .tools.discord import _trust_doc as _trust_doc
-from .tools.discord import discord_channels as discord_channels
-from .tools.discord import discord_context as discord_context
-from .tools.discord import discord_forum_posts as discord_forum_posts
-from .tools.discord import discord_member as discord_member
-from .tools.discord import discord_mentions as discord_mentions
-from .tools.discord import discord_mod as discord_mod
-from .tools.discord import discord_pins as discord_pins
-from .tools.discord import discord_read as discord_read
-from .tools.discord import discord_search as discord_search
-from .tools.discord import discord_status as discord_status
-from .tools.discord import discord_thread as discord_thread
 from .tools.firmware import build as build
 from .tools.firmware import build_poll as build_poll
 from .tools.firmware import build_start as build_start
@@ -226,12 +209,6 @@ from .tools.hardware import touch_1200bps as touch_1200bps
 from .tools.hardware import uhubctl_cycle as uhubctl_cycle
 from .tools.hardware import uhubctl_list as uhubctl_list
 from .tools.hardware import uhubctl_power as uhubctl_power
-from .tools.local_model import local_model_serve as local_model_serve
-from .tools.local_model import local_model_serve_stop as local_model_serve_stop
-from .tools.local_model import local_model_status as local_model_status
-from .tools.local_model import summarize_window as summarize_window
-from .tools.local_model import triage_window as triage_window
-from .tools.local_model import vision_oracle as vision_oracle
 from .tools.replay import _COT_LOCK as _COT_LOCK
 from .tools.replay import _COT_RELAY as _COT_RELAY
 from .tools.replay import _cot_data_dir as _cot_data_dir
@@ -242,6 +219,7 @@ from .tools.replay import cot_relay_start as cot_relay_start
 from .tools.replay import cot_relay_status as cot_relay_status
 from .tools.replay import cot_relay_stop as cot_relay_stop
 from .tools.replay import get_replay_manager as get_replay_manager
+from .tools.replay import inject as inject
 from .tools.replay import replay_build as replay_build
 from .tools.replay import replay_capture as replay_capture
 from .tools.replay import replay_engine as replay_engine
@@ -257,6 +235,8 @@ from .tools.replay import replay_sim as replay_sim
 from .tools.replay import replay_start as replay_start
 from .tools.replay import replay_status as replay_status
 from .tools.replay import replay_stop as replay_stop
+from .tools.replay import sim as sim
+from .tools.replay import sim_status as sim_status
 from .tools.rf import ble_sniff_poll as ble_sniff_poll
 from .tools.rf import ble_sniff_start as ble_sniff_start
 from .tools.rf import ble_sniff_status as ble_sniff_status
@@ -451,6 +431,7 @@ _READ_ONLY: set[str] = {
     "android_find_text",
     "android_poll_for_text",
     "android_read_logcat",  # see _OPEN_WORLD note: may echo remote-node content
+    "app_view",  # the read-only actions of android_*, ios_* and the desktop server
     "ios_list_simulators",
     "ios_ui_dump",
     "screenshot_set_poll",  # reads job state; never mutates
@@ -487,14 +468,11 @@ _READ_ONLY: set[str] = {
     "wait_for",  # holds a connection open while it watches; changes nothing
     "recorder_status",
     "replay_status",  # reads replay-session run-state; never mutates
+    "sim_status",  # reads simulated-session run-state; never mutates
     "cot_relay_status",  # reads relay run-state (peers/counts); never mutates
     "atak_fleet_status",  # reads fleet bring-up / drive progress; never mutates
     "replay_fuzz_presets",  # static catalog of fuzz presets; no state
     "capture_screen",
-    "summarize_window",  # reads a recorder window, distills via local model; no mutation
-    "vision_oracle",  # reads a screenshot, asks the local model; no mutation
-    "triage_window",  # reads device window (+optional screenshot); no mutation
-    "local_model_status",  # reports backend/reachability; no mutation
     "rf_scan",  # passive SDR capture; no device/host mutation
     "pa_meter_status",  # reads the power meter (version/stored freq/live dBm); no state change
     "ble_sniff_status",  # enumerates USB + resolves a binary; no capture, no state change
@@ -502,21 +480,12 @@ _READ_ONLY: set[str] = {
     "sdk_status",  # reports SDK-CLI bridge availability; no mutation
     "sdk_device_info",  # reads device snapshot via the Kotlin SDK CLI; no mutation
     "sdk_list_nodes",  # reads the device node DB via the Kotlin SDK CLI; no mutation
-    "discord_status",  # read-only bridge report; no mutation
-    "discord_channels",
-    "discord_search",
-    "discord_mentions",
-    "discord_read",
-    "discord_context",
-    "discord_thread",
-    "discord_forum_posts",
-    "discord_pins",
-    "discord_member",
 }
 # Destructive: irreversible or device-state-mutating (most are confirm-gated too).
 _DESTRUCTIVE = {
     "nrf52_enter_uf2",  # reboots the node into its bootloader
     "nrf52_flash_uf2",  # replaces the installed firmware
+    "install",  # replaces the installed firmware, and with erase the whole flash
     "nrf52_factory_erase",  # wipes config, node DB and keys
     "build_start",  # launches a pio subprocess; cannot be undone mid-flight
     "flash_start",  # launches a pio upload subprocess
@@ -532,10 +501,12 @@ _DESTRUCTIVE = {
     "update_flash",
     "touch_1200bps",
     "configure",  # writes config; reversible through the snapshot it returns
+    "admin",  # restarts, powers off or resets a radio
     "set_owner",
     "set_config",
     "set_channel_url",
     "set_debug_log_api",
+    "send",  # injects a mesh packet; cannot be recalled
     "send_text",  # injects a mesh packet; cannot be recalled
     "inject_frame",  # injects a forged frame into the RX pipeline; cannot be recalled
     "rf_confirm_tx",  # calls send_text internally; injects a mesh packet
@@ -552,6 +523,7 @@ _DESTRUCTIVE = {
     "send_input_event",  # drives device button/GPIO; side-effect on hardware
     "android_screenshot",  # writes a PNG to the host filesystem
     "android_tap",  # drives device input; side-effect on the running app
+    "app",  # android_tap/ios_tap and friends, plus desktop connect and send_text
     "android_swipe",
     "android_type_text",
     "android_clear_logcat",  # mutates device log buffer state
@@ -581,6 +553,7 @@ _DESTRUCTIVE = {
     "nrfutil_raw",
     "picotool_load",
     "picotool_raw",
+    "vendor",  # runs esptool, nrfutil or picotool; erases and writes flash
     "push_fake_nodedb",
     # Writes/overwrites <stream>.jsonl under a client-supplied dest_dir on the
     # host filesystem — surface it so clients don't treat it as a benign read.
@@ -590,6 +563,7 @@ _DESTRUCTIVE = {
     # Bind a TCP listener and serve a simulated mesh to a connecting app.
     "replay_start",
     "replay_stop",
+    "sim",  # starts a simulated mesh listener, or stops sessions
     # Bind a TCP listener (CoT relay) / write captures to the host filesystem.
     "cot_relay_start",
     "cot_relay_stop",
@@ -599,14 +573,13 @@ _DESTRUCTIVE = {
     "atak_drive_route",
     "atak_drive_stop",
     "atak_share_item",  # drives ATAK UI; broadcasts CoT to every connected peer
+    "inject",  # emits packets or FromRadio messages onto the live replay connection
     "replay_inject",  # emits packets onto the live connection
     "replay_inject_beacon",  # emits a MESH_BEACON_APP packet
     "replay_inject_client_notification",  # emits a ClientNotification FromRadio to the client
     "replay_inject_fileinfo",  # emits a FileInfo FromRadio onto the live connection
     "replay_inject_traceroute",  # emits a TRACEROUTE_APP RouteDiscovery packet
     "replay_inject_waypoint",  # emits a WAYPOINT_APP packet (with optional geofence)
-    "local_model_serve",  # spawns a detached llama-server process (and may install it)
-    "local_model_serve_stop",  # terminates the managed llama-server process
     "sdk_send_text",  # injects a mesh packet via the Kotlin SDK CLI; cannot be recalled
 }
 # Writes that are neither read-only nor destructive: they change host state another call
@@ -618,6 +591,7 @@ _ADDITIVE_WRITES = {
 # Idempotent writes: calling with identical args leaves the device in identical
 # state. Clients can safely retry these on timeout without side-effects.
 _IDEMPOTENT_WRITES = {
+    "admin",
     "configure",
     "set_config",
     "set_owner",
@@ -630,17 +604,6 @@ _IDEMPOTENT_WRITES = {
 # remote mesh nodes (e.g. packet payloads, log lines) — relevant to the
 # lethal-trifecta prompt-injection risk. See SECURITY.md.
 _OPEN_WORLD = {
-    # Discord: every message is user-authored content from a public server (untrusted).
-    "discord_status",
-    "discord_channels",
-    "discord_search",
-    "discord_mentions",
-    "discord_read",
-    "discord_context",
-    "discord_thread",
-    "discord_forum_posts",
-    "discord_pins",
-    "discord_member",
     "android_docs_search",  # queries the live Android Knowledge Base
     "android_docs_fetch",
     "android_version_lookup",  # queries live maven/Android version metadata
@@ -657,6 +620,7 @@ _OPEN_WORLD = {
     "vanity_apply",  # writes the security config to a live device and reboots it
     "set_owner",
     "set_debug_log_api",
+    "send",
     "send_text",
     "inject_frame",
     "reboot",
@@ -722,6 +686,8 @@ _OPEN_WORLD = {
     "android_ui_dump",
     "android_screenshot",
     "android_read_logcat",
+    "app_view",  # the same app UI, logs and node list, whichever platform
+    "app",  # drives the app and can send a mesh message
     # Drive/query a real Android device over adb — external hardware, same
     # reason as send_input_event/capture_screen above (not an untrusted-
     # content concern like the three above; see AGENTS.md/SECURITY.md).
@@ -763,6 +729,7 @@ _TITLE_OVERRIDES: dict[str, str] = {
     "picotool_info": "Picotool Info",
     "picotool_load": "Picotool Load UF2",
     "picotool_raw": "Picotool Raw Pass-Through",
+    "vendor": "Vendor Flash Tool Pass-Through",
     "nrf52_enter_uf2": "nRF52 Enter UF2 Mode",
     "nrf52_bootloader_info": "nRF52 Bootloader Info",
     "nrf52_backup_firmware": "nRF52 Back Up Firmware",
@@ -821,6 +788,7 @@ _PORT_NOT_A_DEVICE = frozenset(
         "ios_open_url",
         "logs_window",
         "replay_start",
+        "sim",
         "telemetry_timeline",
         "uhubctl_cycle",
         "uhubctl_power",
@@ -1003,7 +971,7 @@ def bringup_device(port: str = "", region: str = "US") -> str:
         "1. `list_devices` to find it (or use the given port / a tcp://host:port).\n"
         "2. `device_info` for firmware version + node identity; `list_nodes` for the DB.\n"
         f"3. Confirm region is set ({region}); if unset, `get_config('lora')` then `set_config`.\n"
-        "4. `send_text` a marker to ^all and confirm it leaves on the wire.\n"
+        "4. `send` a text marker to ^all and confirm it leaves on the wire.\n"
         "Report firmware version, region, node count, and any config that looks off."
     )
 

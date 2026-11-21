@@ -28,7 +28,6 @@ Environment=MESHTASTIC_MCP_TOKEN_FILE=%h/.config/meshtastic-mcp/token
 Environment=MESHTASTIC_FIRMWARE_ROOT=%h/src/firmware
 Environment=ANDROID_HOME=%h/Android/Sdk
 Environment=PATH=%h/.local/bin:%h/.platformio/penv/bin:%h/Android/Sdk/platform-tools:/usr/local/bin:/usr/bin:/bin
-ExecStartPre=/bin/sh -c "for i in $(seq 60); do curl -sf -o /dev/null http://127.0.0.1:11434/ && exit 0; sleep 1; done; exit 0"
 ExecStart=%h/.local/bin/meshtastic-mcp serve --host 192.168.1.10 --port 8765
 Restart=on-failure
 RestartSec=5
@@ -39,7 +38,7 @@ WantedBy=default.target
 
 Install it with `systemctl --user daemon-reload && systemctl --user enable --now meshtastic-mcp`, and run `loginctl enable-linger $USER` once, or the unit stops when the last session logs out. The bind address may not exist yet at boot, so `RestartSec` and `StartLimitIntervalSec=0` keep it retrying instead of landing in the failed state.
 
-Capabilities are detected once, at startup. A server that starts before a backend it depends on is up omits those tools until it restarts: started seconds after boot, ahead of Ollama, the server above served 126 tools instead of 132 (the six `local_model` tools). The `ExecStartPre` line waits for Ollama; drop it where there is none. Compare the served `tools/list` with a stdio server's after any change to the unit or the host.
+Capabilities are detected once, at startup. A server that starts before a prerequisite it depends on is up (a mounted firmware tree, a tool on `PATH`) omits those tools until it restarts. Compare the served `tools/list` with a stdio server's after any change to the unit or the host.
 
 ## Confirmations over HTTP
 

@@ -111,7 +111,7 @@ about the oracle changes; only who does the tapping.
   1. Make the journey's last action a bounded `wait_for_text` on the token, using the
      hop-count deadline from `harness.md` rule 2.
   2. Start `mobile_run_task`; the journey connects the app as one of its own steps.
-  3. Watch the device plane for the app's session — `replay_status` reporting
+  3. Watch the device plane for the app's session — `sim_status` reporting
      `connected: true` with a client, or the recorder seeing the phone-API session open.
   4. Inject only then, while Artemis is inside that final bounded wait.
 

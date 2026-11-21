@@ -33,10 +33,8 @@ The nightly bake is FleetSuite's unattended overnight pipeline. Every night it:
 7. **Recovers the bench** — anything offline or wedged at the end of the night gets the full
    ladder including a DFU reflash (config-gated), so the bench is healthy by morning.
 8. **Analyzes + reports** — deterministic heuristics (panics, error bursts, reboot churn,
-   battery/heap slope, lost soak traffic, missing/unbaked devices, firmware version diff)
-   plus, when a local model is reachable, a behavioral pass: chunked map-reduce summaries of
-   the night's logs and a vision/OCR check of each snapshot. The report posts as a GitHub
-   issue and is always stored locally (Nightly tab → history → expand).
+   battery/heap slope, lost soak traffic, missing/unbaked devices, firmware version diff).
+   The report posts as a GitHub issue and is always stored locally (Nightly tab → history → expand).
 
 Every step failure becomes an *observation*, never a silent abort — the report is written
 even when the pipeline itself breaks (`PIPELINE FAILED at <step>` issues).
@@ -72,7 +70,7 @@ Environment (set in the plist):
 | `PATH` | homebrew + platformio | launchd jobs get a bare PATH |
 
 Optional: `MESHTASTIC_MCP_SOURCE_ROOT` (mcp checkout override, default: this repo),
-`MESHTASTIC_MCP_ARTIFACT_DIR` (build cache), `MESHTASTIC_MCP_LOCAL_*` (local-model backend).
+`MESHTASTIC_MCP_ARTIFACT_DIR` (build cache).
 
 ## Prerequisites
 
@@ -80,9 +78,6 @@ Optional: `MESHTASTIC_MCP_SOURCE_ROOT` (mcp checkout override, default: this rep
   report repo is `thebentern/fleet-nightly`; create it private, or enable *auto-create*.
   **GitHub posting is off by default** — reports are always rendered and stored locally; flip
   "post issues" on in the Nightly tab once the repo is set.
-- **Ollama** (or a llama-server) for the behavioral analysis — optional; without it the
-  deterministic report still posts and carries an `llm_unavailable` observation. The
-  *auto-start local LLM* toggle tries `llama-server` bootstrap once per night.
 - **Cameras** (optional): add + assign them in the Fleet tab for soak snapshots; enable
   screen keep-alive so OLEDs stay lit. Camera capture needs the `[ui]` extra (opencv) — the
   deployment plist's `FLEETSUITE_EXTRAS=web,ui` installs it on a clean deploy; macOS also

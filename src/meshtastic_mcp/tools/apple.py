@@ -94,7 +94,7 @@ def ios_open_url(
 
     Args:
         url: The URL to open, such as a deep link.
-        port: Host TCP port of a node such as a `replay_start` session; opens the app's
+        port: Host TCP port of a node such as a `sim` session; opens the app's
             connect link to it. Needs Meshtastic-Apple 2.7.28 or later.
         udid: Simulator to open it in; omit for the booted one.
     """
@@ -151,7 +151,7 @@ def screenshot_set_start(
         reset_apps: Reset app settings first (Android clears its data and needs a debug
             build).
         beacon_listen: Serve both replay nodes with the mesh beacon module listening, as
-            `replay_start(beacon_listen=True)` does.
+            `sim(action="start", beacon_listen=True)` does.
     """
     from .. import jobs
     from .. import screenshot_set as ss

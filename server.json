@@ -26,7 +26,7 @@
         },
         {
           "name": "MESHTASTIC_MCP_TOOLSETS",
-          "description": "Comma-separated tool groups to expose: core, firmware, hardware, android, discord, replay, rf, local-model. Unset or 'all' exposes every group; a hidden tool cannot be called.",
+          "description": "Comma-separated tool groups to expose: core, firmware, hardware, android, apple, app, replay, rf, sdk, legacy. Unset or 'all' exposes every group but legacy, which comes only when named; a '-group' entry drops one. A hidden tool cannot be called.",
           "isRequired": false
         },
         {

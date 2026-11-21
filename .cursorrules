@@ -1,12 +1,2 @@
-See AGENTS.md: it is the source of truth for architecture, rules, and workflow.
-
-Quick reference for Cursor:
-- Core MCP tools always register; firmware/android/apple tools gate on capabilities.detect().
-- No firmware-tree assumptions in core modules (use config.firmware_root_or_none()).
-- Destructive tools call confirm.gate() before any lock or job; never bypass the gate.
-- Tool failures raise ToolError (isError), never a normal {"error": ...} result.
-- Long work is a jobs.py job with a job_id, never a longer timeout.
-- One MCP call per serial port at a time (exclusive lock).
-- No type debt: mypy with no per-module ignore_errors; ruff clean (no blanket # noqa).
-- Pre-push: ruff check + ruff format --check + mypy + check_spdx.py + pytest tests/unit
-- License: GPL-3.0-only; git commit -s (DCO sign-off).
+Read [AGENTS.md](AGENTS.md): it is the source of truth for architecture, rules and workflow in this
+repo. Nothing here adds to it.

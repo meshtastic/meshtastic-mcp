@@ -47,21 +47,23 @@ _GROUPS: dict[str, frozenset[str]] = {
             "userprefs_testing_profile",
         }
     ),
+    # One entry point over the android, apple and desktop app drivers. A group of its own, so a
+    # session can take it without the emulator and simulator tools, or drop it with `-app`.
+    "app": frozenset({"app", "app_view"}),
     "hardware": frozenset(
         {
             "capture_screen",
             "esptool_chip_info",
             "esptool_erase_flash",
-            "esptool_raw",
+            "install",
             "nrfutil_dfu",
-            "nrfutil_raw",
             "picotool_info",
             "picotool_load",
-            "picotool_raw",
             "touch_1200bps",
             "uhubctl_cycle",
             "uhubctl_list",
             "uhubctl_power",
+            "vendor",
         }
     ),
     "rf": frozenset(
@@ -77,30 +79,37 @@ _GROUPS: dict[str, frozenset[str]] = {
     # The pre-1.0 names a `next` tool replaces. Opt-in: only a client that names it gets them.
     "legacy": frozenset(
         {
+            "replay_start",
+            "replay_status",
+            "replay_stop",
             "device_info",
+            "esptool_raw",
+            "factory_reset",
             "get_channel_url",
             "get_config",
             "list_nodes",
+            "nrfutil_raw",
+            "picotool_raw",
+            "reboot",
+            "replay_inject",
+            "replay_inject_beacon",
+            "replay_inject_client_notification",
+            "replay_inject_fileinfo",
+            "replay_inject_traceroute",
+            "replay_inject_waypoint",
             "set_config",
             "set_debug_log_api",
             "set_owner",
+            "shutdown",
+            "send_text",
         }
     ),
-    "local-model": frozenset(
-        {
-            "local_model_serve",
-            "local_model_serve_stop",
-            "local_model_status",
-            "summarize_window",
-            "triage_window",
-            "vision_oracle",
-        }
-    ),
+    # `sim` and `sim_status` match no `replay_` prefix.
+    "replay": frozenset({"inject", "sim", "sim_status"}),
 }
 _PREFIXES: dict[str, tuple[str, ...]] = {
     "android": ("android_", "atak_"),
     "apple": ("ios_", "screenshot_set_"),
-    "discord": ("discord_",),
     "hardware": ("nrf52_", "serial_"),
     "replay": ("replay_", "cot_relay_"),
     "rf": ("ble_sniff_", "vanity_", "pa_", "rf_"),
