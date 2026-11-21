@@ -42,7 +42,7 @@ Capabilities are detected once, at startup. A server that starts before a prereq
 
 ## Confirmations over HTTP
 
-Each HTTP client declares its own capabilities, so a client that says it supports elicitation gets the confirmation prompt wherever it chooses to show it. Nothing proves a person answered, and `MESHTASTIC_MCP_CONFIRM=human` cannot tell either, so over HTTP the prompt is not a human gate. Anyone holding the token can run every tool the server exposes. See [confirmations.md](confirmations.md).
+Each HTTP client declares its own capabilities, so a client that says it supports elicitation gets the confirmation prompt wherever it chooses to show it. Nothing proves a person answered, and `MESHTASTIC_MCP_CONFIRM=human` cannot tell either, so over HTTP the prompt is not a human gate. Anyone holding the token can run every tool the server exposes. See [safety.md](safety.md#the-confirmation-gate).
 
 `MESHTASTIC_MCP_TOOLSETS` and `MESHTASTIC_MCP_READ_ONLY` are read by the server process, so they shape the tool list for every client; see [toolsets.md](toolsets.md).
 
@@ -71,4 +71,4 @@ A client host that cannot open LAN sockets from its interpreter can still reach 
 
 ## One owner per bench
 
-The per-port lock and the job registry live inside one process, so one server owns a bench host: a second `serve` on the same host refuses to start, and stdio clients bridge to the first. Every client then shares one job registry, so a `job_id` one client started can be polled from another; see [background-jobs.md](background-jobs.md). Leases and device names are files in the data dir, so they also bind a client that runs standalone. The eval runner is one on purpose: it sets `MESHTASTIC_MCP_STANDALONE=1` to measure the code under test.
+The per-port lock and the job registry live inside one process, so one server owns a bench host: a second `serve` on the same host refuses to start, and stdio clients bridge to the first. Every client then shares one job registry, so a `job_id` one client started can be polled from another; see [safety.md](safety.md#jobs-and-long-running-work). Leases and device names are files in the data dir, so they also bind a client that runs standalone. The eval runner is one on purpose: it sets `MESHTASTIC_MCP_STANDALONE=1` to measure the code under test.

@@ -29,3 +29,24 @@ claude mcp add meshtastic -e MESHTASTIC_MCP_TOOLSETS=core,firmware -e MESHTASTIC
 ```
 
 To flash and recover boards, add `hardware`: `MESHTASTIC_MCP_TOOLSETS=core,firmware,hardware`.
+
+## Capabilities
+
+A capability decides whether a tool registers at all, and its prerequisite must be present when the server starts. The active set is logged at startup (`meshtastic-mcp capabilities active: ...`), and `doctor` names the missing prerequisite.
+
+| Capability | Prerequisite | Adds |
+| --- | --- | --- |
+| core | none | Discovery, serial, TCP and BLE transport, `inspect`, `configure`, `send`, `admin`, the recorder and its queries, replay, input events, uhubctl, esptool, nrfutil, picotool and the nRF52 UF2 tools |
+| firmware | `MESHTASTIC_FIRMWARE_ROOT` and PlatformIO `pio` | Build, clean, flash, OTA, board listing and userPrefs |
+| android | the `android` CLI and `adb` | Android emulator and native-node orchestration for hardware-free e2e |
+| apple | `xcrun` (and `idb` for UI driving) | iOS Simulator and macOS app orchestration (`ios_*`). `screenshot_set_*` registers with this or android and captures matching screens from both, see [screenshot-set.md](screenshot-set.md) |
+| sdr | the `[sdr]` extra and an RTL-SDR dongle | The RF compliance oracle, see [rf-oracle.md](rf-oracle.md) |
+| tak | the meshtastic-tak SDK, which is not on PyPI: install it with the command `doctor` prints, or `uv sync --group tak` in a checkout | TAKPacketV2 zstd wire compression for the replay simulator's TAK squad (`profile tak.wire="v2"`) and its CoT stream to ATAK |
+| sdk-cli (experimental) | the Kotlin SDK headless CLI | An alternate device backend, see [sdk-cli-bridge.md](sdk-cli-bridge.md) |
+| discord | a read-only bot token (`$DISCORD_BOT_TOKEN` or `<user-config-dir>/meshtastic-mcp/discord.token`; `doctor` prints the path) | Read access to the Meshtastic Discord server, see [discord.md](discord.md) |
+| ble-sniffer | an nRF Sniffer for Bluetooth LE dongle (Nordic VID `0x1915`, PID `0x522A`) and Nordic's `nrfutil-ble-sniffer` plugin | `ble_sniff_start`, `_poll` and `_stop` capture the phone-to-node BLE link from outside both ends. `ble_sniff_status` is always registered. See [ble-sniffer.md](ble-sniffer.md) |
+| mvgrind | the `mvgrind` binary and an OpenCL driver | `vanity_grind_*` searches for a vanity node number or app color. `vanity_preview` and `vanity_apply` are always registered. See [vanity.md](vanity.md) |
+
+On macOS, a Homebrew `librtlsdr` is the osmocom fork and lacks `rtlsdr_set_dithering`, so `import rtlsdr` fails. The `[sdr]` extra bundles `pyrtlsdrlib`, which avoids this and is preferred by the loader.
+
+The server also exposes MCP resources (`meshtastic://doctor`, `meshtastic://capabilities`, and the templated `meshtastic://e2e/{loop}` for the bundled e2e recipes) and prompts (`triage_e2e_failure`, `bringup_device`, `inbound_loop`). A tool with a result type in `schemas.py` advertises it as an output schema, and a device, flash or hardware tool that fails returns a tool error (`isError`) carrying the cause and the tail of any command output.
