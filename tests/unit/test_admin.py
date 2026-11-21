@@ -135,3 +135,13 @@ def test_a_radio_that_does_not_come_back_is_reported(radio, monkeypatch, error) 
     monkeypatch.setattr(connection, "connect", flaky)
     result = _run(action="reboot", confirm=True, timeout_s=0.01)
     assert result["back"] is False and "did not answer again" in result["error"]
+
+
+@pytest.mark.parametrize("action", ["factory_reset", "factory_reset_full", "reset_nodedb"])
+def test_a_reset_waits_out_the_firmware_restart_timer_before_reconnecting(
+    radio, monkeypatch, action
+) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(python_admin.time, "sleep", slept.append)
+    _run(action=action, confirm=True, timeout_s=60)
+    assert sum(slept) >= python_admin.REBOOT_DELAY_S + python_admin.BOOT_S

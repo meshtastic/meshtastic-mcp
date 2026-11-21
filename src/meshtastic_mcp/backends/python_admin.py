@@ -14,7 +14,7 @@ from typing import Any
 
 from .. import connection
 from . import BackendError
-from .python_configure import BOOT_S, _uptime
+from .python_configure import BOOT_S, REBOOT_DELAY_S, _uptime
 
 RESTARTS = frozenset({"reboot", "factory_reset", "factory_reset_full", "reset_nodedb"})
 NODE_ACTIONS = frozenset({"favorite", "unfavorite", "ignore", "unignore", "remove_node"})
@@ -69,7 +69,8 @@ def admin(
         out["node_id"] = node_id
     if action not in RESTARTS or not wait_back:
         return out
-    delay = seconds if action == "reboot" else 0
+    # A reset restarts on the firmware's own timer, not after `seconds`.
+    delay = seconds if action == "reboot" else REBOOT_DELAY_S
     time.sleep(max(0.0, min(delay + BOOT_S, deadline - time.monotonic())))
     last = ""
     while True:
