@@ -109,6 +109,7 @@ from .tools.android import atak_fleet_down as atak_fleet_down
 from .tools.android import atak_fleet_status as atak_fleet_status
 from .tools.android import atak_fleet_up as atak_fleet_up
 from .tools.android import atak_share_item as atak_share_item
+from .tools.app_drive import app_view as app_view
 from .tools.apple import _IOS_SCREENSHOT_DIR as _IOS_SCREENSHOT_DIR
 from .tools.apple import ios_boot as ios_boot
 from .tools.apple import ios_list_simulators as ios_list_simulators
@@ -428,6 +429,7 @@ _READ_ONLY: set[str] = {
     "android_find_text",
     "android_poll_for_text",
     "android_read_logcat",  # see _OPEN_WORLD note: may echo remote-node content
+    "app_view",  # the read-only actions of android_*, ios_* and the desktop server
     "ios_list_simulators",
     "ios_ui_dump",
     "screenshot_set_poll",  # reads job state; never mutates
@@ -518,6 +520,7 @@ _DESTRUCTIVE = {
     "send_input_event",  # drives device button/GPIO; side-effect on hardware
     "android_screenshot",  # writes a PNG to the host filesystem
     "android_tap",  # drives device input; side-effect on the running app
+    "app",  # android_tap/ios_tap and friends, plus desktop connect and send_text
     "android_swipe",
     "android_type_text",
     "android_clear_logcat",  # mutates device log buffer state
@@ -679,6 +682,8 @@ _OPEN_WORLD = {
     "android_ui_dump",
     "android_screenshot",
     "android_read_logcat",
+    "app_view",  # the same app UI, logs and node list, whichever platform
+    "app",  # drives the app and can send a mesh message
     # Drive/query a real Android device over adb — external hardware, same
     # reason as send_input_event/capture_screen above (not an untrusted-
     # content concern like the three above; see AGENTS.md/SECURITY.md).
