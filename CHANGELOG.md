@@ -9,7 +9,8 @@ All notable changes are documented here. Format loosely follows
 - **`doctor` checks the server itself** - a running `serve` on other code than this install, a
   git or PyPI install next to a workspace checkout at another commit, and a binary that exists
   but is off the server's PATH (systemd's default PATH has no `sbin`) are `degraded`, each with
-  the fix.
+  the fix. A `serve` running from a checkout records its commit, so `doctor` flags one started
+  before the last pull, and the server names the commit it runs in its startup line.
 - **`nrf52_mount_uf2` and `nrf52_eject_uf2`** - mount a board's UF2 drive on a host that does not
   automount it, and eject it the way a desktop does, through udisks2 or `diskutil`, for bootloader
   benches; flashing never needs them. A polkit refusal over SSH prints the one-shot rule, and

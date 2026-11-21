@@ -66,10 +66,11 @@ def test_report_renders_text() -> None:
 # ---------- the server itself ----------------------------------------------
 
 
-def _serve(monkeypatch, info, *, ours="1.0.0", answers=True) -> doctor.Check:
+def _serve(monkeypatch, info, *, ours="1.0.0", answers=True, source=None) -> doctor.Check:
     from meshtastic_mcp import bridge
 
     monkeypatch.setattr(bridge, "find_local", lambda: info)
+    monkeypatch.setattr(bridge, "source_commit", lambda: source)
     monkeypatch.setattr(doctor, "_installed_version", lambda: ours)
     monkeypatch.setattr(doctor, "_answers", lambda url: answers)
     monkeypatch.delenv("MESHTASTIC_WORKSPACE", raising=False)
@@ -91,6 +92,67 @@ def test_a_serve_running_this_code_is_ok(monkeypatch) -> None:
 
 def test_no_serve_is_ok(monkeypatch) -> None:
     assert _serve(monkeypatch, None).status == doctor.STATUS_OK
+
+
+_EDITABLE_VERSION = "0.4.1.dev62+g274e22b7e"  # frozen at install, whatever the checkout runs
+_STARTED = "274e22b7e" + "0" * 31
+_NOW = "25d3689aa" + "1" * 31
+
+
+def test_an_editable_serve_started_before_a_pull_is_degraded(monkeypatch) -> None:
+    info = {
+        "url": "http://127.0.0.1:8765/mcp",
+        "pid": 42,
+        "version": _EDITABLE_VERSION,
+        "commit": _STARTED,
+        "dirty": False,
+    }
+    c = _serve(monkeypatch, info, ours=_EDITABLE_VERSION, source={"commit": _NOW, "dirty": False})
+    assert c.status == doctor.STATUS_DEGRADED
+    assert "274e22b7e" in c.detail and "25d3689aa" in c.detail
+    assert "restart" in c.fix
+
+
+def test_an_editable_serve_at_the_checkout_head_is_ok(monkeypatch) -> None:
+    info = {
+        "url": "http://127.0.0.1:8765/mcp",
+        "pid": 42,
+        "version": _EDITABLE_VERSION,
+        "commit": _NOW,
+        "dirty": False,
+    }
+    c = _serve(monkeypatch, info, ours=_EDITABLE_VERSION, source={"commit": _NOW, "dirty": False})
+    assert c.status == doctor.STATUS_OK
+    assert "25d3689aa" in c.detail
+
+
+def test_an_editable_serve_that_records_no_commit_asks_for_a_restart(monkeypatch) -> None:
+    info = {"url": "http://127.0.0.1:8765/mcp", "pid": 42, "version": _EDITABLE_VERSION}
+    c = _serve(monkeypatch, info, ours=_EDITABLE_VERSION, source={"commit": _NOW, "dirty": False})
+    assert c.status == doctor.STATUS_DEGRADED
+    assert "restart" in c.fix
+
+
+def test_serve_records_the_checkout_commit(monkeypatch, tmp_path) -> None:
+    import json
+
+    from meshtastic_mcp import bridge
+
+    monkeypatch.setattr(bridge, "_data_dir", lambda: tmp_path)
+    fh = bridge.claim_host("http://x/mcp", None, "1.0.0", {"commit": _NOW, "dirty": True})
+    try:
+        info = json.loads((tmp_path / "serve.json").read_text())
+    finally:
+        fh.close()
+    assert info["commit"] == _NOW and info["dirty"] is True
+
+
+def test_source_commit_reads_this_checkout() -> None:
+    from meshtastic_mcp import bridge
+
+    src = bridge.source_commit()
+    # The tests run from a git checkout of the repo; a built install would give None.
+    assert src is not None and len(src["commit"]) == 40
 
 
 def test_a_serve_that_does_not_answer_is_reported_not_fatal(monkeypatch) -> None:
