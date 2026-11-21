@@ -5,6 +5,33 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+- **The pre-1.0 tools are opt-in** - `device_info`, `get_config`, `set_config`, `send_text`,
+  `reboot`, the `replay_*` tools and the rest form a `legacy` toolset that is hidden unless named:
+  `MESHTASTIC_MCP_TOOLSETS=all,legacy`. `inspect`, `configure`, `send`, `admin`, `sim` and
+  `inject` replace them, and `legacy` is removed in 1.1.
+- **Discord moved to its own server** - the `discord_*` tools are served by
+  `meshtastic-mcp-discord`, not this server.
+- **A stdio client on the bench host bridges to a running `serve`** - so one server owns the
+  radios. `MESHTASTIC_MCP_STANDALONE=1` runs a separate server anyway.
+- **`duckdb` is a core dependency** - for the recorder's `query` and `wait_for`.
+
+### Removed
+- **The local-model tools** - `summarize_window`, `vision_oracle`, `triage_window` and the
+  `local_model_*` tools.
+
+### Fixed
+- A refusal from meshtastic-python (an unknown destination name, a blank owner name, a config
+  section it cannot write) is a tool error, not the end of the server.
+- Waiting for a restarted radio survives the library's handshake timeout, and a `configure` whose
+  read-back fails still returns its snapshot.
+- `admin` resets wait out the firmware's restart timer before reconnecting.
+- `install` writes a `.bin` at 0x0 only when it is a `firmware-*.factory.bin` image.
+- `MESHTASTIC_MCP_TOOLSETS` naming `discord` or `local-model` logs where they went instead of
+  stopping the server.
+- `config_diff` shows that a key or password changed, not its value, unless `reveal_secrets`.
+- A flash or vendor call that names no port is refused while another session holds a lease.
+
 ## [0.4.0] - 2026-11-17
 
 ### Added
