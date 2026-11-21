@@ -6,8 +6,8 @@ conference-scale chatter — the **replay engine is the ideal device plane**: no
 mesh, and you control the *exact* packets, pacing, and even how the device advertises itself. This
 is lighter and more deterministic than the `meshtasticd` native-node lab.
 
-Five recipes below. All share one session model: `replay_start` returns a `sid`; drive it with
-`inject` / `replay_status`; tear down with `replay_stop`. The **CLI** (`meshtastic-mcp
+Five recipes below. All share one session model: `sim(action="start")` returns a `sid`; drive it with
+`inject` / `sim_status`; tear down with `sim(action="stop")`. The **CLI** (`meshtastic-mcp
 replay …`) serves the same engine standalone (foreground, Ctrl-C to stop) when you don't have an
 MCP session — e.g. a human eyeballing the app, or a shell-scripted soak.
 
@@ -16,12 +16,12 @@ MCP session — e.g. a human eyeballing the app, or a shell-scripted soak.
 ## A. Feature injection — geofence / waypoints / alerts
 
 ```
-replay_start(source="meshcon", port=4403)         # a fake radio on the host → sid
+sim(action="start", source="meshcon", port=4403)  # a fake radio on the host → sid
 # app/AVD connects its TCP device to 10.0.2.2:4403
 inject(sid, "waypoint", lat=…, lon=…, geofence_radius=…)  # push the feature's trigger packet
 inject(sid, "position", args={...}, from_node=…)          # a node crossing the boundary
 # assert in the app: poll_notification / poll_logcat / ui tree / screenshot
-replay_stop(sid)
+sim(action="stop", session_id=sid)
 ```
 
 `inject` builds a packet or FromRadio message from `kind` and emits it onto the live
@@ -31,7 +31,7 @@ connection (same send path as the stream). Kinds: `waypoint` (typed `lat`, `lon`
 (fields in `args`), and `packet` (`packet_kind` plus `args`, for a hand-built packet). A parameter
 from another kind is refused. `fuzz=True` runs the packet through the session's fuzz mutator first
 (inject a **deliberately malformed** trigger to test the decoder). For a fully scripted run, build a
-`capture.from_events([...])` and `replay_start` that instead.
+`capture.from_events([...])` and `sim(action="start")` that instead.
 
 > The packet **builders** (`replay/build.py`) set proto fields the bundled `meshtastic` package
 > predates (e.g. the Waypoint geofence fields) via raw-wire `append_fields` — so you can test a
@@ -53,7 +53,7 @@ so 1600 nodes ≈ a real capture's ~18–20k packets, not the omniscient firehos
 plane on (recipe E).
 
 ```
-replay_start(source="conference-stress", sim_nodes=1600, rate=140, loop=True)   # MCP
+sim(action="start", source="conference-stress", sim_nodes=1600, rate=140, loop=True)   # MCP
 ```
 ```bash
 meshtastic-mcp replay conference-stress --nodes 1600 --rate 140 --loop          # shell
@@ -66,11 +66,11 @@ meshtastic-mcp replay conference-stress --nodes 1600 --rate 140 --loop          
 - `speed=X` — multiply the capture's original cadence (`max_gap` caps idle stretches).
 
 Pacing is **drift-free** (deadline-anchored): a requested rate is actually delivered, not ~80% of
-it. **Self-verify** with `replay_status` — it reports `target_rate` vs the live `achieved_rate`
+it. **Self-verify** with `sim_status` — it reports `target_rate` vs the live `achieved_rate`
 (re-anchored per connection, so an idle gap between app reconnects doesn't dilute the reading):
 
 ```
-st = replay_status(sid)
+st = sim_status(sid)
 # assert abs(st["achieved_rate"] - st["target_rate"]) / st["target_rate"] < 0.05
 ```
 
@@ -93,7 +93,7 @@ it's connected to:
   DB, and a final one on replay end (non-looping).
 
 Assert via `poll_for_text` on an uptime/battery/online-nodes value, or that channel-util reads
-"busy" under a high-rate stress stream. `replay_status()` reports `local_metrics` (interval +
+"busy" under a high-rate stress stream. `sim_status()` reports `local_metrics` (interval +
 emitted count) and `stats_sent`/`duplicates_seen` for the two paces separately. Note both variants
 are `TELEMETRY_APP` from the observer node — the app only logs a node's *own* telemetry to these
 views when `packet.from == connectedNode`.
@@ -121,7 +121,7 @@ A session advertises itself over mDNS/Bonjour as `_meshtastic._tcp` on `local.` 
 with no manual IP entry. Auto-on for non-loopback binds; `mdns=False` to opt out.
 
 ```
-st = replay_start(source="conference-stress", sim_nodes=1600, rate=140)
+st = sim(action="start", source="conference-stress", sim_nodes=1600, rate=140)
 st["mdns"]   # {"advertised": true, "backend": "dns-sd", "display_name": "RPLY_4331", ...}
 ```
 
@@ -174,7 +174,7 @@ big reaction storm** (147 in `conference-stress`; tune with `tapback_storm`). Th
 contains the literal word **`tapback`**, so it’s findable:
 
 ```
-replay_start(source="conference-stress", sim_nodes=1600, rate=140, loop=True)
+sim(action="start", source="conference-stress", sim_nodes=1600, rate=140, loop=True)
 # app: search messages for "tapback" → the legendary broadcast; open it →
 poll_for_text("147")   # reaction count on the legendary message
 ```
@@ -208,14 +208,14 @@ internally) rather than hand-injecting the pair.
 ## Gotchas (cost real time when missed)
 
 - **The replay DUT must outlive a single tool call.** Replay sessions live in the process that
-  started them — drive replay via the **persistent MCP server** (`replay_start`/`inject`/
-  `replay_stop` across calls), or the **`meshtastic-mcp replay` CLI** for a standalone foreground
+  started them — drive replay via the **persistent MCP server** (`sim`/`inject`/
+  `sim_status` across calls), or the **`meshtastic-mcp replay` CLI** for a standalone foreground
   server. Shell-*backgrounded* scripts get reaped between commands; if you must script standalone,
   run replay + drive + assert in **one** process, or use the CLI (it blocks until Ctrl-C).
 - **A leftover replay on the port silently hijacks the app.** If port 4403 is already taken, the
-  app connects to *that* server (you'll see the wrong nodes). `replay_start` raises a clear
-  port-in-use error (or pass `port=0` to auto-pick). Check `replay_status().connect` for the real
-  address; `replay_stop()` (no id) stops **all** sessions.
+  app connects to *that* server (you'll see the wrong nodes). `sim(action="start")` raises a clear
+  port-in-use error (or pass `port=0` to auto-pick). Check `sim_status().connect` for the real
+  address; `sim(action="stop")` (no id) stops **all** sessions.
 - **Two `_meshtastic._tcp` advertisers look identical in the picker.** A real WiFi-mDNS node on the
   LAN and your replay session both show up; the replay row is `RPLY_<id>`. Match on that, or
   `--no-mdns` / `mdns=False` and connect by IP to be unambiguous.

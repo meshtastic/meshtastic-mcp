@@ -160,7 +160,7 @@ bimodal (101 + curve + 0-spike); chutil correlates with hour-of-day traffic
   params, ack ratio — i.e. everything `generate()` now consumes. Output is
   exactly the WS0 profile JSON schema.
 - `generate(profile=...)` accepts the JSON (file path or dict).
-- Presets: `replay_start(source="burningman")` / `source="defcon"` resolve to
+- Presets: `sim(action="start", source="burningman")` / `source="defcon"` resolve to
   `generate(profile=<preset dict>)` in `_load_replay_capture()`
   (`tools/replay.py`); preset tunables are reviewed constants in code (informed by
   the local profiles, not shipping them), with venue geo + channel lineups +
@@ -170,7 +170,7 @@ bimodal (101 + curve + 0-spike); chutil correlates with hour-of-day traffic
 - Fuzz tie-in: a `ninja` preset in `fuzz.py` — NodeInfo spoof floods
   (rewrites long_name/emoji of recently-seen nodes, replays with correct
   node num), modeled on the DC 33 attack. Composes with presets:
-  `replay_start(source="defcon", fuzz="ninja")`.
+  `sim(action="start", source="defcon", fuzz="ninja")`.
 
 **Acceptance:** `generate(profile=fit_profile(from_sqlite(real_db)))` scores
 within tolerance of that capture on the WS5 harness; `replay_start`

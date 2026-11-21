@@ -477,6 +477,54 @@ class BleSniffStatus(TypedDict):
     active_captures: list[BleActiveCapture]
 
 
+# ---------- simulated radio (`sim`, `sim_status`) ---------------------------
+
+
+class SimSession(TypedDict, total=False):
+    """One simulated radio session, as `sim(action="start")` and `sim_status` report it."""
+
+    id: str
+    capture: str
+    listen: str
+    connect: list[str]
+    mode: str
+    target_rate: float | None
+    achieved_rate: float | None
+    loop: bool
+    hold: bool
+    pass_complete: bool
+    nodes: int
+    channels: Any
+    packets_total: int
+    packets_sent: int
+    injected: int
+    stats_sent: int
+    duplicates_seen: int
+    connected: bool
+    client: Any
+    ended: bool
+    error: Any
+    capture_span: dict[str, Any]
+    uptime_s: float
+    fuzz: Any
+    mdns: Any
+    local_metrics: Any
+
+
+class SimResult(SimSession):
+    """`sim` result: the started session, or `stopped` for `action="stop"`."""
+
+    stopped: NotRequired[
+        Annotated[list[str], Field(description="ids of the sessions a stop ended")]
+    ]
+
+
+class SimStatusResult(SimSession):
+    """`sim_status` result: one session's fields, `sessions` for all, or `error` for a bad id."""
+
+    sessions: NotRequired[list[SimSession]]
+
+
 # ---------- App driving -----------------------------------------------------
 
 

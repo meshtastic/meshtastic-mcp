@@ -21,7 +21,7 @@ from ..replay import engine as replay_engine
 from ..replay import fuzz as replay_fuzz
 from ..replay import get_manager as get_replay_manager
 from ..replay import sim as replay_sim
-from ..schemas import InjectResult
+from ..schemas import InjectResult, SimResult, SimStatusResult
 from ._app import app
 
 # ---------- Replay: simulated Meshtastic TCP device -----------------------
@@ -239,7 +239,7 @@ def replay_inject(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         kind: `waypoint`, `position`, `text`, `nodeinfo` or `raw`.
         args: Fields for `kind`. `waypoint` takes `lat`, `lon`, `name`, `geofence_radius`,
             `bbox`, `notify_on_enter`, `notify_on_exit`, `notify_favorites_only`, `icon`;
@@ -281,7 +281,7 @@ def replay_inject_beacon(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         message: Beacon text, at most 100 bytes on firmware.
         from_node: Sender node number; omit for a synthetic injector node.
         channel: Channel name to send on.
@@ -327,7 +327,7 @@ def replay_inject_fileinfo(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         file_name: Reported file name; with `count` above 1 each copy gets a distinct
             suffix.
         size_bytes: Reported file size in bytes.
@@ -368,7 +368,7 @@ def replay_inject_client_notification(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         variant: `low_entropy_key` (regenerated weak keys), `duplicated_public_key`,
             `key_verification_number_request`, `key_verification_number_inform`,
             `key_verification_final`, or `text`.
@@ -419,7 +419,7 @@ def replay_inject_traceroute(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         destination_node: The responding node's number.
         route: Node numbers along the path, destination last; omitted, the path is
             `[from_node, destination_node]`, or a synthetic origin-relay-destination path
@@ -485,7 +485,7 @@ def replay_inject_waypoint(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         lat: Waypoint latitude in decimal degrees.
         lon: Waypoint longitude in decimal degrees.
         name: Waypoint name.
@@ -650,7 +650,7 @@ def inject(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         kind: What to inject: `text`, `position`, `nodeinfo`, `raw`, `packet`, `waypoint`,
             `beacon`, `client_notification`, `fileinfo` or `traceroute`.
         packet_kind: For `packet`: the builder's packet name, such as `traceroute` or
@@ -741,7 +741,7 @@ def inject(
 def replay_fuzz_presets() -> dict[str, Any]:
     """List the built-in replay fuzz presets and the fault categories each enables.
 
-    Use the returned names as the `fuzz=` argument to `replay_start`, or pass a
+    Use the returned names as the `fuzz=` argument to `sim(action="start")`, or pass a
     dict like `{"preset": "parser", "drop": 0.1}` to override individual rates.
 
     Returns `{presets: {name: {category: rate}}, usage}`.
@@ -771,7 +771,9 @@ def replay_fuzz_presets() -> dict[str, Any]:
         out[nm] = enabled
     return {
         "presets": out,
-        "usage": "replay_start(fuzz='parser') or fuzz={'preset':'adversary','flooder_rate':20}",
+        "usage": (
+            "sim(action='start', fuzz='parser') or fuzz={'preset':'adversary','flooder_rate':20}"
+        ),
     }
 
 
@@ -799,6 +801,151 @@ def replay_stop(session_id: str | None = None) -> dict[str, Any]:
         session_id: Session to stop; omit to stop all.
     """
     return get_replay_manager().stop(session_id)
+
+
+@app.tool()
+def sim(
+    action: Literal["start", "stop"],
+    session_id: str | None = None,
+    source: str | None = None,
+    kind: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    speed: float | None = None,
+    rate: float | None = None,
+    duration: float | None = None,
+    max_gap: float | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    loop: bool | None = None,
+    limit_nodes: int | None = None,
+    node_delay: float | None = None,
+    channels: list[dict[str, Any]] | None = None,
+    announce_interval: float | None = None,
+    stats_interval: float | None = None,
+    dupe_every: int | None = None,
+    modem_preset: str | None = None,
+    firmware_edition: str | None = None,
+    firmware_version: str | None = None,
+    observer_lat: int | None = None,
+    observer_lon: int | None = None,
+    observer_num: int | None = None,
+    sim_nodes: int | None = None,
+    sim_days: int | None = None,
+    sim_seed: int | None = None,
+    sim_profile: str | dict[str, Any] | None = None,
+    fuzz: str | dict[str, Any] | None = None,
+    fuzz_seed: int | None = None,
+    mdns: bool | None = None,
+    local_metrics_interval: float | None = None,
+    clock_anchor: int | None = None,
+    hold: bool | None = None,
+    beacon_listen: bool | None = None,
+) -> SimResult:
+    """Start or stop a simulated Meshtastic TCP device that streams a capture to an app.
+
+    `action="start"` serves a simulated radio: an app, an AVD at `10.0.2.2:<port>`, or the
+    Python library connects to `host:port` and gets a paced packet stream restamped to now.
+    Read it with `sim_status`. `action="stop"` ends one session, or every session without
+    `session_id`. Pacing, highest first: `duration`, then `rate`, then `speed`. Give
+    concurrent sessions distinct `observer_num`s. `start` takes every parameter but
+    `session_id`, `stop` takes only `session_id`, and passing a start parameter to `stop` is
+    an error. Every parameter and example: docs/replay.md.
+
+    Returns the session status for `start`: `{id, capture, listen, connect, mode,
+    packets_total, packets_sent, connected, ...}`; `{stopped}`, the ids it stopped, for `stop`.
+
+    Args:
+        action: `start` serves a session, `stop` ends one or all.
+        session_id: `stop` only: session to stop; omit to stop all.
+        source: `start` only: `meshcon`/`sim`, `burningman`, `defcon`, `conference-stress`
+            (generated meshes), a `*.db`/`*.db.gz` SQLite capture or a recorder `*.jsonl`.
+            Default `meshcon`.
+        kind: `start` only: `auto` infers it from `source`; or `sim`, `sqlite`, `jsonl`.
+            Default `auto`.
+        host: `start` only: listen address; `0.0.0.0` (the default) serves every interface.
+        port: `start` only: TCP port the session listens on for the app. Default 4403.
+        speed: `start` only: multiplier on the capture's own cadence. Default 1.0.
+        rate: `start` only: steady packets per second, ignoring capture timing; wins over
+            `speed`.
+        duration: `start` only: play the whole window in N wall-clock seconds; wins over
+            `rate`.
+        max_gap: `start` only: cap on idle seconds between packets. Default 20.
+        start: `start` only: window start, ISO-8601 (UTC when no zone is given).
+        end: `start` only: window end, ISO-8601.
+        loop: `start` only: repeat the window when it ends. Default false.
+        limit_nodes: `start` only: cap on a file source's node DB. Default 200.
+        node_delay: `start` only: seconds between NodeInfos during the node DB download.
+            Default 0.01.
+        channels: `start` only: channel list that splits a SQLite capture by OTA hash with
+            real PSKs, each `{"name", "psk", "primary", "ota_hashes", "catch_all"}`.
+        announce_interval: `start` only: seconds between "Replay Clock" progress posts to the
+            busiest channel; 0 (the default) is off.
+        stats_interval: `start` only: seconds between the connected node's LocalStats
+            updates; 0 keeps only the initial snapshot. Default 5.
+        dupe_every: `start` only: simulate a duplicate radio receive every Nth packet; 0
+            (the default) is off.
+        modem_preset: `start` only: advertised LoRa preset. Default `LONG_FAST`.
+        firmware_edition: `start` only: the app's event banner, such as `VANILLA` (the
+            default), `DEFCON`, `BURNING_MAN` or `HAMVENTION`.
+        firmware_version: `start` only: reported firmware build; omit for the edition's
+            default.
+        observer_lat: `start` only: connected node's latitude in 1e-7 degrees; omit for the
+            capture's median position.
+        observer_lon: `start` only: connected node's longitude in 1e-7 degrees; omit for the
+            capture's median position.
+        observer_num: `start` only: this session's node number; omit for the process default
+            (`MESHTASTIC_REPLAY_OBSERVER_NUM`).
+        sim_nodes: `start` only: node count of a generated mesh. Default 800.
+        sim_days: `start` only: days of traffic a generated mesh spans, ending now unless
+            `start` is set. Default 3.
+        sim_seed: `start` only: seed for a generated mesh. Default 1337.
+        sim_profile: `start` only: overrides deep-merged over a generated preset, as a dict
+            or JSON object, never a file path.
+        fuzz: `start` only: makes the stream hostile: a preset (`light`, `parser`,
+            `adversary`, `chaos`) or a dict of overrides with an optional `preset` base.
+        fuzz_seed: `start` only: fuzz seed, so a crash reproduces. Default 0.
+        mdns: `start` only: advertise the session over mDNS as `_meshtastic._tcp`; omit for
+            on unless bound to loopback only.
+        local_metrics_interval: `start` only: seconds between the connected node's
+            `DEVICE_METRICS` packets; 0 is off. Default 300.
+        clock_anchor: `start` only: epoch seconds the window's last packet is stamped as, so
+            sessions sharing it show identical times; omit to stamp each packet now.
+        hold: `start` only: play the window once per connection, then stay connected and
+            quiet; ignored with `loop`. Default false.
+        beacon_listen: `start` only: advertise the mesh beacon module as listening, so the
+            app keeps `MESH_BEACON_APP` packets. Default false.
+    """
+    passed = {
+        k: v for k, v in locals().items() if k not in ("action", "session_id") and v is not None
+    }
+    if action == "stop":
+        if passed:
+            raise ToolError(
+                f"sim(action='stop') takes only session_id; got start parameters {sorted(passed)}. "
+                "action='start' takes every parameter but session_id."
+            )
+        return cast(SimResult, replay_stop(session_id))
+    if session_id is not None:
+        raise ToolError(
+            "sim(action='start') does not take session_id, which only action='stop' takes; "
+            "it returns the new session's id."
+        )
+    return cast(SimResult, replay_start(**passed))
+
+
+@app.tool()
+def sim_status(session_id: str | None = None) -> SimStatusResult:
+    """Status of simulated radio sessions: connection state, packets sent and total, mode.
+
+    Returns one session's `{id, capture, listen, connect, mode, target_rate,
+    achieved_rate, packets_total, packets_sent, injected, connected, client, ended, error,
+    fuzz, mdns, ...}`, `{sessions: [...]}` for all, or `{error}` for an unknown id.
+
+    Args:
+        session_id: One session's id; omit for every running session.
+    """
+    return cast(SimStatusResult, replay_status(session_id))
 
 
 # ---------- ATAK / CoT capture + fleet ------------------------------------

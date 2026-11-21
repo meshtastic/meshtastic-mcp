@@ -60,7 +60,7 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 - **apple capability** (needs `xcrun`; `idb` for UI): `emulator/apple_sim.py` iOS-Sim/macOS
   app-plane orchestration, plus `ios_list_simulators`, `ios_boot`, `ios_screenshot`
   (light/dark, App Store status bar), `ios_open_url` (deep links, and the connect link to a
-  `replay_start` node, which serves one client at a time),
+  `sim` node, which serves one client at a time),
   `ios_ui_dump`, `ios_tap` and `ios_type_text` (the last three need idb).
   `screenshot_set_start`/`_poll` (`screenshot_set.py`, registered with either capability,
   in the `apple` toolset) serves each app a replay node from one seed, connects both, and
@@ -70,7 +70,7 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   `rf_oracle.py` RF-compliance oracle (`rf_scan` / `rf_confirm_tx`).
 - **tak capability** (needs the meshtastic-tak SDK, which is not on PyPI: the `tak` dependency
   group, `uv sync --group tak`; `doctor` prints the install for a released package):
-  `replay/tak.py` gives `replay_start` real TAKPacketV2 zstd wire compression
+  `replay/tak.py` gives `sim` real TAKPacketV2 zstd wire compression
   (`profile tak.wire="v2"`), and `replay/tak_server.py` streams the sim's TAK squad to ATAK as
   CoT. No tool is gated on it.
 - **power-meter capability** (no extra — pure `pyserial`; needs an attached, powered-on ImmersionRC
@@ -512,18 +512,18 @@ telemetry_timeline(port=<port>, window="1h")  # battery/environment over time
 
 **Serve a simulated mesh to an app (replay — the recorder's inverse)**
 ```
-replay_start(source="meshcon")              # synthetic mesh; app/AVD connects to host:4403
-replay_start(source="capture.db", speed=30) # replay a real SQLite capture, 30x
-replay_start(source="capture.db", duration=150)  # whole capture in 2.5 min (stress test)
-replay_start(source="defcon", sim_profile={"bots": {"count": 17}})  # BBS/bot plane + tapback storms
-replay_start(source="meshcon", fuzz="adversary")  # inject bad actors / malformed packets
-replay_status()                             # connection state, packets_sent, fuzz activity
-replay_stop()
+sim(action="start", source="meshcon")       # synthetic mesh; app/AVD connects to host:4403
+sim(action="start", source="capture.db", speed=30)  # replay a real SQLite capture, 30x
+sim(action="start", source="capture.db", duration=150)  # whole capture in 2.5 min (stress test)
+sim(action="start", source="defcon", sim_profile={"bots": {"count": 17}})  # BBS/bot plane + tapbacks
+sim(action="start", source="meshcon", fuzz="adversary")  # inject bad actors / malformed packets
+sim_status()                                # connection state, packets_sent, fuzz activity
+sim(action="stop")
 ```
 App/AVD connects to `10.0.2.2:<port>` (emulator) or the host IP (device). `fuzz` presets:
 `light`/`parser`/`adversary`/`chaos` — list them with `replay_fuzz_presets`. Pacing priority:
 `duration` (whole capture in N wall-clock seconds) > `rate` (steady pkts/sec) > `speed`
-(cadence multiplier); `replay_status` reports `target_rate` vs live `achieved_rate`. Every
+(cadence multiplier); `sim_status` reports `target_rate` vs live `achieved_rate`. Every
 parameter and the inject tools: `docs/replay.md`.
 
 **Give a node a chosen id or colour**

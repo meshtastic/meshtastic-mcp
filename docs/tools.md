@@ -1005,7 +1005,7 @@ device?" (`ios_tap`) and it streams the mesh the Android emulator gets at
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `url` | string | `null` | The URL to open, such as a deep link. |
-| `port` | integer | `null` | Host TCP port of a node such as a `replay_start` session; opens the app's connect link to it. Needs Meshtastic-Apple 2.7.28 or later. |
+| `port` | integer | `null` | Host TCP port of a node such as a `sim` session; opens the app's connect link to it. Needs Meshtastic-Apple 2.7.28 or later. |
 | `udid` | string | `null` | Simulator to open it in; omit for the booted one. |
 
 ### `ios_screenshot`
@@ -1101,7 +1101,7 @@ the replay node, and `reset_apps` wipes its settings first. See docs/screenshot-
 | `settle_s` | number | `3.0` | Seconds to let a screen settle before each shot. |
 | `clean_status_bar` | boolean | `true` | Pin the status bars as in App Store shots. |
 | `reset_apps` | boolean | `false` | Reset app settings first (Android clears its data and needs a debug build). |
-| `beacon_listen` | boolean | `false` | Serve both replay nodes with the mesh beacon module listening, as `replay_start(beacon_listen=True)` does. |
+| `beacon_listen` | boolean | `false` | Serve both replay nodes with the mesh beacon module listening, as `sim(action="start", beacon_listen=True)` does. |
 
 ## firmware
 
@@ -1839,7 +1839,7 @@ Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
+| `session_id` | string | required | Session id from `sim(action="start")`. |
 | `kind` | `text` \| `position` \| `nodeinfo` \| `raw` \| `packet` \| `waypoint` \| `beacon` \| `client_notification` \| `fileinfo` \| `traceroute` | required | What to inject: `text`, `position`, `nodeinfo`, `raw`, `packet`, `waypoint`, `beacon`, `client_notification`, `fileinfo` or `traceroute`. |
 | `packet_kind` | string | `null` | For `packet`: the builder's packet name, such as `traceroute` or `beacon`, with its fields in `args`. |
 | `args` | object | `null` | For `text`, `position`, `nodeinfo`, `raw` and `packet`: `text` takes `body` (and `reply_id`, `emoji` for a tapback); `position` takes `lat`, `lon`, `altitude`; `nodeinfo` takes `id`, `long_name`, `short_name`, `hw_model`, `role`; `raw` takes `portnum`, `payload_hex`; `traceroute` takes `route`, `snr_towards`, `route_back`, `snr_back`, `request_id`. |
@@ -1884,68 +1884,72 @@ Read-only, idempotent.
 
 List the built-in replay fuzz presets and the fault categories each enables.
 
-Use the returned names as the `fuzz=` argument to `replay_start`, or pass a
+Use the returned names as the `fuzz=` argument to `sim(action="start")`, or pass a
 dict like `{"preset": "parser", "drop": 0.1}` to override individual rates.
 
 Returns `{presets: {name: {category: rate}}, usage}`.
 
-### `replay_start`
+### `sim`
 
 Destructive.
 
-Start a simulated Meshtastic TCP device that streams a capture to an app.
+Start or stop a simulated Meshtastic TCP device that streams a capture to an app.
 
-An app, an AVD at `10.0.2.2:<port>`, or the Python library connects to `host:port`
-and gets a paced packet stream restamped to now. Poll `replay_status`, stop with
-`replay_stop`. Pacing, highest first: `duration`, then `rate`, then `speed`. Give
-concurrent sessions distinct `observer_num`s. Every parameter and example:
-docs/replay.md.
+`action="start"` serves a simulated radio: an app, an AVD at `10.0.2.2:<port>`, or the
+Python library connects to `host:port` and gets a paced packet stream restamped to now.
+Read it with `sim_status`. `action="stop"` ends one session, or every session without
+`session_id`. Pacing, highest first: `duration`, then `rate`, then `speed`. Give
+concurrent sessions distinct `observer_num`s. `start` takes every parameter but
+`session_id`, `stop` takes only `session_id`, and passing a start parameter to `stop` is
+an error. Every parameter and example: docs/replay.md.
 
-Returns the session status, as `replay_status` reports it: `{id, capture, listen,
-connect, mode, packets_total, packets_sent, connected, ...}`.
+Returns the session status for `start`: `{id, capture, listen, connect, mode,
+packets_total, packets_sent, connected, ...}`; `{stopped}`, the ids it stopped, for `stop`.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `source` | string | `"meshcon"` | `meshcon`/`sim`, `burningman`, `defcon`, `conference-stress` (generated meshes), a `*.db`/`*.db.gz` SQLite capture or a recorder `*.jsonl`. |
-| `kind` | string | `"auto"` | `auto` infers it from `source`; or `sim`, `sqlite`, `jsonl`. |
-| `host` | string | `"0.0.0.0"` | Listen address; `0.0.0.0` serves every interface. |
-| `port` | integer | `4403` | TCP port the session listens on for the app. |
-| `speed` | number | `1.0` | Multiplier on the capture's own cadence. |
-| `rate` | number | `null` | Steady packets per second, ignoring capture timing; wins over `speed`. |
-| `duration` | number | `null` | Play the whole window in N wall-clock seconds; wins over `rate`. |
-| `max_gap` | number | `20.0` | Cap on idle seconds between packets. |
-| `start` | string | `null` | Window start, ISO-8601 (UTC when no zone is given). |
-| `end` | string | `null` | Window end, ISO-8601. |
-| `loop` | boolean | `false` | Repeat the window when it ends. |
-| `limit_nodes` | integer | `200` | Cap on a file source's node DB. |
-| `node_delay` | number | `0.01` | Seconds between NodeInfos during the node DB download. |
-| `channels` | list of object | `null` | Channel list that splits a SQLite capture by OTA hash with real PSKs, each `{"name", "psk", "primary", "ota_hashes", "catch_all"}`. |
-| `announce_interval` | number | `0.0` | Seconds between "Replay Clock" progress posts to the busiest channel; 0 is off. |
-| `stats_interval` | number | `5.0` | Seconds between the connected node's LocalStats updates; 0 keeps only the initial snapshot. |
-| `dupe_every` | integer | `0` | Simulate a duplicate radio receive every Nth packet; 0 is off. |
-| `modem_preset` | string | `"LONG_FAST"` | Advertised LoRa preset, such as `LONG_FAST`. |
-| `firmware_edition` | string | `"VANILLA"` | The app's event banner, such as `VANILLA`, `DEFCON`, `BURNING_MAN` or `HAMVENTION`. |
-| `firmware_version` | string | `null` | Reported firmware build; omit for the edition's default. |
-| `observer_lat` | integer | `null` | Connected node's latitude in 1e-7 degrees; omit for the capture's median position. |
-| `observer_lon` | integer | `null` | Connected node's longitude in 1e-7 degrees; omit for the capture's median position. |
-| `observer_num` | integer | `null` | This session's node number; omit for the process default (`MESHTASTIC_REPLAY_OBSERVER_NUM`). |
-| `sim_nodes` | integer | `800` | Node count of a generated mesh. |
-| `sim_days` | integer | `3` | Days of traffic a generated mesh spans, ending now unless `start` is set. |
-| `sim_seed` | integer | `1337` | Seed for a generated mesh. |
-| `sim_profile` | string \| object | `null` | Overrides deep-merged over a generated preset, as a dict or JSON object, never a file path. |
-| `fuzz` | string \| object | `null` | Makes the stream hostile: a preset (`light`, `parser`, `adversary`, `chaos`) or a dict of overrides with an optional `preset` base. |
-| `fuzz_seed` | integer | `0` | Fuzz seed, so a crash reproduces. |
-| `mdns` | boolean | `null` | Advertise the session over mDNS as `_meshtastic._tcp`; omit for on unless bound to loopback only. |
-| `local_metrics_interval` | number | `300.0` | Seconds between the connected node's `DEVICE_METRICS` packets; 0 is off. |
-| `clock_anchor` | integer | `null` | Epoch seconds the window's last packet is stamped as, so sessions sharing it show identical times; omit to stamp each packet now. |
-| `hold` | boolean | `false` | Play the window once per connection, then stay connected and quiet; ignored with `loop`. |
-| `beacon_listen` | boolean | `false` | Advertise the mesh beacon module as listening, so the app keeps `MESH_BEACON_APP` packets. |
+| `action` | `start` \| `stop` | required | `start` serves a session, `stop` ends one or all. |
+| `session_id` | string | `null` | `stop` only: session to stop; omit to stop all. |
+| `source` | string | `null` | `start` only: `meshcon`/`sim`, `burningman`, `defcon`, `conference-stress` (generated meshes), a `*.db`/`*.db.gz` SQLite capture or a recorder `*.jsonl`. Default `meshcon`. |
+| `kind` | string | `null` | `start` only: `auto` infers it from `source`; or `sim`, `sqlite`, `jsonl`. Default `auto`. |
+| `host` | string | `null` | `start` only: listen address; `0.0.0.0` (the default) serves every interface. |
+| `port` | integer | `null` | `start` only: TCP port the session listens on for the app. Default 4403. |
+| `speed` | number | `null` | `start` only: multiplier on the capture's own cadence. Default 1.0. |
+| `rate` | number | `null` | `start` only: steady packets per second, ignoring capture timing; wins over `speed`. |
+| `duration` | number | `null` | `start` only: play the whole window in N wall-clock seconds; wins over `rate`. |
+| `max_gap` | number | `null` | `start` only: cap on idle seconds between packets. Default 20. |
+| `start` | string | `null` | `start` only: window start, ISO-8601 (UTC when no zone is given). |
+| `end` | string | `null` | `start` only: window end, ISO-8601. |
+| `loop` | boolean | `null` | `start` only: repeat the window when it ends. Default false. |
+| `limit_nodes` | integer | `null` | `start` only: cap on a file source's node DB. Default 200. |
+| `node_delay` | number | `null` | `start` only: seconds between NodeInfos during the node DB download. Default 0.01. |
+| `channels` | list of object | `null` | `start` only: channel list that splits a SQLite capture by OTA hash with real PSKs, each `{"name", "psk", "primary", "ota_hashes", "catch_all"}`. |
+| `announce_interval` | number | `null` | `start` only: seconds between "Replay Clock" progress posts to the busiest channel; 0 (the default) is off. |
+| `stats_interval` | number | `null` | `start` only: seconds between the connected node's LocalStats updates; 0 keeps only the initial snapshot. Default 5. |
+| `dupe_every` | integer | `null` | `start` only: simulate a duplicate radio receive every Nth packet; 0 (the default) is off. |
+| `modem_preset` | string | `null` | `start` only: advertised LoRa preset. Default `LONG_FAST`. |
+| `firmware_edition` | string | `null` | `start` only: the app's event banner, such as `VANILLA` (the default), `DEFCON`, `BURNING_MAN` or `HAMVENTION`. |
+| `firmware_version` | string | `null` | `start` only: reported firmware build; omit for the edition's default. |
+| `observer_lat` | integer | `null` | `start` only: connected node's latitude in 1e-7 degrees; omit for the capture's median position. |
+| `observer_lon` | integer | `null` | `start` only: connected node's longitude in 1e-7 degrees; omit for the capture's median position. |
+| `observer_num` | integer | `null` | `start` only: this session's node number; omit for the process default (`MESHTASTIC_REPLAY_OBSERVER_NUM`). |
+| `sim_nodes` | integer | `null` | `start` only: node count of a generated mesh. Default 800. |
+| `sim_days` | integer | `null` | `start` only: days of traffic a generated mesh spans, ending now unless `start` is set. Default 3. |
+| `sim_seed` | integer | `null` | `start` only: seed for a generated mesh. Default 1337. |
+| `sim_profile` | string \| object | `null` | `start` only: overrides deep-merged over a generated preset, as a dict or JSON object, never a file path. |
+| `fuzz` | string \| object | `null` | `start` only: makes the stream hostile: a preset (`light`, `parser`, `adversary`, `chaos`) or a dict of overrides with an optional `preset` base. |
+| `fuzz_seed` | integer | `null` | `start` only: fuzz seed, so a crash reproduces. Default 0. |
+| `mdns` | boolean | `null` | `start` only: advertise the session over mDNS as `_meshtastic._tcp`; omit for on unless bound to loopback only. |
+| `local_metrics_interval` | number | `null` | `start` only: seconds between the connected node's `DEVICE_METRICS` packets; 0 is off. Default 300. |
+| `clock_anchor` | integer | `null` | `start` only: epoch seconds the window's last packet is stamped as, so sessions sharing it show identical times; omit to stamp each packet now. |
+| `hold` | boolean | `null` | `start` only: play the window once per connection, then stay connected and quiet; ignored with `loop`. Default false. |
+| `beacon_listen` | boolean | `null` | `start` only: advertise the mesh beacon module as listening, so the app keeps `MESH_BEACON_APP` packets. Default false. |
 
-### `replay_status`
+### `sim_status`
 
 Read-only, idempotent.
 
-Status of replay sessions: connection state, packets sent and total, mode.
+Status of simulated radio sessions: connection state, packets sent and total, mode.
 
 Returns one session's `{id, capture, listen, connect, mode, target_rate,
 achieved_rate, packets_total, packets_sent, injected, connected, client, ended, error,
@@ -1954,18 +1958,6 @@ fuzz, mdns, ...}`, `{sessions: [...]}` for all, or `{error}` for an unknown id.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `session_id` | string | `null` | One session's id; omit for every running session. |
-
-### `replay_stop`
-
-Destructive.
-
-Stop a replay session, or every session when `session_id` is omitted.
-
-Returns `{stopped}`, the ids it stopped.
-
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `session_id` | string | `null` | Session to stop; omit to stop all. |
 
 ## rf
 
@@ -2497,7 +2489,7 @@ Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
+| `session_id` | string | required | Session id from `sim(action="start")`. |
 | `kind` | string | required | `waypoint`, `position`, `text`, `nodeinfo` or `raw`. |
 | `args` | object | `null` | Fields for `kind`. `waypoint` takes `lat`, `lon`, `name`, `geofence_radius`, `bbox`, `notify_on_enter`, `notify_on_exit`, `notify_favorites_only`, `icon`; `position` takes `lat`, `lon`, `altitude`; `text` takes `body`; `nodeinfo` takes `id`, `long_name`, `short_name`, `hw_model`, `role`; `raw` takes `portnum`, `payload_hex`. |
 | `from_node` | integer | `null` | Sender node number; omit for a synthetic injector node. |
@@ -2518,7 +2510,7 @@ Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
+| `session_id` | string | required | Session id from `sim(action="start")`. |
 | `message` | string | `"Mesh beacon \u2014 join the network"` | Beacon text, at most 100 bytes on firmware. |
 | `from_node` | integer | `null` | Sender node number; omit for a synthetic injector node. |
 | `channel` | string | `"LongFast"` | Channel name to send on. |
@@ -2542,7 +2534,7 @@ Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
+| `session_id` | string | required | Session id from `sim(action="start")`. |
 | `variant` | string | `"low_entropy_key"` | `low_entropy_key` (regenerated weak keys), `duplicated_public_key`, `key_verification_number_request`, `key_verification_number_inform`, `key_verification_final`, or `text`. |
 | `message` | string | `""` | Replaces firmware's wording; empty keeps it. |
 | `level` | string | `"WARNING"` | DEBUG, INFO, WARNING, ERROR or CRITICAL. |
@@ -2568,7 +2560,7 @@ Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
+| `session_id` | string | required | Session id from `sim(action="start")`. |
 | `file_name` | string | required | Reported file name; with `count` above 1 each copy gets a distinct suffix. |
 | `size_bytes` | integer | `0` | Reported file size in bytes. |
 | `count` | integer | `1` | How many entries to send. |
@@ -2587,7 +2579,7 @@ Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
+| `session_id` | string | required | Session id from `sim(action="start")`. |
 | `destination_node` | integer | required | The responding node's number. |
 | `route` | list of integer | `null` | Node numbers along the path, destination last; omitted, the path is `[from_node, destination_node]`, or a synthetic origin-relay-destination path when `from_node` is omitted too. |
 | `snr_towards` | list of integer | `null` | Per-hop SNR towards the destination; omitted, none are sent. |
@@ -2610,7 +2602,7 @@ Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `session_id` | string | required | Session id from `replay_start`. |
+| `session_id` | string | required | Session id from `sim(action="start")`. |
 | `lat` | number | required | Waypoint latitude in decimal degrees. |
 | `lon` | number | required | Waypoint longitude in decimal degrees. |
 | `name` | string | `""` | Waypoint name. |
@@ -2624,6 +2616,84 @@ Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 | `from_node` | integer | `null` | Sender node number; omit for a synthetic injector node. |
 | `channel` | string | `"LongFast"` | Channel name to send on. |
 | `count` | integer | `1` | How many copies to send. |
+
+### `replay_start`
+
+Destructive.
+
+Start a simulated Meshtastic TCP device that streams a capture to an app.
+
+An app, an AVD at `10.0.2.2:<port>`, or the Python library connects to `host:port`
+and gets a paced packet stream restamped to now. Poll `replay_status`, stop with
+`replay_stop`. Pacing, highest first: `duration`, then `rate`, then `speed`. Give
+concurrent sessions distinct `observer_num`s. Every parameter and example:
+docs/replay.md.
+
+Returns the session status, as `replay_status` reports it: `{id, capture, listen,
+connect, mode, packets_total, packets_sent, connected, ...}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `source` | string | `"meshcon"` | `meshcon`/`sim`, `burningman`, `defcon`, `conference-stress` (generated meshes), a `*.db`/`*.db.gz` SQLite capture or a recorder `*.jsonl`. |
+| `kind` | string | `"auto"` | `auto` infers it from `source`; or `sim`, `sqlite`, `jsonl`. |
+| `host` | string | `"0.0.0.0"` | Listen address; `0.0.0.0` serves every interface. |
+| `port` | integer | `4403` | TCP port the session listens on for the app. |
+| `speed` | number | `1.0` | Multiplier on the capture's own cadence. |
+| `rate` | number | `null` | Steady packets per second, ignoring capture timing; wins over `speed`. |
+| `duration` | number | `null` | Play the whole window in N wall-clock seconds; wins over `rate`. |
+| `max_gap` | number | `20.0` | Cap on idle seconds between packets. |
+| `start` | string | `null` | Window start, ISO-8601 (UTC when no zone is given). |
+| `end` | string | `null` | Window end, ISO-8601. |
+| `loop` | boolean | `false` | Repeat the window when it ends. |
+| `limit_nodes` | integer | `200` | Cap on a file source's node DB. |
+| `node_delay` | number | `0.01` | Seconds between NodeInfos during the node DB download. |
+| `channels` | list of object | `null` | Channel list that splits a SQLite capture by OTA hash with real PSKs, each `{"name", "psk", "primary", "ota_hashes", "catch_all"}`. |
+| `announce_interval` | number | `0.0` | Seconds between "Replay Clock" progress posts to the busiest channel; 0 is off. |
+| `stats_interval` | number | `5.0` | Seconds between the connected node's LocalStats updates; 0 keeps only the initial snapshot. |
+| `dupe_every` | integer | `0` | Simulate a duplicate radio receive every Nth packet; 0 is off. |
+| `modem_preset` | string | `"LONG_FAST"` | Advertised LoRa preset, such as `LONG_FAST`. |
+| `firmware_edition` | string | `"VANILLA"` | The app's event banner, such as `VANILLA`, `DEFCON`, `BURNING_MAN` or `HAMVENTION`. |
+| `firmware_version` | string | `null` | Reported firmware build; omit for the edition's default. |
+| `observer_lat` | integer | `null` | Connected node's latitude in 1e-7 degrees; omit for the capture's median position. |
+| `observer_lon` | integer | `null` | Connected node's longitude in 1e-7 degrees; omit for the capture's median position. |
+| `observer_num` | integer | `null` | This session's node number; omit for the process default (`MESHTASTIC_REPLAY_OBSERVER_NUM`). |
+| `sim_nodes` | integer | `800` | Node count of a generated mesh. |
+| `sim_days` | integer | `3` | Days of traffic a generated mesh spans, ending now unless `start` is set. |
+| `sim_seed` | integer | `1337` | Seed for a generated mesh. |
+| `sim_profile` | string \| object | `null` | Overrides deep-merged over a generated preset, as a dict or JSON object, never a file path. |
+| `fuzz` | string \| object | `null` | Makes the stream hostile: a preset (`light`, `parser`, `adversary`, `chaos`) or a dict of overrides with an optional `preset` base. |
+| `fuzz_seed` | integer | `0` | Fuzz seed, so a crash reproduces. |
+| `mdns` | boolean | `null` | Advertise the session over mDNS as `_meshtastic._tcp`; omit for on unless bound to loopback only. |
+| `local_metrics_interval` | number | `300.0` | Seconds between the connected node's `DEVICE_METRICS` packets; 0 is off. |
+| `clock_anchor` | integer | `null` | Epoch seconds the window's last packet is stamped as, so sessions sharing it show identical times; omit to stamp each packet now. |
+| `hold` | boolean | `false` | Play the window once per connection, then stay connected and quiet; ignored with `loop`. |
+| `beacon_listen` | boolean | `false` | Advertise the mesh beacon module as listening, so the app keeps `MESH_BEACON_APP` packets. |
+
+### `replay_status`
+
+Read-only, idempotent.
+
+Status of replay sessions: connection state, packets sent and total, mode.
+
+Returns one session's `{id, capture, listen, connect, mode, target_rate,
+achieved_rate, packets_total, packets_sent, injected, connected, client, ended, error,
+fuzz, mdns, ...}`, `{sessions: [...]}` for all, or `{error}` for an unknown id.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | `null` | One session's id; omit for every running session. |
+
+### `replay_stop`
+
+Destructive.
+
+Stop a replay session, or every session when `session_id` is omitted.
+
+Returns `{stopped}`, the ids it stopped.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `session_id` | string | `null` | Session to stop; omit to stop all. |
 
 ### `send_text`
 

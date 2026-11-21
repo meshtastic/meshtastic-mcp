@@ -23,7 +23,7 @@ It returns a `job_id` at once; `screenshot_set_poll` reports status, the log tai
 | `settle_s` | Seconds to wait after opening a screen before the shot. |
 | `clean_status_bar` | Pins both status bars to 9:41 with full signal and battery, as in App Store shots, and resets them afterwards (default on). |
 | `reset_apps` | First returns each app's settings (sort, filters, theme, units) to their defaults, so earlier use cannot show in the shots. Android clears the app's data and needs a debug build, which skips onboarding; iOS deletes the app's UserDefaults and keeps its stored data. |
-| `beacon_listen` | Serves both replay nodes with the mesh beacon module listening, as `replay_start(beacon_listen=True)` does. |
+| `beacon_listen` | Serves both replay nodes with the mesh beacon module listening, as `sim(action="start", beacon_listen=True)` does. |
 
 ## Requirements
 
@@ -31,4 +31,4 @@ A running Android emulator with Meshtastic-Android, and a booted iOS Simulator w
 
 ## Connecting the iOS app by hand
 
-`ios_open_url(port=<port>)` opens the app's connect link for a host-side TCP node, `meshtastic://meshtastic/connections?address=t127.0.0.1:<port>`. With a `replay_start` node on that port, the app shows "Connect to this device?"; confirm it with `ios_tap` or by hand, and the app streams the same simulated mesh the Android emulator gets at `10.0.2.2:<port>`. iOS may first ask "Open in Meshtastic?", which `ios_open_url` confirms when idb is installed (`confirmed_open_sheet`). Connect links need Meshtastic-Apple 2.7.28 or later. `ios_screenshot` then captures the screen, with `appearance` and `clean_status_bar` as above, both of which stay set on the simulator.
+`ios_open_url(port=<port>)` opens the app's connect link for a host-side TCP node, `meshtastic://meshtastic/connections?address=t127.0.0.1:<port>`. With a `sim` node on that port, the app shows "Connect to this device?"; confirm it with `ios_tap` or by hand, and the app streams the same simulated mesh the Android emulator gets at `10.0.2.2:<port>`. iOS may first ask "Open in Meshtastic?", which `ios_open_url` confirms when idb is installed (`confirmed_open_sheet`). Connect links need Meshtastic-Apple 2.7.28 or later. `ios_screenshot` then captures the screen, with `appearance` and `clean_status_bar` as above, both of which stay set on the simulator.

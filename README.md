@@ -199,10 +199,10 @@ server's registered tools. The toolsets, as `MESHTASTIC_MCP_TOOLSETS` names them
 | `apple` | [`ios_boot`](docs/tools.md#ios_boot), [`ios_list_simulators`](docs/tools.md#ios_list_simulators), [`ios_open_url`](docs/tools.md#ios_open_url), [`ios_screenshot`](docs/tools.md#ios_screenshot), [`ios_tap`](docs/tools.md#ios_tap), [`ios_type_text`](docs/tools.md#ios_type_text), [`ios_ui_dump`](docs/tools.md#ios_ui_dump), [`screenshot_set_poll`](docs/tools.md#screenshot_set_poll), [`screenshot_set_start`](docs/tools.md#screenshot_set_start) |
 | `firmware` | [`build`](docs/tools.md#build), [`build_poll`](docs/tools.md#build_poll), [`build_start`](docs/tools.md#build_start), [`clean`](docs/tools.md#clean), [`erase_and_flash`](docs/tools.md#erase_and_flash), [`flash_poll`](docs/tools.md#flash_poll), [`flash_start`](docs/tools.md#flash_start), [`get_board`](docs/tools.md#get_board), [`list_boards`](docs/tools.md#list_boards), [`pio_flash`](docs/tools.md#pio_flash), [`push_fake_nodedb`](docs/tools.md#push_fake_nodedb), [`update_flash`](docs/tools.md#update_flash), [`userprefs_get`](docs/tools.md#userprefs_get), [`userprefs_manifest`](docs/tools.md#userprefs_manifest), [`userprefs_reset`](docs/tools.md#userprefs_reset), [`userprefs_set`](docs/tools.md#userprefs_set), [`userprefs_testing_profile`](docs/tools.md#userprefs_testing_profile) |
 | `hardware` | [`capture_screen`](docs/tools.md#capture_screen), [`esptool_chip_info`](docs/tools.md#esptool_chip_info), [`esptool_erase_flash`](docs/tools.md#esptool_erase_flash), [`install`](docs/tools.md#install), [`nrf52_backup_firmware`](docs/tools.md#nrf52_backup_firmware), [`nrf52_bootloader_info`](docs/tools.md#nrf52_bootloader_info), [`nrf52_enter_uf2`](docs/tools.md#nrf52_enter_uf2), [`nrf52_factory_erase`](docs/tools.md#nrf52_factory_erase), [`nrf52_flash_uf2`](docs/tools.md#nrf52_flash_uf2), [`nrfutil_dfu`](docs/tools.md#nrfutil_dfu), [`picotool_info`](docs/tools.md#picotool_info), [`picotool_load`](docs/tools.md#picotool_load), [`serial_close`](docs/tools.md#serial_close), [`serial_list`](docs/tools.md#serial_list), [`serial_open`](docs/tools.md#serial_open), [`serial_read`](docs/tools.md#serial_read), [`touch_1200bps`](docs/tools.md#touch_1200bps), [`uhubctl_cycle`](docs/tools.md#uhubctl_cycle), [`uhubctl_list`](docs/tools.md#uhubctl_list), [`uhubctl_power`](docs/tools.md#uhubctl_power), [`vendor`](docs/tools.md#vendor) |
-| `replay` | [`cot_relay_start`](docs/tools.md#cot_relay_start), [`cot_relay_status`](docs/tools.md#cot_relay_status), [`cot_relay_stop`](docs/tools.md#cot_relay_stop), [`inject`](docs/tools.md#inject), [`replay_fuzz_presets`](docs/tools.md#replay_fuzz_presets), [`replay_start`](docs/tools.md#replay_start), [`replay_status`](docs/tools.md#replay_status), [`replay_stop`](docs/tools.md#replay_stop) |
+| `replay` | [`cot_relay_start`](docs/tools.md#cot_relay_start), [`cot_relay_status`](docs/tools.md#cot_relay_status), [`cot_relay_stop`](docs/tools.md#cot_relay_stop), [`inject`](docs/tools.md#inject), [`replay_fuzz_presets`](docs/tools.md#replay_fuzz_presets), [`sim`](docs/tools.md#sim), [`sim_status`](docs/tools.md#sim_status) |
 | `rf` | [`ble_sniff_poll`](docs/tools.md#ble_sniff_poll), [`ble_sniff_start`](docs/tools.md#ble_sniff_start), [`ble_sniff_status`](docs/tools.md#ble_sniff_status), [`ble_sniff_stop`](docs/tools.md#ble_sniff_stop), [`pa_measure`](docs/tools.md#pa_measure), [`pa_meter_status`](docs/tools.md#pa_meter_status), [`pa_sweep`](docs/tools.md#pa_sweep), [`rf_confirm_tx`](docs/tools.md#rf_confirm_tx), [`rf_scan`](docs/tools.md#rf_scan), [`vanity_apply`](docs/tools.md#vanity_apply), [`vanity_grind_poll`](docs/tools.md#vanity_grind_poll), [`vanity_grind_start`](docs/tools.md#vanity_grind_start), [`vanity_grind_stop`](docs/tools.md#vanity_grind_stop), [`vanity_preview`](docs/tools.md#vanity_preview) |
 | `sdk` | [`sdk_device_info`](docs/tools.md#sdk_device_info), [`sdk_list_nodes`](docs/tools.md#sdk_list_nodes), [`sdk_send_text`](docs/tools.md#sdk_send_text), [`sdk_status`](docs/tools.md#sdk_status) |
-| `legacy` | [`device_info`](docs/tools.md#device_info), [`esptool_raw`](docs/tools.md#esptool_raw), [`factory_reset`](docs/tools.md#factory_reset), [`get_channel_url`](docs/tools.md#get_channel_url), [`get_config`](docs/tools.md#get_config), [`list_nodes`](docs/tools.md#list_nodes), [`nrfutil_raw`](docs/tools.md#nrfutil_raw), [`picotool_raw`](docs/tools.md#picotool_raw), [`reboot`](docs/tools.md#reboot), [`replay_inject`](docs/tools.md#replay_inject), [`replay_inject_beacon`](docs/tools.md#replay_inject_beacon), [`replay_inject_client_notification`](docs/tools.md#replay_inject_client_notification), [`replay_inject_fileinfo`](docs/tools.md#replay_inject_fileinfo), [`replay_inject_traceroute`](docs/tools.md#replay_inject_traceroute), [`replay_inject_waypoint`](docs/tools.md#replay_inject_waypoint), [`send_text`](docs/tools.md#send_text), [`set_config`](docs/tools.md#set_config), [`set_debug_log_api`](docs/tools.md#set_debug_log_api), [`set_owner`](docs/tools.md#set_owner), [`shutdown`](docs/tools.md#shutdown) |
+| `legacy` | [`device_info`](docs/tools.md#device_info), [`esptool_raw`](docs/tools.md#esptool_raw), [`factory_reset`](docs/tools.md#factory_reset), [`get_channel_url`](docs/tools.md#get_channel_url), [`get_config`](docs/tools.md#get_config), [`list_nodes`](docs/tools.md#list_nodes), [`nrfutil_raw`](docs/tools.md#nrfutil_raw), [`picotool_raw`](docs/tools.md#picotool_raw), [`reboot`](docs/tools.md#reboot), [`replay_inject`](docs/tools.md#replay_inject), [`replay_inject_beacon`](docs/tools.md#replay_inject_beacon), [`replay_inject_client_notification`](docs/tools.md#replay_inject_client_notification), [`replay_inject_fileinfo`](docs/tools.md#replay_inject_fileinfo), [`replay_inject_traceroute`](docs/tools.md#replay_inject_traceroute), [`replay_inject_waypoint`](docs/tools.md#replay_inject_waypoint), [`replay_start`](docs/tools.md#replay_start), [`replay_status`](docs/tools.md#replay_status), [`replay_stop`](docs/tools.md#replay_stop), [`send_text`](docs/tools.md#send_text), [`set_config`](docs/tools.md#set_config), [`set_debug_log_api`](docs/tools.md#set_debug_log_api), [`set_owner`](docs/tools.md#set_owner), [`shutdown`](docs/tools.md#shutdown) |
 <!-- END GENERATED TOOLSETS -->
 ## Destructive tools ask first
 
@@ -287,12 +287,13 @@ behaving like a radio sitting in the mesh. Useful for app/UI development and tes
 hardware and a fully controllable, reproducible mesh.
 
 ```python
-replay_start(source="meshcon")  # generated synthetic mesh (no file)
-replay_start(source="capture.db", speed=30)  # SQLite capture (full-fidelity payloads)
-replay_start(source="capture.db", duration=150)  # whole capture in 2.5 min (stress test)
+sim(action="start", source="meshcon")  # generated synthetic mesh (no file)
+sim(action="start", source="capture.db", speed=30)  # SQLite capture (full-fidelity payloads)
+sim(action="start", source="capture.db", duration=150)  # whole capture in 2.5 min (stress test)
 # or from the shell (foreground, mDNS-advertised so apps auto-discover it):
 #   meshtastic-mcp replay conference-stress --nodes 1600 --rate 140 --loop
-replay_start(
+sim(
+    action="start",
     source="event.db",
     channels=[  # split by OTA hash + decrypt
         {"name": "Primary", "psk": "AQ==", "primary": True},
@@ -300,19 +301,19 @@ replay_start(
         {"name": "Unknown", "catch_all": True},
     ],
 )
-replay_start(source="defcon", sim_profile={"bots": {"count": 17}})  # BBS bots + tapback storms
-replay_start(source="meshcon", fuzz="adversary")  # lace it with bad actors
-replay_start(source="capture.db", announce_interval=30)  # in-app "Replay Clock" progress
+sim(action="start", source="defcon", sim_profile={"bots": {"count": 17}})  # BBS bots + tapbacks
+sim(action="start", source="meshcon", fuzz="adversary")  # lace it with bad actors
+sim(action="start", source="capture.db", announce_interval=30)  # in-app "Replay Clock" progress
 inject(sid, "waypoint", lat=37, lon=-122, geofence_radius=500, notify_on_enter=True)
-replay_status()
-replay_stop()
+sim_status()
+sim(action="stop")
 ```
 
 - **Sources** (`replay/capture.py`): SQLite captures (`*.db`/`.gz`, the Burning Man / DEF CON /
   MeshCon schema), the recorder's own `packets.jsonl`, or an in-memory synthetic mesh.
 - **Pacing & discovery**: `duration=N` streams the whole windowed capture in exactly N seconds
   (whatever its packet count); else `rate` (steady pkts/sec); else `speed` (cadence multiplier).
-  Pacing is drift-free (deadline-anchored), and `replay_status` reports `target_rate` vs the live
+  Pacing is drift-free (deadline-anchored), and `sim_status` reports `target_rate` vs the live
   `achieved_rate`, so a stress run is self-verifying. Sessions advertise over mDNS/Bonjour as
   `_meshtastic._tcp` with firmware-style TXT records, so apps auto-discover them in network
   discovery (no manual IP entry; `mdns=False` to opt out). `meshtastic-mcp replay` serves all of
@@ -356,17 +357,17 @@ replay_stop()
   nodes, noise floor → the "Local Stats" view) — with channel-util and packets-rx tracking the live
   load;
   `modem_preset` / `firmware_edition` set the advertised LoRa preset and the app's event banner
-  (e.g. `DEFCON`, `HAMVENTION`); `replay_status` returns `connect` host:port hints; a send timeout
+  (e.g. `DEFCON`, `HAMVENTION`); `sim_status` returns `connect` host:port hints; a send timeout
   keeps a stalled app from hanging a session.
-- **Fuzzer** (`replay/fuzz.py`, `replay_start(fuzz=…)`, `replay_fuzz_presets`): turn the stream
+- **Fuzzer** (`replay/fuzz.py`, `sim(action="start", fuzz=…)`, `replay_fuzz_presets`): turn the stream
   hostile to test decoder + UI robustness. *Protocol* faults (corrupt/garbage/truncated payloads,
   portnum↔body mismatch, invalid-UTF-8 text, impossible telemetry, teleporting positions, hop
   anomalies, drop/duplicate) and *bad-actor campaigns* (evil-twin impersonation, flooding, GPS
   spoofing, forged ACKs, rogue ADMIN reboot/factory-reset, malicious waypoints). Seeded so a
-  crash reproduces; activity surfaces under `fuzz` in `replay_status`. Presets: `light`,
+  crash reproduces; activity surfaces under `fuzz` in `sim_status`. Presets: `light`,
   `parser`, `adversary`, `chaos`.
 
-Every `replay_start` parameter, the `sim_profile` keys and the inject tools are in
+Every `sim` parameter, the `sim_profile` keys and the inject tools are in
 [docs/replay.md](docs/replay.md).
 
 ## Bundled skills

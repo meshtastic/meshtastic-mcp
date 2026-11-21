@@ -79,6 +79,9 @@ _GROUPS: dict[str, frozenset[str]] = {
     # The pre-1.0 names a `next` tool replaces. Opt-in: only a client that names it gets them.
     "legacy": frozenset(
         {
+            "replay_start",
+            "replay_status",
+            "replay_stop",
             "device_info",
             "esptool_raw",
             "factory_reset",
@@ -101,7 +104,8 @@ _GROUPS: dict[str, frozenset[str]] = {
             "send_text",
         }
     ),
-    "replay": frozenset({"inject"}),
+    # `sim` and `sim_status` match no `replay_` prefix.
+    "replay": frozenset({"inject", "sim", "sim_status"}),
 }
 _PREFIXES: dict[str, tuple[str, ...]] = {
     "android": ("android_", "atak_"),
