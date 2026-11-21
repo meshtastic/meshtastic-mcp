@@ -173,6 +173,13 @@ class ConnectionError(RuntimeError):
     pass
 
 
+def not_answering() -> tuple[type[BaseException], ...]:
+    """What `connect` raises for a radio that is not answering yet, as when it restarts."""
+    from meshtastic.mesh_interface import MeshInterface  # type: ignore[import-untyped]
+
+    return (ConnectionError, OSError, TimeoutError, MeshInterface.MeshInterfaceError)
+
+
 def is_tcp_port(port: str | None) -> bool:
     return port is not None and port.startswith(TCP_SCHEME)
 

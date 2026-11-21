@@ -290,7 +290,7 @@ def configure(
                 after = _uptime(iface)
                 mismatches, side_effects = _read_back(plan, iface)
             break
-        except (connection.ConnectionError, OSError, TimeoutError) as exc:
+        except connection.not_answering() as exc:
             last_error = str(exc)
             if time.monotonic() >= deadline:
                 out.update(verified=False, restarted=None)

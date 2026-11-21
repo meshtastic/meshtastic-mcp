@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastmcp.exceptions import ToolError
+from meshtastic.mesh_interface import MeshInterface
 from meshtastic.protobuf import config_pb2, localonly_pb2, mesh_pb2
 
 from meshtastic_mcp import backends, config_snapshot, connection, leases
@@ -215,7 +216,7 @@ def test_a_radio_that_never_comes_back_is_reported(radio, monkeypatch) -> None:
     def flaky(port=None, timeout_s=8.0, linger_s=0.0):
         calls["n"] += 1
         if calls["n"] > 1:
-            raise connection.ConnectionError("Serial open failed")
+            raise MeshInterface.MeshInterfaceError("Timed out waiting for connection completion")
         with real(port=port, timeout_s=timeout_s) as iface:
             yield iface
 
@@ -223,6 +224,7 @@ def test_a_radio_that_never_comes_back_is_reported(radio, monkeypatch) -> None:
     result = core.configure(changes={"device.role": "CLIENT_MUTE"}, timeout_s=0.01)
     assert result["verified"] is False and result["restarted"] is None
     assert "did not answer again" in result["errors"]["read_back"]
+    assert result["snapshot"]  # the way back survives the failure
 
 
 def test_a_radio_that_does_not_report_uptime_leaves_restarted_unknown(radio, monkeypatch) -> None:

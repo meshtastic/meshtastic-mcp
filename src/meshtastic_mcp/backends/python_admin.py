@@ -77,7 +77,7 @@ def admin(
             with connection.connect(port=port, timeout_s=8.0) as iface:
                 after = _uptime(iface)
             break
-        except (connection.ConnectionError, OSError, TimeoutError) as exc:
+        except connection.not_answering() as exc:
             last = str(exc)
             if time.monotonic() >= deadline:
                 out.update(back=False, error=f"the radio did not answer again: {last}")

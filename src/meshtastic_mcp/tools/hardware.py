@@ -758,7 +758,7 @@ def _await_radio(port: str) -> dict[str, Any]:
             with connection.connect(port=port, timeout_s=8.0) as iface:
                 version = getattr(iface.metadata, "firmware_version", None)
             return {"back": True, "firmware_version": version}
-        except (connection.ConnectionError, OSError, TimeoutError) as exc:
+        except connection.not_answering() as exc:
             last = str(exc)
             time.sleep(3.0)
     return {"back": False, "error": f"the radio did not answer after the install: {last}"}

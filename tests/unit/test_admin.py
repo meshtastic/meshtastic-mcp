@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastmcp.exceptions import ToolError
+from meshtastic.mesh_interface import MeshInterface
 from meshtastic.protobuf import mesh_pb2
 
 from meshtastic_mcp import backends, confirm, connection
@@ -112,7 +113,14 @@ def test_a_node_db_action_without_a_node_is_refused(radio) -> None:
         _run(action="ignore")
 
 
-def test_a_radio_that_does_not_come_back_is_reported(radio, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        connection.ConnectionError("Serial open failed"),
+        MeshInterface.MeshInterfaceError("Timed out waiting for connection completion"),
+    ],
+)
+def test_a_radio_that_does_not_come_back_is_reported(radio, monkeypatch, error) -> None:
     real = connection.connect
     calls = {"n": 0}
 
@@ -120,7 +128,7 @@ def test_a_radio_that_does_not_come_back_is_reported(radio, monkeypatch) -> None
     def flaky(port=None, timeout_s=8.0, linger_s=0.0):
         calls["n"] += 1
         if calls["n"] > 1:
-            raise connection.ConnectionError("Serial open failed")
+            raise error
         with real(port=port) as iface:
             yield iface
 
