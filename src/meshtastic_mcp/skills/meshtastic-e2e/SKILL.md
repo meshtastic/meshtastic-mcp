@@ -28,11 +28,19 @@ test stimulates one plane and asserts on the *other*.
 - `references/loop-config-writeback.md` — app setting persists on device (RAM + NVS)
 - `references/loop-resilience.md` — uhubctl power-cycle fault injection
 - `references/emulator-lab.md` — hardware-free Android: AVD app over TCP + native UDP mesh
-- `references/replay-app-features.md` — **drive app behavior via the replay engine**: feature injection (geofence/waypoints/alerts via `replay_inject`), sustained-load/stress (`conference-stress` preset, `duration`/`rate` pacing, self-verifying `achieved_rate`), mDNS/Bonjour auto-discovery, traceroute-log population, and tapback/bot-plane reactions; logcat/notification oracles + gotchas
+- `references/replay-app-features.md` — **drive app behavior via the replay engine**: feature injection (geofence/waypoints/alerts via `inject`), sustained-load/stress (`conference-stress` preset, `duration`/`rate` pacing, self-verifying `achieved_rate`), mDNS/Bonjour auto-discovery, traceroute-log population, and tapback/bot-plane reactions; logcat/notification oracles + gotchas
 - `references/simulator-apple.md` — hardware-free Apple: iOS Simulator / macOS app over TCP (`127.0.0.1`) + native UDP mesh
 - `references/journeys.md` — **journey-driven UI (recommended over hardcoded coordinates)**: drive the app from a goal via the live a11y tree, version-resilient. Ships journey XML in `references/journeys/`. For Android, hand the journey to **Artemis** (`mobile_run_task`) rather than looping inline — same XML, runs out of context. Its verification is fail-open, so the recorder stays the verdict.
 - `references/vision-oracle.md` — use a screenshot + vision as the assertion when the a11y tree is empty (WebView/Canvas/animation).
 - `references/triage.md` — dual-plane root-cause analysis of a FAIL (pairs with the `triage_e2e_failure` MCP prompt).
+
+**MCP entry point for the app plane:** `app_view(platform, action)` reads (screenshot, UI dump,
+`find_text`, `poll_for_text`, logcat) and `app(platform, action)` changes (tap, swipe, type,
+connect, send) on `android`, `ios` or `desktop`. Android and iOS actions call the per-platform
+`android_*` and `ios_*` tools, which stay available. `desktop` forwards to the debug desktop
+app's own loopback MCP server (start the app with `MESHTASTIC_MCP_PORT=<port>`, point
+`MESHTASTIC_MCP_DESKTOP_URL` at `http://127.0.0.1:<port>/mcp`); it has `connection_state`,
+`nodes`, `connect` and `send_text`, no UI.
 
 The device plane (`mesh_e2e.py`, native nodes, recorder) is platform-neutral and shared; only
 the app plane differs (Android CLI+adb, Apple `xcrun simctl`+`idb`, or the Compose Hot Reload

@@ -49,6 +49,40 @@ def _checked(result: dict[str, Any], what: str) -> dict[str, Any]:
     return result
 
 
+def _session_node(row: dict[str, Any]) -> dict[str, Any]:
+    node_id = row.get("id")
+    num = int(node_id[1:], 16) if isinstance(node_id, str) and node_id.startswith("!") else None
+    return {
+        "node_num": num,
+        "node_id": node_id,
+        "long_name": row.get("long_name"),
+        "short_name": row.get("short_name"),
+        "hw_model": row.get("hw_model"),
+        "hops_away": row.get("hops_away"),
+        "snr": row.get("snr"),
+        "last_heard": row.get("last_heard"),
+    }
+
+
+def _read_session(
+    live: Any, target: str, parts: Collection[str], detail: str, timeout_s: float
+) -> dict[str, Any]:
+    """Read through the long-lived `cli mcp` session, which keeps the radio connected."""
+    live.ensure(sdk_cli.normalize_transport(target), timeout_s)
+    listing = live.call("nodes", {}, timeout_s)
+    rows = [_session_node(r) for r in listing.get("nodes") or []]
+    out: dict[str, Any] = {"target": target}
+    if "summary" in parts:
+        state = live.call("connection_state", {}, timeout_s)
+        own = next((r for r in rows if r["node_id"] == state.get("own")), {})
+        out["summary"] = {**own, "num_nodes": listing.get("count")}
+        if detail == "full":
+            out["summary"]["connection"] = state
+    if "nodes" in parts:
+        out["nodes"] = rows
+    return out
+
+
 class SdkBackend:
     name = "sdk"
     parts = frozenset({"summary", "nodes"})
@@ -75,6 +109,12 @@ class SdkBackend:
                 f"{target} needs the SDK backend, and its CLI is not installed; "
                 f"set {sdk_cli.CLI_ENV} or {sdk_cli.ROOT_ENV}"
             )
+        from .sdk_session import session
+
+        cli = sdk_cli.cli_path()
+        live = session(cli) if cli else None
+        if live is not None:
+            return _read_session(live, target, parts, detail, timeout_s)
         timeout_ms = int(timeout_s * 1000)
         out: dict[str, Any] = {"target": target}
         if "summary" in parts:
@@ -99,3 +139,56 @@ class SdkBackend:
         save_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
     ) -> dict[str, Any]:
         raise BackendError("the SDK backend does not write config yet; use a serial or TCP target")
+
+    def admin(
+        self,
+        target: str | None,
+        action: str,
+        node_id: str | int | None,
+        seconds: int,
+        wait_back: bool,
+        timeout_s: float,
+    ) -> dict[str, Any]:
+        raise BackendError("the SDK backend has no admin actions yet; use a serial or TCP target")
+
+    def send(
+        self,
+        target: str | None,
+        to: str | int | None,
+        payload: dict[str, Any],
+        channel: int,
+        want_ack: bool,
+        hop_limit: int | None,
+        wait_s: float,
+    ) -> dict[str, Any]:
+        kind, value = next(iter(payload.items()))
+        if kind != "text":
+            raise BackendError("the SDK backend sends text only; use a serial or TCP target")
+        if not target or not sdk_cli.available():
+            raise BackendError(f"sending over {target} needs the SDK CLI; set {sdk_cli.CLI_ENV}")
+        dest = "BROADCAST" if to in (None, "", "^all") else str(to)
+        if dest.startswith("!"):
+            dest = str(int(dest[1:], 16))
+        res = sdk_cli.send_text(
+            target, str(value), to=dest, channel=channel, await_ms=int(wait_s * 1000)
+        )
+        error = res.get("error") or {}
+        results = [i for i in res["by_type"].get("info", []) if i.get("kind") == "send-result"]
+        queued = [i for i in res["by_type"].get("info", []) if i.get("kind") == "send-queued"]
+        if error.get("code") == "timeout":
+            delivery = "no_ack"
+        elif results and results[-1].get("outcome") == "success":
+            delivery = "delivered"
+        elif results:
+            delivery = f"failed:{results[-1].get('reason')}"
+        elif not res.get("ok"):
+            raise BackendError(f"the SDK CLI could not send: {error.get('message') or res}")
+        else:
+            delivery = None
+        return {
+            "target": target,
+            "packet_id": queued[0].get("messageId") if queued else None,
+            "destination": dest,
+            "kind": "text",
+            "delivery": delivery,
+        }

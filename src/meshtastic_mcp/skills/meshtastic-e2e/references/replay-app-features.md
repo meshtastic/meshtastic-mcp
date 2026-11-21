@@ -7,7 +7,7 @@ mesh, and you control the *exact* packets, pacing, and even how the device adver
 is lighter and more deterministic than the `meshtasticd` native-node lab.
 
 Five recipes below. All share one session model: `sim(action="start")` returns a `sid`; drive it with
-`replay_inject` / `sim_status`; tear down with `sim(action="stop")`. The **CLI** (`meshtastic-mcp
+`inject` / `sim_status`; tear down with `sim(action="stop")`. The **CLI** (`meshtastic-mcp
 replay …`) serves the same engine standalone (foreground, Ctrl-C to stop) when you don't have an
 MCP session — e.g. a human eyeballing the app, or a shell-scripted soak.
 
@@ -18,16 +18,18 @@ MCP session — e.g. a human eyeballing the app, or a shell-scripted soak.
 ```
 sim(action="start", source="meshcon", port=4403)  # a fake radio on the host → sid
 # app/AVD connects its TCP device to 10.0.2.2:4403
-replay_inject(sid, "waypoint", {...geofence...})   # push the feature's trigger packet(s)
-replay_inject(sid, "position", {...}, from_node=…) # a node crossing the boundary
+inject(sid, "waypoint", lat=…, lon=…, geofence_radius=…)  # push the feature's trigger packet
+inject(sid, "position", args={...}, from_node=…)          # a node crossing the boundary
 # assert in the app: poll_notification / poll_logcat / ui tree / screenshot
 sim(action="stop", session_id=sid)
 ```
 
-`replay_inject` builds a packet from a high-level `kind`+`args` and emits it onto the live
-connection (same send path as the stream). Kinds: `waypoint` (incl. `geofence_radius`, `bbox`
-`[south,west,north,east]`, `notify_on_enter/exit/favorites_only`), `position`, `text`, `nodeinfo`,
-`beacon`, `traceroute`, `raw`. `fuzz=True` runs the packet through the session's fuzz mutator first
+`inject` builds a packet or FromRadio message from `kind` and emits it onto the live
+connection (same send path as the stream). Kinds: `waypoint` (typed `lat`, `lon`, `geofence_radius`,
+`bbox` `[south,west,north,east]`, `notify_on_enter/exit/favorites_only`), `beacon`, `traceroute`,
+`fileinfo` and `client_notification` (typed parameters), `position`, `text`, `nodeinfo` and `raw`
+(fields in `args`), and `packet` (`packet_kind` plus `args`, for a hand-built packet). A parameter
+from another kind is refused. `fuzz=True` runs the packet through the session's fuzz mutator first
 (inject a **deliberately malformed** trigger to test the decoder). For a fully scripted run, build a
 `capture.from_events([...])` and `sim(action="start")` that instead.
 
@@ -96,7 +98,7 @@ emitted count) and `stats_sent`/`duplicates_seen` for the two paces separately. 
 are `TELEMETRY_APP` from the observer node — the app only logs a node's *own* telemetry to these
 views when `packet.from == connectedNode`.
 
-**Client notifications:** `replay_inject_client_notification(sid, variant=…)` pushes the device→
+**Client notifications:** `inject(sid, "client_notification", variant=…)` pushes the device→
 client `ClientNotification`s real firmware raises — events you can't reproduce on a healthy device,
 so the app's notification/dialog UI is otherwise untestable. `variant`: `low_entropy_key` (the
 pre-2.8 "Compromised keys were detected and regenerated." alert — pairs with the firmware fix that
@@ -155,7 +157,7 @@ replay.
   responder answers with a well-formed `RouteDiscovery` addressed back to you, echoing your
   `request_id`, so the outgoing traceroute resolves in-UI (hop list + SNR + `route back`).
 
-> Craft a response by hand with `replay_inject(sid, "traceroute", {route:[…relays], snr_towards:[…],
+> Craft a response by hand with `inject(sid, "packet", packet_kind="traceroute", args={route:[…relays], snr_towards:[…],
 > route_back:[…], snr_back:[…], request_id: <target>}, from_node=<dest>, to_node=<requester>)`.
 > `request_id` must be nonzero or the app treats it as a request and drops it.
 
@@ -181,7 +183,7 @@ poll_for_text("147")   # reaction count on the legendary message
 the message list stays smooth while thousands of reactions arrive (load angle). Tune volume with
 `sim_profile={"bots": {"count": 17, "tapback_storm": 150, "storms_per_day": 200}}`.
 
-**Targeted single reaction:** `replay_inject(sid, "text", {"body": "👍", "reply_id": <target_id>,
+**Targeted single reaction:** `inject(sid, "text", args={"body": "👍", "reply_id": <target_id>,
 "emoji": True}, from_node=…)`. The catch: `reply_id` must be a packet id the app has actually
 received. Inject doesn’t return the ids it mints, so for a deterministic target either react within
 a scripted `from_events` capture (you control the ids), or lean on the bot plane (which threads ids
@@ -206,7 +208,7 @@ internally) rather than hand-injecting the pair.
 ## Gotchas (cost real time when missed)
 
 - **The replay DUT must outlive a single tool call.** Replay sessions live in the process that
-  started them — drive replay via the **persistent MCP server** (`sim`/`replay_inject`/
+  started them — drive replay via the **persistent MCP server** (`sim`/`inject`/
   `sim_status` across calls), or the **`meshtastic-mcp replay` CLI** for a standalone foreground
   server. Shell-*backgrounded* scripts get reaped between commands; if you must script standalone,
   run replay + drive + assert in **one** process, or use the CLI (it blocks until Ctrl-C).
