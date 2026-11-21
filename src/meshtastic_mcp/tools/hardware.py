@@ -629,6 +629,10 @@ async def nrf52_backup_firmware(port: str | None = None) -> dict[str, Any]:
 
 def _check_softdevice(drive: dict[str, Any], uf2_path: str) -> dict[str, Any]:
     image = nrf52_bootloader.uf2_file_info(uf2_path)
+    # A bootloader self-update image (family 0xd663823c) starts at 0 by design; the bootloader
+    # moves it into place, so the application start does not apply.
+    if image.get("is_bootloader_update"):
+        return image
     softdevice = (drive.get("info") or {}).get("softdevice")
     start = _SD_APP_START.get(softdevice or "")
     target = image.get("target_start")
@@ -648,8 +652,10 @@ async def nrf52_flash_uf2(
 
     Several times faster than serial DFU, and no touch or DFU window is involved. The board
     must be in UF2 mode (`nrf52_enter_uf2`). Refuses a file that is not a UF2 and an image built
-    for the other SoftDevice than the one INFO_UF2.TXT reports. Requires confirm=True, or the
-    user's answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
+    for the other SoftDevice than the one INFO_UF2.TXT reports; a bootloader self-update image
+    (`update-*.uf2`) skips that check, says `bootloader_update: true`, and asks even with
+    confirm=True under `MESHTASTIC_MCP_CONFIRM=human`. Requires confirm=True, or the user's
+    answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
     result and logged before the wait; follow it with `flash_poll` if the call is canceled. A
     copy the bootloader did not take is a tool error.
 
@@ -662,10 +668,14 @@ async def nrf52_flash_uf2(
     """
     drive = await _off_loop(lambda: _uf2_drive(port))
     image = await _off_loop(lambda: _check_softdevice(drive, uf2_path))
+    bootloader = bool(image.get("is_bootloader_update"))
+    what = "the bootloader update " if bootloader else ""
     pending = await confirm_mod.gate(
         ctx,
-        f"flash {os.path.basename(uf2_path)} onto {drive.get('label')} at {drive.get('mount')}",
+        f"flash {what}{os.path.basename(uf2_path)} onto {drive.get('label')} at "
+        f"{drive.get('mount')}",
         confirm,
+        irreversible=bootloader,
     )
     if pending is not None:
         return cast(dict[str, Any], pending)
@@ -677,7 +687,7 @@ async def nrf52_flash_uf2(
         # A UF2 copy finishes in seconds, and flash_poll exists only with a firmware tree.
         poll_tool=None,
     )
-    return {**result, "image": image}
+    return {**result, "image": image, "bootloader_update": bootloader}
 
 
 def _uf2_result(res: dict[str, Any]) -> dict[str, Any]:
