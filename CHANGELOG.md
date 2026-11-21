@@ -5,6 +5,12 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **`doctor` checks the server itself** - a running `serve` on other code than this install, a
+  git or PyPI install next to a workspace checkout at another commit, and a binary that exists
+  but is off the server's PATH (systemd's default PATH has no `sbin`) are `degraded`, each with
+  the fix.
+
 ### Changed
 - **The pre-1.0 tools are opt-in** - `device_info`, `get_config`, `set_config`, `send_text`,
   `reboot`, the `replay_*` tools and the rest form a `legacy` toolset that is hidden unless named:

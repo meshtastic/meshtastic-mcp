@@ -56,6 +56,8 @@ Symptom: a tool fails because `pio`, `adb`, `xcrun`, `uhubctl` or another binary
 
 Fix: run `meshtastic-mcp doctor`. It reports each dependency as `ok`, `missing` or `degraded` and prints the install command for the host. `doctor --json` returns a `fix_commands` list that is ready to run, and the `doctor` tool gives an agent the same report. `meshtastic-mcp provision` clones the firmware, Android and Apple repositories. See [install.md](install.md).
 
+A binary that exists but is off the server's PATH shows as `degraded` with "found at <path> but not on this server's PATH". A systemd unit's default PATH has no `sbin`, which hides `uhubctl`; add its directory with an `Environment=PATH=` drop-in. `doctor` also flags a running `serve` on other code than this install (`serve`), and a git or PyPI install next to a `$MESHTASTIC_WORKSPACE/meshtastic-mcp` checkout at another commit (`install-source`); reinstall editable from the checkout and restart the server.
+
 ## The UF2 drive is not mounted on a headless host
 
 Symptom: `nrf52_bootloader_info`, `nrf52_backup_firmware` or `nrf52_flash_uf2` cannot find the board's drive, although the board is in UF2 mode.
