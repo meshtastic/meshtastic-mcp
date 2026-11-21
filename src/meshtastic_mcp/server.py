@@ -805,6 +805,7 @@ _FINDS_ITS_OWN_BOARD = frozenset(
         "nrf52_factory_erase",
         "nrf52_flash_uf2",
         "nrfutil_raw",
+        "picotool_load",
         "picotool_raw",
         "vendor",
     }
@@ -813,16 +814,28 @@ _PORT_FLAGS = ("--port", "-p")
 
 
 def _port_in_args(args: Any) -> str | None:
+    """The one port `args` names; a tool takes the last of several, so two are refused."""
     if not isinstance(args, list):
         return None
-    for flag, value in itertools.pairwise(args):
-        if flag in _PORT_FLAGS and isinstance(value, str):
-            return value
-    return None
+    found = {
+        value
+        for flag, value in itertools.pairwise(args)
+        if flag in _PORT_FLAGS and isinstance(value, str)
+    }
+    found |= {
+        a.split("=", 1)[1]
+        for a in args
+        if isinstance(a, str) and a.startswith(tuple(f + "=" for f in _PORT_FLAGS))
+    }
+    if len(found) > 1:
+        raise ToolError(f"args name more than one port ({', '.join(sorted(found))}); pass one.")
+    return next(iter(found), None)
 
 
 def _takes_device_port(tool: Tool) -> bool:
     props = (tool.parameters or {}).get("properties", {})
+    if tool.name in _FINDS_ITS_OWN_BOARD:
+        return True
     return ("port" in props or "node" in props) and tool.name not in _PORT_NOT_A_DEVICE
 
 

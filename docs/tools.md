@@ -1624,6 +1624,7 @@ or the user's answer when the client can ask.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
 | `uf2_path` | string | required | The .uf2 file to load. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
 
@@ -2439,6 +2440,7 @@ Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
 | `args` | list of string | required | The nrfutil arguments, from a trusted source only. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. Only calls outside the read-only list ask. |
 
@@ -2458,6 +2460,7 @@ Returns `{exit_code, stdout, stderr, stdout_tail, stderr_tail, duration_s}`.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
 | `args` | list of string | required | The picotool arguments, from a trusted source only. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. Only calls outside info, version and help ask. |
 
