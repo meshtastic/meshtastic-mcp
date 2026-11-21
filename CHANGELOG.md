@@ -5,6 +5,50 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **`doctor` checks the server itself** - a running `serve` on other code than this install, a
+  git or PyPI install next to a workspace checkout at another commit, and a binary that exists
+  but is off the server's PATH (systemd's default PATH has no `sbin`) are `degraded`, each with
+  the fix. A `serve` running from a checkout records its commit, so `doctor` flags one started
+  before the last pull, and the server names the commit it runs in its startup line.
+- **`nrf52_mount_uf2` and `nrf52_eject_uf2`** - mount a board's UF2 drive on a host that does not
+  automount it, and eject it the way a desktop does, through udisks2 or `diskutil`, for bootloader
+  benches; flashing never needs them. A polkit refusal over SSH prints the one-shot rule, and
+  `doctor` reports it on Linux.
+- **A hidden or removed tool name says what replaces it** - a call to `device_info` while
+  `legacy` is hidden names `inspect` and the `all,legacy` opt-in instead of `Unknown tool`.
+
+### Changed
+- **The pre-1.0 tools are opt-in** - `device_info`, `get_config`, `set_config`, `send_text`,
+  `reboot`, the `replay_*` tools and the rest form a `legacy` toolset that is hidden unless named:
+  `MESHTASTIC_MCP_TOOLSETS=all,legacy`. `inspect`, `configure`, `send`, `admin`, `sim` and
+  `inject` replace them, and `legacy` is removed in 1.1.
+- **Discord moved to its own server** - the `discord_*` tools are served by
+  `meshtastic-mcp-discord`, not this server.
+- **A stdio client on the bench host bridges to a running `serve`** - so one server owns the
+  radios. `MESHTASTIC_MCP_STANDALONE=1` runs a separate server anyway.
+- **`duckdb` is a core dependency** - for the recorder's `query` and `wait_for`.
+- **Every tool call leaves a server-log line** - on stderr, with the tool, its target radio, the
+  duration and, on failure, the reason. Argument values other than the target are never logged.
+
+### Removed
+- **The local-model tools** - `summarize_window`, `vision_oracle`, `triage_window` and the
+  `local_model_*` tools.
+
+### Fixed
+- `nrf52_flash_uf2` flashes a bootloader self-update (`update-*.uf2`), which it refused as built
+  for the other SoftDevice, and asks even with `confirm=True` under `MESHTASTIC_MCP_CONFIRM=human`.
+- A refusal from meshtastic-python (an unknown destination name, a blank owner name, a config
+  section it cannot write) is a tool error, not the end of the server.
+- Waiting for a restarted radio survives the library's handshake timeout, and a `configure` whose
+  read-back fails still returns its snapshot.
+- `admin` resets wait out the firmware's restart timer before reconnecting.
+- `install` writes a `.bin` at 0x0 only when it is a `firmware-*.factory.bin` image.
+- `MESHTASTIC_MCP_TOOLSETS` naming `discord` or `local-model` logs where they went instead of
+  stopping the server.
+- `config_diff` shows that a key or password changed, not its value, unless `reveal_secrets`.
+- A flash or vendor call that names no port is refused while another session holds a lease.
+
 ## [0.4.0] - 2026-11-17
 
 ### Added

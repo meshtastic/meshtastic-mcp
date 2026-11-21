@@ -21,6 +21,7 @@ with `wait(on_progress=...)` forwards it as MCP progress notifications.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import math
 import os
@@ -34,7 +35,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from . import config
+from . import config, leases
 
 log = logging.getLogger(__name__)
 
@@ -231,8 +232,28 @@ def start(
                     state["status"] = "cancelled"
                 state["settled"] = True
 
-    threading.Thread(target=_run, daemon=True, name=f"{kind}-{job_id}").start()
+    # The job runs in the caller's context, so the lease it was started under goes with it,
+    # and that lease is renewed until the job ends: a flash must not outlive its lease.
+    ctx = contextvars.copy_context()
+    threading.Thread(target=ctx.run, args=(_run,), daemon=True, name=f"{kind}-{job_id}").start()
+    lease = ctx.get(leases.CURRENT)
+    if lease is not None:
+        threading.Thread(
+            target=_hold_lease, args=(state, lease), daemon=True, name=f"lease-{job_id}"
+        ).start()
     return {"job_id": job_id, "status": "running", "log_path": str(log_path)}
+
+
+_LEASE_RENEW_S = 60.0
+
+
+def _hold_lease(state: dict[str, Any], lease: str) -> None:
+    while not state.get("settled"):
+        try:
+            leases.renew(lease, _LEASE_RENEW_S * 3)
+        except Exception:
+            log.exception("renewing lease for job %s", state["job_id"])
+        time.sleep(_LEASE_RENEW_S)
 
 
 def poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
@@ -370,6 +391,53 @@ async def run_sync(
         )
     # A failed result comes back as-is with its job_id; the caller decides it is an error.
     return {**state["result"], "job_id": job_id}
+
+
+Poller = Callable[[str, int], dict[str, Any]]
+_pollers: dict[str, Poller] = {}
+# Kinds whose results are secret (a grind's hits are private keys). `serve` shares one
+# registry among clients, so `listing` leaves them out: only the caller holding the id reads one.
+_private_kinds: set[str] = set()
+
+
+def register_poller(kind: str, fn: Poller, *, private: bool = False) -> None:
+    """Make `view` return `fn(job_id, tail_lines)` for jobs of `kind`, with the domain's fields."""
+    _pollers[kind] = fn
+    if private:
+        _private_kinds.add(kind)
+
+
+def view(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
+    """What the job's own poll tool would return: its domain poller, else `poll`."""
+    state = state_of(job_id)
+    fn = _pollers.get(state["kind"]) if state is not None else None
+    return fn(job_id, tail_lines) if fn is not None else poll(job_id, tail_lines=tail_lines)
+
+
+def settled(job_id: str) -> bool:
+    """True once the job's thread has finished, or if the id is unknown."""
+    with LOCK:
+        state = _active.get(job_id)
+        return state is None or bool(state.get("settled"))
+
+
+def listing() -> list[dict[str, Any]]:
+    """Every job this server knows except private kinds, newest first, without logs."""
+    now = time.time()
+    with LOCK:
+        visible = [s for s in _active.values() if s["kind"] not in _private_kinds]
+        rows = [
+            {
+                "job_id": s["job_id"],
+                "kind": s["kind"],
+                "label": s["label"],
+                "status": s["status"],
+                "elapsed_s": round((s["finished_at"] or now) - s["started_at"], 1),
+            }
+            for s in visible
+        ]
+        order = {s["job_id"]: s["started_at"] for s in visible}
+    return sorted(rows, key=lambda r: order[r["job_id"]], reverse=True)
 
 
 def state_of(job_id: str) -> dict[str, Any] | None:

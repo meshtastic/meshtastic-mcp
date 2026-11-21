@@ -5,12 +5,13 @@
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
@@ -24,6 +25,7 @@ from .. import (
     nrf52_bootloader,
     registry,
     serial_session,
+    uf2_host,
 )
 from .. import confirm as confirm_mod
 from .. import tasks as tasks_mod
@@ -345,9 +347,9 @@ async def esptool_raw(
 ) -> dict[str, Any]:
     """Pass-through to `esptool`.
 
-    Destructive subcommands (write_flash, erase_flash, erase_region, merge_bin) require
-    confirm=True, or the user's answer when the client can ask; other subcommands run
-    without asking. Prefer the high-level `pio_flash` / `erase_and_flash` / `update_flash`
+    Read-only subcommands (chip_id, flash_id, read_mac, read_flash_status, get_security_info,
+    image_info, version) run at once; any other needs confirm=True, or the user's answer when
+    the client can ask. Prefer the high-level `pio_flash` / `erase_and_flash` / `update_flash`
     tools where possible; they know board-specific offsets and protocols.
 
     Security: `args` is passed directly to the esptool binary. All arguments must come from
@@ -360,7 +362,7 @@ async def esptool_raw(
         args: The esptool arguments, from a trusted source only.
         port: Serial port, passed as `--port`; omit to leave it to `args` or esptool.
         confirm: `True` once the user agreed; omitted, a client that can ask prompts the
-            human. Only destructive subcommands ask.
+            human. Only subcommands that are not read-only ask.
     """
     return await _confirmed_hw_call(
         ctx, lambda c: hw_tools.esptool_raw(args, port=port, confirm=c), confirm
@@ -376,7 +378,7 @@ async def nrfutil_dfu(
     With adafruit-nrfutil the transfer uses `--singlebank` and fails unless the run printed
     "Device programmed."; where `/dev/serial/by-id` exists the tool does the 1200 baud
     touch itself (dropping DTR) and waits for the bootloader, elsewhere it passes
-    `-t 1200`. For a board already sitting in serial DFU, use `nrfutil_raw` with no touch
+    `-t 1200`. For a board already sitting in serial DFU, use `vendor(tool="nrfutil")` with no touch
     instead. On the Meshtastic bootloader `nrf52_flash_uf2` is several times faster; for
     firmware built from the tree prefer `pio_flash`. Requires confirm=True, or the user's
     answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
@@ -396,8 +398,9 @@ async def nrfutil_dfu(
 async def nrfutil_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
     """Pass-through to `nrfutil`.
 
-    dfu/settings subcommands require confirm=True, or the user's answer when the client can
-    ask. Recovers an nRF52 left sitting in serial DFU, with no touch, as
+    Only `version`, `list`, `device list`, `device device-info` and `device core-info` run
+    at once; anything else needs confirm=True, or the user's answer when the client can ask.
+    Recovers an nRF52 left sitting in serial DFU, with no touch, as
     `args=["dfu", "serial", "--package", "<zip>", "--port", "/dev/ttyACM0",
     "-b", "115200", "--singlebank"]` (adafruit-nrfutil).
 
@@ -409,9 +412,45 @@ async def nrfutil_raw(ctx: Context, args: list[str], confirm: bool = False) -> d
     Args:
         args: The nrfutil arguments, from a trusted source only.
         confirm: `True` once the user agreed; omitted, a client that can ask prompts the
-            human. Only dfu/settings subcommands ask.
+            human. Only calls outside the read-only list ask.
     """
     return await _confirmed_hw_call(ctx, lambda c: hw_tools.nrfutil_raw(args, confirm=c), confirm)
+
+
+_VENDORS = {
+    "esptool": lambda args, port, c: hw_tools.esptool_raw(args, port=port, confirm=c),
+    "nrfutil": lambda args, port, c: hw_tools.nrfutil_raw(args, confirm=c),
+    "picotool": lambda args, port, c: hw_tools.picotool_raw(args, confirm=c),
+}
+
+
+@app.tool()
+async def vendor(
+    ctx: Context,
+    tool: Literal["esptool", "nrfutil", "picotool"],
+    args: list[str],
+    port: str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Run esptool, nrfutil or picotool with arguments, for what `install` and `admin` do not do.
+
+    A read-only subcommand (esptool `flash_id`, nrfutil `device list`, picotool `info` and the
+    like) runs at once. Any other needs `confirm=True` or the user's answer, and counts as
+    irreversible. A failed command is a tool error carrying both
+    output tails. Prefer `install` to flash firmware and `admin` for radio actions.
+
+    Returns `{exit_code, stdout_tail, stderr_tail, duration_s, ...}`.
+
+    Args:
+        tool: `esptool`, `nrfutil` (adafruit-nrfutil or Nordic nRF Util) or `picotool`.
+        args: The arguments after the tool name, such as `["chip_id"]` or
+            `["dfu", "serial", "--package", "fw.zip", "--port", "/dev/ttyACM0"]`.
+        port: For esptool, the serial port (`--port`); the others take it in `args`.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+    """
+    run = _VENDORS[tool]
+    return await _confirmed_hw_call(ctx, lambda c: run(args, port, c), confirm)
 
 
 @app.tool()
@@ -448,8 +487,8 @@ async def picotool_load(ctx: Context, uf2_path: str, confirm: bool = False) -> d
 async def picotool_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
     """Pass-through to `picotool`.
 
-    load/reboot/save/erase require confirm=True, or the user's answer when the client can
-    ask; other subcommands run without asking.
+    Only `info`, `version` and `help` run at once; anything else needs confirm=True, or the
+    user's answer when the client can ask.
 
     Security: `args` is passed directly to the picotool binary. All arguments must come
     from a trusted source; do not allow untrusted content to flow into argument lists.
@@ -459,7 +498,7 @@ async def picotool_raw(ctx: Context, args: list[str], confirm: bool = False) -> 
     Args:
         args: The picotool arguments, from a trusted source only.
         confirm: `True` once the user agreed; omitted, a client that can ask prompts the
-            human. Only load/reboot/save/erase ask.
+            human. Only calls outside info, version and help ask.
     """
     return await _confirmed_hw_call(ctx, lambda c: hw_tools.picotool_raw(args, confirm=c), confirm)
 
@@ -589,8 +628,103 @@ async def nrf52_backup_firmware(port: str | None = None) -> dict[str, Any]:
     return cast(dict[str, Any], result)
 
 
+def _board_serial(port: str | None) -> str | None:
+    """The USB serial of `port`'s board, from its by-id name or the port listing."""
+    if port is None:
+        return None
+    m = _BY_ID_SERIAL.search(os.path.basename(port))
+    if m:
+        return m.group(1)
+    return nrf52_bootloader.port_usb_serial(port)
+
+
+def _host_drive_error(exc: uf2_host.HostDriveError) -> ToolError:
+    return ToolError(str(exc))
+
+
+@app.tool()
+async def nrf52_mount_uf2(port: str | None = None, device: str | None = None) -> dict[str, Any]:
+    """Mount a board's UF2 drive on a host that does not automount it, and return its info.
+
+    Flashing never needs it. Linux uses udisks2 (over SSH a refusal prints the one-shot polkit
+    rule to allow it), macOS `diskutil`. A drive that is already mounted is returned as is.
+    Returns `{mounted, drive}`.
+
+    Args:
+        port: The board's app port, ideally its `/dev/serial/by-id` path; its USB serial finds
+            the drive's block device. Omit when only one UF2 drive is mounted, or pass `device`.
+        device: The drive's block device (`/dev/sdb`, or `disk4` on macOS) when the port
+            cannot name it.
+    """
+
+    def _mount() -> dict[str, Any]:
+        try:
+            return {"mounted": False, "drive": _uf2_drive(port)}
+        except ToolError:
+            pass
+        dev = device
+        if dev is None:
+            serial = _board_serial(port)
+            dev = uf2_host.block_device_for_serial(serial) if serial else None
+        if dev is None:
+            raise ToolError(
+                "no UF2 block device found for that board; check it is in UF2 mode "
+                "(nrf52_enter_uf2) and pass its app port, or pass device="
+            )
+        try:
+            uf2_host.mount(dev)
+        except uf2_host.HostDriveError as exc:
+            raise _host_drive_error(exc) from None
+        return {"mounted": True, "drive": _wait_for_uf2_drive(port) if port else _uf2_drive(None)}
+
+    return cast(dict[str, Any], await _off_loop(_mount))
+
+
+@app.tool()
+async def nrf52_eject_uf2(
+    ctx: Context, port: str | None = None, confirm: bool = False
+) -> dict[str, Any]:
+    """Unmount and eject a board's UF2 drive, the way a desktop's eject does.
+
+    For testing how the bootloader handles an eject; flashing never needs it. Linux sends udisks2
+    `Drive.Eject` (over SSH a refusal prints the one-shot polkit rule to allow it), macOS
+    `diskutil eject`. Requires confirm=True, or the user's answer when the client
+    can ask. Returns `{ejected, label, device, steps}`.
+
+    Args:
+        port: The board's app port, ideally its `/dev/serial/by-id` path; omit when only one
+            UF2 drive is mounted.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+    """
+    drive = await _off_loop(lambda: _uf2_drive(port))
+    pending = await confirm_mod.gate(
+        ctx, f"eject the UF2 drive {drive.get('label')} at {drive.get('mount')}", confirm
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+
+    def _eject() -> dict[str, Any]:
+        try:
+            steps = uf2_host.eject(drive.get("device"), drive.get("mount"))
+        except uf2_host.HostDriveError as exc:
+            raise _host_drive_error(exc) from None
+        return {
+            "ejected": True,
+            "label": drive.get("label"),
+            "device": drive.get("device"),
+            "steps": steps,
+        }
+
+    return cast(dict[str, Any], await _off_loop(_eject))
+
+
 def _check_softdevice(drive: dict[str, Any], uf2_path: str) -> dict[str, Any]:
     image = nrf52_bootloader.uf2_file_info(uf2_path)
+    # A bootloader self-update image (family 0xd663823c) starts at 0 by design; the bootloader
+    # moves it into place, so the application start does not apply.
+    if image.get("is_bootloader_update"):
+        return image
     softdevice = (drive.get("info") or {}).get("softdevice")
     start = _SD_APP_START.get(softdevice or "")
     target = image.get("target_start")
@@ -610,8 +744,10 @@ async def nrf52_flash_uf2(
 
     Several times faster than serial DFU, and no touch or DFU window is involved. The board
     must be in UF2 mode (`nrf52_enter_uf2`). Refuses a file that is not a UF2 and an image built
-    for the other SoftDevice than the one INFO_UF2.TXT reports. Requires confirm=True, or the
-    user's answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
+    for the other SoftDevice than the one INFO_UF2.TXT reports; a bootloader self-update image
+    (`update-*.uf2`) skips that check, says `bootloader_update: true`, and asks even with
+    confirm=True under `MESHTASTIC_MCP_CONFIRM=human`. Requires confirm=True, or the user's
+    answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
     result and logged before the wait; follow it with `flash_poll` if the call is canceled. A
     copy the bootloader did not take is a tool error.
 
@@ -624,10 +760,14 @@ async def nrf52_flash_uf2(
     """
     drive = await _off_loop(lambda: _uf2_drive(port))
     image = await _off_loop(lambda: _check_softdevice(drive, uf2_path))
+    bootloader = bool(image.get("is_bootloader_update"))
+    what = "the bootloader update " if bootloader else ""
     pending = await confirm_mod.gate(
         ctx,
-        f"flash {os.path.basename(uf2_path)} onto {drive.get('label')} at {drive.get('mount')}",
+        f"flash {what}{os.path.basename(uf2_path)} onto {drive.get('label')} at "
+        f"{drive.get('mount')}",
         confirm,
+        irreversible=bootloader,
     )
     if pending is not None:
         return cast(dict[str, Any], pending)
@@ -639,7 +779,7 @@ async def nrf52_flash_uf2(
         # A UF2 copy finishes in seconds, and flash_poll exists only with a firmware tree.
         poll_tool=None,
     )
-    return {**result, "image": image}
+    return {**result, "image": image, "bootloader_update": bootloader}
 
 
 def _uf2_result(res: dict[str, Any]) -> dict[str, Any]:
@@ -695,3 +835,169 @@ async def nrf52_factory_erase(
             f"{result.get('error') or result}"
         )
     return cast(dict[str, Any], result)
+
+
+# ---------- install: one tool that picks the flasher -----------------------
+
+_INSTALL_BACK_S = 90.0  # a full ESP32 erase-and-flash can take this long to boot and answer
+
+
+def _await_uf2_drive(port: str, timeout_s: float = 25.0) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            return _uf2_drive(port)
+        except ToolError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(1.0)
+
+
+def _await_radio(port: str) -> dict[str, Any]:
+    """Wait for the flashed radio to answer, and read the firmware it now runs."""
+    deadline = time.monotonic() + _INSTALL_BACK_S
+    last = ""
+    while time.monotonic() < deadline:
+        try:
+            with connection.connect(port=port, timeout_s=8.0) as iface:
+                version = getattr(iface.metadata, "firmware_version", None)
+            return {"back": True, "firmware_version": version}
+        except connection.not_answering() as exc:
+            last = str(exc)
+            time.sleep(3.0)
+    return {"back": False, "error": f"the radio did not answer after the install: {last}"}
+
+
+def _install(
+    port: str,
+    source: dict[str, Any],
+    erase: bool,
+    userprefs: dict[str, Any] | None,
+    build_flags: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if "env" in source:
+        env = str(source["env"])
+        from .. import boards
+
+        try:
+            arch = str(boards.get_board(env).get("architecture") or "")
+        except config.ConfigError as exc:
+            raise ToolError(f"installing a build needs a firmware tree: {exc}") from exc
+        except KeyError as exc:
+            raise ToolError(str(exc)) from exc
+        if arch.startswith("esp32"):
+            method = "erase_and_flash" if erase else "update_flash"
+            res = (flash.erase_and_flash if erase else flash.update_flash)(
+                env, port, confirm=True, userprefs_overrides=userprefs
+            )
+        else:
+            if erase:
+                raise ToolError(
+                    "erase applies to an ESP32 build; wipe an nRF52 with "
+                    "admin(action='factory_reset_full') or nrf52_factory_erase"
+                )
+            method = "pio upload"
+            res = flash.flash(
+                env, port, confirm=True, userprefs_overrides=userprefs, build_flags=build_flags
+            )
+    else:
+        path = str(source["file"])
+        if not os.path.isfile(path):
+            raise ToolError(f"no file at {path}")
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".uf2":
+            method = "uf2"
+            if not _uf2_drive_or_none(port):
+                admin.enter_uf2_mode(port=port, confirm=True)
+            drive = _await_uf2_drive(port)
+            _check_softdevice(drive, path)
+            res = _uf2_result(nrf52_bootloader.flash_uf2(drive, path, timeout_s=60))
+        elif ext == ".zip":
+            method = "nrfutil dfu"
+            res = hw_tools.nrfutil_dfu(port, path, confirm=True)
+        elif ext == ".bin":
+            # Only a factory image starts at 0x0; anything else there replaces the bootloader.
+            name = os.path.basename(path)
+            if not fnmatch.fnmatch(name, "firmware-*.factory.bin"):
+                raise ToolError(
+                    f"{name} is not a factory image, and writing it at 0x0 would replace the "
+                    "bootloader: pass the release's firmware-<board>-<version>.factory.bin, "
+                    "or install a build with env"
+                )
+            method = "esptool write_flash"
+            args = ["write_flash"] + (["--erase-all"] if erase else []) + ["0x0", path]
+            res = hw_tools.esptool_raw(args, port=port, confirm=True)
+        else:
+            raise ToolError(
+                f"cannot install a {ext or 'extensionless'} file: use .uf2, .zip or .bin"
+            )
+    out = {**res, "method": method}
+    if res.get("exit_code", 0) != 0:
+        return out
+    return {**out, **_await_radio(port)}
+
+
+def _uf2_drive_or_none(port: str) -> dict[str, Any] | None:
+    try:
+        return _uf2_drive(port)
+    except ToolError:
+        return None
+
+
+@app.tool(**tasks_mod.task_kwargs())
+async def install(
+    ctx: Context,
+    port: str,
+    source: dict[str, Any],
+    erase: bool = False,
+    confirm: bool = False,
+    userprefs: dict[str, Any] | None = None,
+    build_flags: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Install firmware on a board, picking the flasher from the board, and read back its version.
+
+    `source` is `{"env": "<pio env>"}` (build from the firmware tree; ESP32 OTA-updates the
+    app and keeps config, `erase=True` does a full erase and factory flash; nRF52 and RP2040
+    upload through PlatformIO, which does the bootloader touch) or `{"file": "<path>"}`
+    (`.uf2` through the nRF52 UF2 drive, entering UF2 mode first; `.zip` through nrfutil DFU;
+    `.bin` written at 0x0 by esptool). After a good write it waits for the board to answer and
+    returns the `firmware_version` it now reports. Requires confirm=True, or the user's answer
+    when the client can ask; `erase` is irreversible. Runs as a `flashes` job: after a cancel
+    or timeout follow its `job_id` with `job`, since a flash cannot be stopped mid-write.
+
+    Returns `{job_id, method, exit_code, stdout_tail, stderr_tail, back?, firmware_version?,
+    error?}`.
+
+    Args:
+        port: The board's serial port, ideally its `/dev/serial/by-id` path.
+        source: `{"env": ...}` or `{"file": ...}`. A git ref or a release is not installed
+            here yet: build it in the firmware tree, or download it, and pass the file.
+        erase: Erase the whole flash first (ESP32 builds and `.bin` files).
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+        userprefs: `USERPREFS_*` values baked into a build.
+        build_flags: `-D` macros for a build.
+    """
+    if len([k for k in ("env", "file") if k in source]) != 1:
+        raise ToolError('pass source={"env": ...} or source={"file": ...}')
+    if "ref" in source or "release" in source:
+        raise ToolError(
+            "installing a git ref or a release is not supported yet: the firmware tree is shared, "
+            "so build that ref in your own checkout, or download the release, and pass the file"
+        )
+    label = source.get("env") or os.path.basename(str(source.get("file")))
+    pending = await confirm_mod.gate(
+        ctx,
+        f"{'erase and ' if erase else ''}install {label} onto {port}",
+        confirm,
+        irreversible=erase,
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+    return await _run_job(
+        ctx,
+        "flashes",
+        str(label),
+        lambda: _install(port, source, erase, userprefs, build_flags),
+        poll_tool=None,
+    )

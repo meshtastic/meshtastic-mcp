@@ -17,6 +17,7 @@ ruff format --check .         # formatting
 mypy                          # types (no per-module ignore_errors — fix types, don't exclude)
 python scripts/check_spdx.py  # SPDX headers on every source file
 pytest tests/unit             # portable tier (hardware- and firmware-free)
+meshtastic-mcp docs generate  # after changing a tool; commit docs/tools.md and README.md
 ```
 
 Touching the FleetSuite SPA? Also run `cd web-ui && npx vue-tsc --noEmit && npm run build`.

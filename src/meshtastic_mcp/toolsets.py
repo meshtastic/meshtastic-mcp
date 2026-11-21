@@ -4,12 +4,15 @@
 """Trim the advertised tool list to the groups a session needs.
 
 Every tool schema a client loads costs context. `MESHTASTIC_MCP_TOOLSETS` names the groups to
-expose (default: all) and `MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state.
-A hidden tool is not listed and cannot be called.
+expose. Unset or `all` exposes every group but the opt-in `legacy`, which a client gets by
+naming it; a `-group` entry drops one.
+`MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. A hidden tool is not
+listed and cannot be called.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Collection, Mapping, Sequence
 
 from fastmcp.server.transforms import GetToolNext, Transform
@@ -45,21 +48,23 @@ _GROUPS: dict[str, frozenset[str]] = {
             "userprefs_testing_profile",
         }
     ),
+    # One entry point over the android, apple and desktop app drivers. A group of its own, so a
+    # session can take it without the emulator and simulator tools, or drop it with `-app`.
+    "app": frozenset({"app", "app_view"}),
     "hardware": frozenset(
         {
             "capture_screen",
             "esptool_chip_info",
             "esptool_erase_flash",
-            "esptool_raw",
+            "install",
             "nrfutil_dfu",
-            "nrfutil_raw",
             "picotool_info",
             "picotool_load",
-            "picotool_raw",
             "touch_1200bps",
             "uhubctl_cycle",
             "uhubctl_list",
             "uhubctl_power",
+            "vendor",
         }
     ),
     "rf": frozenset(
@@ -72,25 +77,56 @@ _GROUPS: dict[str, frozenset[str]] = {
             "vanity_preview",
         }
     ),
-    "local-model": frozenset(
+    # The pre-1.0 names a `next` tool replaces. Opt-in: only a client that names it gets them.
+    "legacy": frozenset(
         {
-            "local_model_serve",
-            "local_model_serve_stop",
-            "local_model_status",
-            "summarize_window",
-            "triage_window",
-            "vision_oracle",
+            "replay_start",
+            "replay_status",
+            "replay_stop",
+            "device_info",
+            "esptool_raw",
+            "factory_reset",
+            "get_channel_url",
+            "get_config",
+            "list_nodes",
+            "nrfutil_raw",
+            "picotool_raw",
+            "reboot",
+            "replay_inject",
+            "replay_inject_beacon",
+            "replay_inject_client_notification",
+            "replay_inject_fileinfo",
+            "replay_inject_traceroute",
+            "replay_inject_waypoint",
+            "set_config",
+            "set_debug_log_api",
+            "set_owner",
+            "shutdown",
+            "send_text",
         }
     ),
+    # `sim` and `sim_status` match no `replay_` prefix.
+    "replay": frozenset({"inject", "sim", "sim_status"}),
 }
 _PREFIXES: dict[str, tuple[str, ...]] = {
     "android": ("android_", "atak_"),
     "apple": ("ios_", "screenshot_set_"),
-    "discord": ("discord_",),
     "hardware": ("nrf52_", "serial_"),
     "replay": ("replay_", "cot_relay_"),
     "rf": ("ble_sniff_", "vanity_", "pa_", "rf_"),
     "sdk": ("sdk_",),
+}
+
+# Groups the default leaves out.
+OPT_IN = frozenset({"legacy"})
+
+
+log = logging.getLogger(__name__)
+
+# Groups 0.x advertised that 1.0 no longer has: a config that names one still starts.
+RETIRED = {
+    "discord": "the discord_* tools moved to the separate meshtastic-mcp-discord server",
+    "local-model": "the local-model tools were removed",
 }
 
 
@@ -112,28 +148,44 @@ def known_toolsets() -> frozenset[str]:
     return frozenset({CORE, *_GROUPS, *_PREFIXES})
 
 
-def parse_toolsets(value: str | None) -> frozenset[str] | None:
-    """`None` means every group; otherwise the named groups, which must all exist."""
+def default_toolsets() -> frozenset[str]:
+    return known_toolsets() - OPT_IN
+
+
+def parse_toolsets(value: str | None) -> frozenset[str]:
+    """The groups to expose: every group but the opt-in ones, or the named groups.
+
+    A `-group` entry removes that group; with no group named, it removes it from the default.
+    """
     if value is None or not value.strip() or value.strip().lower() == "all":
-        return None
-    wanted = frozenset(part.strip().lower() for part in value.split(",") if part.strip())
-    unknown = wanted - known_toolsets()
+        return default_toolsets()
+    names = [part.strip().lower() for part in value.split(",") if part.strip()]
+    for name in sorted({n.lstrip("-") for n in names} & RETIRED.keys()):
+        log.warning("MESHTASTIC_MCP_TOOLSETS names %r, which is gone: %s", name, RETIRED[name])
+    dropped = frozenset(n[1:] for n in names if n.startswith("-")) - RETIRED.keys()
+    asked = frozenset(n for n in names if not n.startswith("-"))
+    named = asked - RETIRED.keys()
+    unknown = (named - {"all"} | dropped) - known_toolsets()
     if unknown:
         raise ToolsetError(
             f"unknown toolset(s) {sorted(unknown)}; choose from {sorted(known_toolsets())} or 'all'"
         )
-    return wanted
+    if asked and "all" not in asked:
+        base = named
+    else:
+        base = default_toolsets() | (named - {"all"})
+    return base - dropped
 
 
 def is_visible(
     name: str,
-    toolsets: frozenset[str] | None,
+    toolsets: frozenset[str],
     read_only: bool,
     read_only_names: Collection[str],
 ) -> bool:
     if read_only and name not in read_only_names:
         return False
-    return toolsets is None or toolset_of(name) in toolsets
+    return toolset_of(name) in toolsets
 
 
 def read_only_requested(env: Mapping[str, str]) -> bool:
@@ -154,7 +206,7 @@ class ToolsetTransform(Transform):
 
     @property
     def active(self) -> bool:
-        return self._toolsets is not None or self._read_only
+        return self._toolsets != known_toolsets() or self._read_only
 
     def _visible(self, name: str) -> bool:
         return is_visible(name, self._toolsets, self._read_only, self._read_only_names())

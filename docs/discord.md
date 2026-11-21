@@ -7,6 +7,10 @@ bot holds `View Channels` + `Read Message History` only (permission integer `665
 to the REST API with the stdlib (no gateway, no `discord.py`), and never calls a write
 endpoint.
 
+The tools are served by their own MCP server, `meshtastic-mcp-discord`, in the same package.
+The device server (`meshtastic-mcp`) lists no `discord_*` tool, and the Discord server starts
+without the radio, recorder or any device module.
+
 | Tool | What it answers |
 |---|---|
 | `discord_search` | "what has the community said about X" — Discord's own server-side index, full history, filters by channel / author / mentions / has / date / pinned; `offset` paging |
@@ -89,10 +93,22 @@ the resolved one for your platform. Env overrides: `$DISCORD_BOT_TOKEN`, `$DISCO
 (operator username; a query hint only, it grants nothing), `$DISCORD_GUILD_ID` (if the bot is
 in more than one guild), `$DISCORD_TRUST_TIERS`.
 
-Restart the MCP server — capability detection runs at startup and the `discord_*` tools are
-only advertised when a token resolves.
+### 3. Register the server
 
-### 3. Restricted channels
+```bash
+meshtastic-mcp install --discord        # registers 'meshtastic' and 'meshtastic-discord'
+# or only the Discord server, by hand:
+claude mcp add meshtastic-discord -- uvx --from meshtastic-mcp meshtastic-mcp-discord
+```
+
+`meshtastic-mcp-discord` and `meshtastic-mcp discord-serve` run the same stdio server. With
+`--local`, `install` registers the current interpreter (`python -m meshtastic_mcp.discord_server`)
+instead of `uvx`. `meshtastic-mcp uninstall` removes both entries.
+
+Restart the MCP client. The token is read when the server starts, and the `discord_*` tools are
+only listed when one resolves; without a token the server lists no tools.
+
+### 4. Restricted channels
 
 Guild-wide *View Channels* from the invite lives on the bot's **managed role** (named after
 the app, created automatically). A channel whose `@everyone` overwrite denies View Channel

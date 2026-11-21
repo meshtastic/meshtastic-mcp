@@ -20,6 +20,7 @@ PATTERNS = [
     "src/**/*.py",
     "tests/**/*.py",
     "scripts/*.py",
+    "evals/**/*.py",
     "scripts/*.sh",
     "web-ui/src/**/*.py",
     "web-ui/src/**/*.ts",

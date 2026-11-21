@@ -20,6 +20,8 @@ Exposed as the `doctor` MCP tool (`server.py`) and the `meshtastic-mcp doctor` C
 
 from __future__ import annotations
 
+import functools
+import json
 import os
 import platform
 import re
@@ -340,7 +342,10 @@ def _discord_check() -> Check:
     """
     from . import discord
 
-    needed = "read-only Discord source (discord_search / discord_read / discord_thread / …)"
+    needed = (
+        "read-only Discord source (discord_search / discord_read / discord_thread / …), "
+        "served by meshtastic-mcp-discord"
+    )
     if not discord.available():
         return Check(
             "discord",
@@ -350,7 +355,8 @@ def _discord_check() -> Check:
             detail="no bot token",
             fix=(
                 f"save a read-only bot token to {discord.token_path()} (chmod 600) "
-                f"or export {discord.TOKEN_ENV} — see docs/discord.md"
+                f"or export {discord.TOKEN_ENV}, then register meshtastic-mcp-discord "
+                "(`meshtastic-mcp install --discord`) — see docs/discord.md"
             ),
             env_override=discord.TOKEN_ENV,
         )
@@ -1056,6 +1062,292 @@ def _mvgrind_check() -> Check:
     )
 
 
+# ---------------------------------------------------------------------------
+# The server itself: which code it runs, and what its PATH hides
+# ---------------------------------------------------------------------------
+def _udisks_check() -> Check | None:
+    """Linux only: may this server mount and eject a UF2 drive through udisks2?
+
+    Normal flashing never needs it; only `nrf52_mount_uf2` and `nrf52_eject_uf2` do. A desktop
+    session is allowed by udisks2's defaults; an SSH session or a systemd service needs a polkit
+    rule. `pkcheck` answers for this process without prompting.
+    """
+    if not _IS_LINUX:
+        return None
+    from . import uf2_host
+
+    needed = "nrf52_mount_uf2 / nrf52_eject_uf2 on a headless bench (optional)"
+    pkcheck = _which("pkcheck")
+    if _which("udisksctl") is None or pkcheck is None:
+        return Check(
+            "udisks",
+            "observability",
+            STATUS_OK,
+            needed,
+            detail="udisks2 not installed; mount UF2 drives by hand if the host does not",
+        )
+    refused = []
+    for action in (uf2_host.MOUNT_ACTIONS[0], uf2_host.EJECT_ACTIONS[1]):
+        try:
+            res = subprocess.run(
+                [pkcheck, "--action-id", action, "--process", str(os.getpid())],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return Check(
+                "udisks", "observability", STATUS_OK, needed, detail="pkcheck did not answer"
+            )
+        if res.returncode != 0:
+            refused.append(action)
+    if not refused:
+        return Check("udisks", "observability", STATUS_OK, needed, detail="mount and eject allowed")
+    return Check(
+        "udisks",
+        "observability",
+        STATUS_DEGRADED,
+        needed,
+        detail="polkit refuses UF2 mount/eject from this session (not the desktop seat)",
+        fix=uf2_host.polkit_rule_command(uf2_host.POLKIT_ACTIONS),
+    )
+
+
+def _installed_version() -> str:
+    from importlib import metadata
+
+    try:
+        return metadata.version("meshtastic-mcp")
+    except metadata.PackageNotFoundError:
+        return ""
+
+
+def _install_source() -> tuple[str, bool]:
+    """`(label, editable)` for this package's install, from its PEP 610 `direct_url.json`."""
+    from importlib import metadata
+
+    try:
+        raw = metadata.distribution("meshtastic-mcp").read_text("direct_url.json")
+    except metadata.PackageNotFoundError:
+        return "unknown", False
+    if not raw:
+        return "PyPI", False
+    try:
+        info = json.loads(raw)
+    except json.JSONDecodeError:
+        return "unknown", False
+    url = str(info.get("url", ""))
+    if info.get("dir_info", {}).get("editable"):
+        return f"editable {url.removeprefix('file://')}", True
+    if "vcs_info" in info:
+        return f"git {url}@{info['vcs_info'].get('commit_id', '')[:9]}", False
+    return url or "unknown", False
+
+
+def _git_head(repo: Path) -> str:
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def _checkout() -> Path | None:
+    ws = os.environ.get("MESHTASTIC_WORKSPACE", "").strip()
+    if not ws:
+        return None
+    path = Path(ws).expanduser() / "meshtastic-mcp"
+    return path if (path / "pyproject.toml").is_file() else None
+
+
+def _reinstall_fix() -> str:
+    checkout = _checkout()
+    if checkout is None:
+        return "uv tool upgrade meshtastic-mcp"
+    return f"uv tool install --force --editable '{checkout}[ui,tasks]'"
+
+
+def _answers(url: str) -> bool:
+    """Whether anything accepts a TCP connection at `url`'s host and port."""
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        return False
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((parsed.hostname, port), timeout=2):
+            return True
+    except OSError:
+        return False
+
+
+def _serve_version_check() -> Check:
+    """The host's running `serve`, which every bridged client uses, against this install."""
+    from . import bridge
+
+    needed = "the shared server every bridged client on this host talks to"
+    restart = "systemctl --user restart meshtastic-mcp.service  # or restart `meshtastic-mcp serve`"
+    try:
+        info = bridge.find_local()
+    except Exception as exc:
+        return Check("serve", "core", STATUS_DEGRADED, needed, detail=f"cannot check: {exc}")
+    if not info:
+        return Check("serve", "core", STATUS_OK, needed, detail="no serve runs on this host")
+    url = str(info.get("url", ""))
+    where = f"{url} (pid {info.get('pid', '?')})"
+    if not _answers(url):
+        return Check(
+            "serve",
+            "core",
+            STATUS_DEGRADED,
+            needed,
+            detail=f"serve holds the host lock but does not answer at {where}",
+            fix=restart,
+        )
+    theirs = str(info.get("version", ""))
+    ours_src = bridge.source_commit()
+    if ours_src is not None:
+        # An editable install: the version string is frozen at install time, the commit is not.
+        started = str(info.get("commit", ""))
+        now = ours_src["commit"]
+        if not started:
+            return Check(
+                "serve",
+                "core",
+                STATUS_DEGRADED,
+                needed,
+                detail=f"serve at {where} does not record its commit; the checkout is at "
+                f"{now[:9]}, so a restart is the only way to know it runs that code",
+                fix=restart,
+            )
+        if started != now:
+            return Check(
+                "serve",
+                "core",
+                STATUS_DEGRADED,
+                needed,
+                detail=f"serve at {where} started at {started[:9]}; the checkout is now at "
+                f"{now[:9]}",
+                fix=restart,
+            )
+        dirty = " with local changes" if info.get("dirty") else ""
+        return Check("serve", "core", STATUS_OK, needed, detail=f"{where} runs {now[:9]}{dirty}")
+    ours = _installed_version()
+    if theirs and ours and theirs != ours:
+        return Check(
+            "serve",
+            "core",
+            STATUS_DEGRADED,
+            needed,
+            detail=f"serve at {where} runs {theirs}; this install is {ours}",
+            fix=f"{_reinstall_fix()} && {restart}",
+        )
+    return Check("serve", "core", STATUS_OK, needed, detail=f"{where} runs {theirs or 'unknown'}")
+
+
+def _install_source_check() -> Check | None:
+    """A git or PyPI install next to a workspace checkout of other code; None with no checkout."""
+    checkout = _checkout()
+    if checkout is None:
+        return None
+    needed = "run the code in the workspace checkout"
+    label, editable = _install_source()
+    if editable:
+        from . import bridge
+
+        src = bridge.source_commit()
+        at = f" at {src['commit'][:9]}" if src else ""
+        return Check("install-source", "core", STATUS_OK, needed, detail=f"{label}{at}")
+    ours = _installed_version()
+    head = _git_head(checkout)
+    m = re.search(r"\+g([0-9a-f]{7,})", ours)
+    if m and head.startswith(m.group(1)):
+        return Check("install-source", "core", STATUS_OK, needed, detail=f"{label}, {ours}")
+    return Check(
+        "install-source",
+        "core",
+        STATUS_DEGRADED,
+        needed,
+        detail=f"this install is {ours or 'unknown'} from {label}; the checkout at {checkout} "
+        f"is at {head[:9] or 'an unknown commit'}",
+        fix=_reinstall_fix(),
+    )
+
+
+# Where a binary lives when a service's PATH (systemd's default has no sbin) leaves it out.
+_EXTRA_BIN_DIRS: tuple[str, ...] = (
+    "/usr/sbin",
+    "/sbin",
+    "/usr/local/sbin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+)
+# Check name -> the binary it looks for, for checks that are missing only when it is absent.
+_PATH_BINARIES = {
+    "android": "android",
+    "adb": "adb",
+    "xcrun": "xcrun",
+    "idb_companion": "idb_companion",
+    "ffmpeg": "ffmpeg",
+    "uhubctl": "uhubctl",
+    "gh": "gh",
+    "platformio": "pio",
+    "java": "java",
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _login_path_dirs() -> tuple[str, ...]:
+    """The login shell's PATH, which a service started outside it does not inherit."""
+    shell = os.environ.get("SHELL", "")
+    if _IS_WINDOWS or not shell:
+        return ()
+    try:
+        res = subprocess.run(
+            [shell, "-lc", 'printf %s "$PATH"'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    return tuple(d for d in res.stdout.split(os.pathsep) if d)
+
+
+def _off_path_location(binary: str) -> str | None:
+    here = set(os.environ.get("PATH", "").split(os.pathsep))
+    for d in (*_EXTRA_BIN_DIRS, *_login_path_dirs()):
+        if d in here:
+            continue
+        candidate = Path(d) / binary
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def _apply_path_gaps(checks: list[Check]) -> None:
+    """Turn `missing` into `degraded` for a binary that exists but is off this server's PATH."""
+    for c in checks:
+        binary = _PATH_BINARIES.get(c.name)
+        if c.status != STATUS_MISSING or binary is None or _which(binary):
+            continue
+        found = _off_path_location(binary)
+        if found is None:
+            continue
+        d = str(Path(found).parent)
+        c.status = STATUS_DEGRADED
+        c.detail = f"found at {found} but not on this server's PATH"
+        c.fix = f'export PATH="$PATH:{d}"  # systemd unit: add {d} to an Environment=PATH= drop-in'
+
+
 def run() -> DoctorReport:
     """Probe everything and return a structured report (never raises)."""
     caps = capabilities.detect()
@@ -1145,7 +1437,16 @@ def run() -> DoctorReport:
         _ble_sniffer_check(),
         # vanity capability (GPU NodeNum/colour grinding)
         _mvgrind_check(),
+        # the server itself
+        _serve_version_check(),
     ]
+    source = _install_source_check()
+    if source is not None:
+        checks.append(source)
+    udisks = _udisks_check()
+    if udisks is not None:
+        checks.append(udisks)
+    _apply_path_gaps(checks)
     return DoctorReport(
         platform=f"{platform.system()} {platform.machine()} / Python {platform.python_version()}",
         capabilities=caps.summary(),

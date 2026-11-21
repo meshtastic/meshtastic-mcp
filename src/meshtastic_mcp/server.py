@@ -11,6 +11,7 @@ helper is re-exported, so `server.<name>` still reaches it.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math as math
 import os
@@ -47,14 +48,18 @@ from . import fixtures as fixtures
 from . import flash as flash
 from . import hw_tools as hw_tools
 from . import jobs as jobs
+from . import leases as leases
 from . import log_query as log_query
 from . import nrf52_bootloader as nrf52_bootloader
+from . import recorder_query as recorder_query
 from . import registry as registry
 from . import rf_oracle as rf_oracle
 from . import serial_session as serial_session
 from . import vanity as vanity
+from .call_log import CallLogMiddleware
 from .recorder import get_recorder
 from .replay import ReplayParams as ReplayParams
+from .retired_tools import RetiredToolMiddleware
 from .schemas import DeviceEntry as DeviceEntry
 from .schemas import DeviceInfo as DeviceInfo
 from .schemas import DoctorReport as DoctorReport
@@ -68,10 +73,7 @@ from .tools._app import android_tool as android_tool
 from .tools._app import app_plane_tool as app_plane_tool
 from .tools._app import apple_tool as apple_tool
 from .tools._app import ble_sniffer_tool as ble_sniffer_tool
-from .tools._app import discord_tool as discord_tool
 from .tools._app import firmware_tool as firmware_tool
-from .tools._app import local_serve_tool as local_serve_tool
-from .tools._app import local_tool as local_tool
 from .tools._app import sdk_tool as sdk_tool
 from .tools._app import sdr_tool as sdr_tool
 from .tools._app import tasks_mod as tasks_mod
@@ -110,6 +112,7 @@ from .tools.android import atak_fleet_down as atak_fleet_down
 from .tools.android import atak_fleet_status as atak_fleet_status
 from .tools.android import atak_fleet_up as atak_fleet_up
 from .tools.android import atak_share_item as atak_share_item
+from .tools.app_drive import app_view as app_view
 from .tools.apple import _IOS_SCREENSHOT_DIR as _IOS_SCREENSHOT_DIR
 from .tools.apple import ios_boot as ios_boot
 from .tools.apple import ios_list_simulators as ios_list_simulators
@@ -124,6 +127,7 @@ from .tools.core import _DISPLAY_CAPTURE_DIR as _DISPLAY_CAPTURE_DIR
 from .tools.core import _capture_target as _capture_target
 from .tools.core import _confirm_tx as _confirm_tx
 from .tools.core import capture_display as capture_display
+from .tools.core import claim as claim
 from .tools.core import config_diff as config_diff
 from .tools.core import config_snapshot as config_snapshot
 from .tools.core import config_snapshot_mod as config_snapshot_mod
@@ -138,16 +142,19 @@ from .tools.core import get_channel_url as get_channel_url
 from .tools.core import get_config as get_config
 from .tools.core import inject_frame as inject_frame
 from .tools.core import inject_mod as inject_mod
+from .tools.core import job as job
 from .tools.core import list_devices as list_devices
 from .tools.core import list_nodes as list_nodes
 from .tools.core import logs_window as logs_window
 from .tools.core import mark_event as mark_event
 from .tools.core import packets_window as packets_window
+from .tools.core import query as query
 from .tools.core import reboot as reboot
 from .tools.core import recorder_export as recorder_export
 from .tools.core import recorder_pause as recorder_pause
 from .tools.core import recorder_resume as recorder_resume
 from .tools.core import recorder_status as recorder_status
+from .tools.core import release as release
 from .tools.core import send_input_event as send_input_event
 from .tools.core import send_text as send_text
 from .tools.core import set_channel_url as set_channel_url
@@ -157,21 +164,7 @@ from .tools.core import set_owner as set_owner
 from .tools.core import shutdown as shutdown
 from .tools.core import telemetry_timeline as telemetry_timeline
 from .tools.core import triage_bundle as triage_bundle
-from .tools.discord import _DISCORD_CLIENT as _DISCORD_CLIENT
-from .tools.discord import _TRUST_NOTE as _TRUST_NOTE
-from .tools.discord import _discord as _discord
-from .tools.discord import _trust_doc as _trust_doc
-from .tools.discord import discord_channels as discord_channels
-from .tools.discord import discord_context as discord_context
-from .tools.discord import discord_forum_posts as discord_forum_posts
-from .tools.discord import discord_member as discord_member
-from .tools.discord import discord_mentions as discord_mentions
-from .tools.discord import discord_mod as discord_mod
-from .tools.discord import discord_pins as discord_pins
-from .tools.discord import discord_read as discord_read
-from .tools.discord import discord_search as discord_search
-from .tools.discord import discord_status as discord_status
-from .tools.discord import discord_thread as discord_thread
+from .tools.core import wait_for as wait_for
 from .tools.firmware import build as build
 from .tools.firmware import build_poll as build_poll
 from .tools.firmware import build_start as build_start
@@ -203,9 +196,11 @@ from .tools.hardware import esptool_erase_flash as esptool_erase_flash
 from .tools.hardware import esptool_raw as esptool_raw
 from .tools.hardware import nrf52_backup_firmware as nrf52_backup_firmware
 from .tools.hardware import nrf52_bootloader_info as nrf52_bootloader_info
+from .tools.hardware import nrf52_eject_uf2 as nrf52_eject_uf2
 from .tools.hardware import nrf52_enter_uf2 as nrf52_enter_uf2
 from .tools.hardware import nrf52_factory_erase as nrf52_factory_erase
 from .tools.hardware import nrf52_flash_uf2 as nrf52_flash_uf2
+from .tools.hardware import nrf52_mount_uf2 as nrf52_mount_uf2
 from .tools.hardware import nrfutil_dfu as nrfutil_dfu
 from .tools.hardware import nrfutil_raw as nrfutil_raw
 from .tools.hardware import picotool_info as picotool_info
@@ -219,12 +214,6 @@ from .tools.hardware import touch_1200bps as touch_1200bps
 from .tools.hardware import uhubctl_cycle as uhubctl_cycle
 from .tools.hardware import uhubctl_list as uhubctl_list
 from .tools.hardware import uhubctl_power as uhubctl_power
-from .tools.local_model import local_model_serve as local_model_serve
-from .tools.local_model import local_model_serve_stop as local_model_serve_stop
-from .tools.local_model import local_model_status as local_model_status
-from .tools.local_model import summarize_window as summarize_window
-from .tools.local_model import triage_window as triage_window
-from .tools.local_model import vision_oracle as vision_oracle
 from .tools.replay import _COT_LOCK as _COT_LOCK
 from .tools.replay import _COT_RELAY as _COT_RELAY
 from .tools.replay import _cot_data_dir as _cot_data_dir
@@ -235,6 +224,7 @@ from .tools.replay import cot_relay_start as cot_relay_start
 from .tools.replay import cot_relay_status as cot_relay_status
 from .tools.replay import cot_relay_stop as cot_relay_stop
 from .tools.replay import get_replay_manager as get_replay_manager
+from .tools.replay import inject as inject
 from .tools.replay import replay_build as replay_build
 from .tools.replay import replay_capture as replay_capture
 from .tools.replay import replay_engine as replay_engine
@@ -250,6 +240,8 @@ from .tools.replay import replay_sim as replay_sim
 from .tools.replay import replay_start as replay_start
 from .tools.replay import replay_status as replay_status
 from .tools.replay import replay_stop as replay_stop
+from .tools.replay import sim as sim
+from .tools.replay import sim_status as sim_status
 from .tools.rf import ble_sniff_poll as ble_sniff_poll
 from .tools.rf import ble_sniff_start as ble_sniff_start
 from .tools.rf import ble_sniff_status as ble_sniff_status
@@ -275,6 +267,8 @@ log = logging.getLogger(__name__)
 
 
 app.add_transform(toolsets.ToolsetTransform(os.environ, lambda: _READ_ONLY))
+app.add_middleware(CallLogMiddleware())
+app.add_middleware(RetiredToolMiddleware())
 
 
 def _start_recorder() -> None:
@@ -444,6 +438,7 @@ _READ_ONLY: set[str] = {
     "android_find_text",
     "android_poll_for_text",
     "android_read_logcat",  # see _OPEN_WORLD note: may echo remote-node content
+    "app_view",  # the read-only actions of android_*, ios_* and the desktop server
     "ios_list_simulators",
     "ios_ui_dump",
     "screenshot_set_poll",  # reads job state; never mutates
@@ -456,8 +451,11 @@ _READ_ONLY: set[str] = {
     "vanity_preview",  # pure key -> id/colour derivation; no device, no host state
     "vanity_grind_poll",  # reads grind-job state; never mutates
     "drive_display_poll",  # reads drive-job state; never touches the device
+    "job",  # reads any job's state through its kind's poller; never mutates
+    "devices",  # reads the name registry and enumerates ports; opens none
     "serial_list",
     "serial_read",  # reads buffered bytes; no write side-effect
+    "inspect",
     "device_info",
     "list_nodes",
     "get_config",
@@ -473,16 +471,15 @@ _READ_ONLY: set[str] = {
     "telemetry_timeline",
     "packets_window",
     "events_window",
+    "query",
+    "wait_for",  # holds a connection open while it watches; changes nothing
     "recorder_status",
     "replay_status",  # reads replay-session run-state; never mutates
+    "sim_status",  # reads simulated-session run-state; never mutates
     "cot_relay_status",  # reads relay run-state (peers/counts); never mutates
     "atak_fleet_status",  # reads fleet bring-up / drive progress; never mutates
     "replay_fuzz_presets",  # static catalog of fuzz presets; no state
     "capture_screen",
-    "summarize_window",  # reads a recorder window, distills via local model; no mutation
-    "vision_oracle",  # reads a screenshot, asks the local model; no mutation
-    "triage_window",  # reads device window (+optional screenshot); no mutation
-    "local_model_status",  # reports backend/reachability; no mutation
     "rf_scan",  # passive SDR capture; no device/host mutation
     "pa_meter_status",  # reads the power meter (version/stored freq/live dBm); no state change
     "ble_sniff_status",  # enumerates USB + resolves a binary; no capture, no state change
@@ -490,22 +487,14 @@ _READ_ONLY: set[str] = {
     "sdk_status",  # reports SDK-CLI bridge availability; no mutation
     "sdk_device_info",  # reads device snapshot via the Kotlin SDK CLI; no mutation
     "sdk_list_nodes",  # reads the device node DB via the Kotlin SDK CLI; no mutation
-    "discord_status",  # read-only bridge report; no mutation
-    "discord_channels",
-    "discord_search",
-    "discord_mentions",
-    "discord_read",
-    "discord_context",
-    "discord_thread",
-    "discord_forum_posts",
-    "discord_pins",
-    "discord_member",
 }
 # Destructive: irreversible or device-state-mutating (most are confirm-gated too).
 _DESTRUCTIVE = {
     "nrf52_enter_uf2",  # reboots the node into its bootloader
     "nrf52_flash_uf2",  # replaces the installed firmware
+    "install",  # replaces the installed firmware, and with erase the whole flash
     "nrf52_factory_erase",  # wipes config, node DB and keys
+    "nrf52_eject_uf2",  # ejects the drive; the bootloader may leave UF2 mode
     "build_start",  # launches a pio subprocess; cannot be undone mid-flight
     "flash_start",  # launches a pio upload subprocess
     "vanity_grind_start",  # spawns a GPU grinder; writes private-key material to disk
@@ -519,10 +508,13 @@ _DESTRUCTIVE = {
     "erase_and_flash",
     "update_flash",
     "touch_1200bps",
+    "configure",  # writes config; reversible through the snapshot it returns
+    "admin",  # restarts, powers off or resets a radio
     "set_owner",
     "set_config",
     "set_channel_url",
     "set_debug_log_api",
+    "send",  # injects a mesh packet; cannot be recalled
     "send_text",  # injects a mesh packet; cannot be recalled
     "inject_frame",  # injects a forged frame into the RX pipeline; cannot be recalled
     "rf_confirm_tx",  # calls send_text internally; injects a mesh packet
@@ -539,6 +531,7 @@ _DESTRUCTIVE = {
     "send_input_event",  # drives device button/GPIO; side-effect on hardware
     "android_screenshot",  # writes a PNG to the host filesystem
     "android_tap",  # drives device input; side-effect on the running app
+    "app",  # android_tap/ios_tap and friends, plus desktop connect and send_text
     "android_swipe",
     "android_type_text",
     "android_clear_logcat",  # mutates device log buffer state
@@ -568,6 +561,7 @@ _DESTRUCTIVE = {
     "nrfutil_raw",
     "picotool_load",
     "picotool_raw",
+    "vendor",  # runs esptool, nrfutil or picotool; erases and writes flash
     "push_fake_nodedb",
     # Writes/overwrites <stream>.jsonl under a client-supplied dest_dir on the
     # host filesystem — surface it so clients don't treat it as a benign read.
@@ -577,6 +571,7 @@ _DESTRUCTIVE = {
     # Bind a TCP listener and serve a simulated mesh to a connecting app.
     "replay_start",
     "replay_stop",
+    "sim",  # starts a simulated mesh listener, or stops sessions
     # Bind a TCP listener (CoT relay) / write captures to the host filesystem.
     "cot_relay_start",
     "cot_relay_stop",
@@ -586,19 +581,27 @@ _DESTRUCTIVE = {
     "atak_drive_route",
     "atak_drive_stop",
     "atak_share_item",  # drives ATAK UI; broadcasts CoT to every connected peer
+    "inject",  # emits packets or FromRadio messages onto the live replay connection
     "replay_inject",  # emits packets onto the live connection
     "replay_inject_beacon",  # emits a MESH_BEACON_APP packet
     "replay_inject_client_notification",  # emits a ClientNotification FromRadio to the client
     "replay_inject_fileinfo",  # emits a FileInfo FromRadio onto the live connection
     "replay_inject_traceroute",  # emits a TRACEROUTE_APP RouteDiscovery packet
     "replay_inject_waypoint",  # emits a WAYPOINT_APP packet (with optional geofence)
-    "local_model_serve",  # spawns a detached llama-server process (and may install it)
-    "local_model_serve_stop",  # terminates the managed llama-server process
     "sdk_send_text",  # injects a mesh packet via the Kotlin SDK CLI; cannot be recalled
+}
+# Writes that are neither read-only nor destructive: they change host state another call
+# can undo, and touch no device.
+_ADDITIVE_WRITES = {
+    "claim",  # takes a device lease; `release` or the TTL ends it
+    "release",  # ends the caller's own lease
+    "nrf52_mount_uf2",  # mounts a drive on the host; unmounting undoes it
 }
 # Idempotent writes: calling with identical args leaves the device in identical
 # state. Clients can safely retry these on timeout without side-effects.
 _IDEMPOTENT_WRITES = {
+    "admin",
+    "configure",
     "set_config",
     "set_owner",
     "set_channel_url",
@@ -610,21 +613,11 @@ _IDEMPOTENT_WRITES = {
 # remote mesh nodes (e.g. packet payloads, log lines) — relevant to the
 # lethal-trifecta prompt-injection risk. See SECURITY.md.
 _OPEN_WORLD = {
-    # Discord: every message is user-authored content from a public server (untrusted).
-    "discord_status",
-    "discord_channels",
-    "discord_search",
-    "discord_mentions",
-    "discord_read",
-    "discord_context",
-    "discord_thread",
-    "discord_forum_posts",
-    "discord_pins",
-    "discord_member",
     "android_docs_search",  # queries the live Android Knowledge Base
     "android_docs_fetch",
     "android_version_lookup",  # queries live maven/Android version metadata
     "list_devices",
+    "inspect",  # node names in the node DB are chosen by whoever owns each radio
     "device_info",
     "list_nodes",
     "get_config",
@@ -636,6 +629,7 @@ _OPEN_WORLD = {
     "vanity_apply",  # writes the security config to a live device and reboots it
     "set_owner",
     "set_debug_log_api",
+    "send",
     "send_text",
     "inject_frame",
     "reboot",
@@ -674,6 +668,8 @@ _OPEN_WORLD = {
     "nrf52_backup_firmware",
     "nrf52_flash_uf2",
     "nrf52_factory_erase",
+    "nrf52_mount_uf2",
+    "nrf52_eject_uf2",
     "push_fake_nodedb",
     # Talk to the external ImmersionRC power meter over USB; pa_sweep also drives
     # the node's TX onto the mesh.
@@ -688,16 +684,21 @@ _OPEN_WORLD = {
     "ble_sniff_start",
     "ble_sniff_poll",
     "ble_sniff_stop",
+    "job",  # returns a BLE capture's names, the same as ble_sniff_poll
     # Return user-authored content from remote mesh nodes — untrusted input
     # that can carry prompt-injection payloads (lethal-trifecta leg 2).
     "logs_window",
     "packets_window",
+    "query",
+    "wait_for",
     # UI/log content sourced from the running app, which can echo remote
     # mesh-node data (node names, text messages) — same lethal-trifecta
     # concern as logs_window/packets_window.
     "android_ui_dump",
     "android_screenshot",
     "android_read_logcat",
+    "app_view",  # the same app UI, logs and node list, whichever platform
+    "app",  # drives the app and can send a mesh message
     # Drive/query a real Android device over adb — external hardware, same
     # reason as send_input_event/capture_screen above (not an untrusted-
     # content concern like the three above; see AGENTS.md/SECURITY.md).
@@ -739,11 +740,14 @@ _TITLE_OVERRIDES: dict[str, str] = {
     "picotool_info": "Picotool Info",
     "picotool_load": "Picotool Load UF2",
     "picotool_raw": "Picotool Raw Pass-Through",
+    "vendor": "Vendor Flash Tool Pass-Through",
     "nrf52_enter_uf2": "nRF52 Enter UF2 Mode",
     "nrf52_bootloader_info": "nRF52 Bootloader Info",
     "nrf52_backup_firmware": "nRF52 Back Up Firmware",
     "nrf52_flash_uf2": "nRF52 Flash UF2",
     "nrf52_factory_erase": "nRF52 Factory Erase",
+    "nrf52_mount_uf2": "nRF52 Mount UF2 Drive",
+    "nrf52_eject_uf2": "nRF52 Eject UF2 Drive",
     "uhubctl_list": "USB Hub List",
     "uhubctl_power": "USB Hub Port Power",
     "uhubctl_cycle": "USB Hub Port Cycle",
@@ -788,6 +792,127 @@ class _AnnotationTransform(Transform):
         return tool.model_copy(update={"annotations": _annotations_for(tool.name)})
 
 
+# Tools whose `port` is not a device: a recorder filter, a listen port, a hub port, or the
+# device a lease is being taken on.
+_PORT_NOT_A_DEVICE = frozenset(
+    {
+        "claim",
+        "cot_relay_start",
+        "ios_open_url",
+        "logs_window",
+        "replay_start",
+        "sim",
+        "telemetry_timeline",
+        "uhubctl_cycle",
+        "uhubctl_power",
+    }
+)
+
+
+# Tools that can find a board on their own when no port is given, so they must name one while
+# another session holds a lease. Their `args` may carry the port instead.
+_FINDS_ITS_OWN_BOARD = frozenset(
+    {
+        "esptool_raw",
+        "nrf52_eject_uf2",
+        "nrf52_factory_erase",
+        "nrf52_flash_uf2",
+        "nrf52_mount_uf2",
+        "nrfutil_raw",
+        "picotool_load",
+        "picotool_raw",
+        "vendor",
+    }
+)
+_PORT_FLAGS = ("--port", "-p")
+
+
+def _port_in_args(args: Any) -> str | None:
+    """The one port `args` names; a tool takes the last of several, so two are refused."""
+    if not isinstance(args, list):
+        return None
+    found = {
+        value
+        for flag, value in itertools.pairwise(args)
+        if flag in _PORT_FLAGS and isinstance(value, str)
+    }
+    found |= {
+        a.split("=", 1)[1]
+        for a in args
+        if isinstance(a, str) and a.startswith(tuple(f + "=" for f in _PORT_FLAGS))
+    }
+    if len(found) > 1:
+        raise ToolError(f"args name more than one port ({', '.join(sorted(found))}); pass one.")
+    return next(iter(found), None)
+
+
+def _takes_device_port(tool: Tool) -> bool:
+    props = (tool.parameters or {}).get("properties", {})
+    if tool.name in _FINDS_ITS_OWN_BOARD:
+        return True
+    return ("port" in props or "node" in props) and tool.name not in _PORT_NOT_A_DEVICE
+
+
+async def _with_lease_for(tool_name: str, lease: str | None, kwargs: dict[str, Any]) -> Any:
+    from fastmcp.tools.tool_transform import forward
+
+    port = kwargs.get("node", kwargs.get("port")) or _port_in_args(kwargs.get("args"))
+    try:
+        # A BLE radio has no lease key until the registry records its BLE identity.
+        resolved = None if (port or "").startswith("ble:") else connection.resolve_port(port)
+    except connection.ConnectionError:
+        resolved = None  # the tool reports the missing or ambiguous port itself
+    try:
+        if resolved is not None:
+            await anyio.to_thread.run_sync(leases.check, resolved, lease)
+        elif not port and tool_name in _FINDS_ITS_OWN_BOARD:
+            await anyio.to_thread.run_sync(leases.check_any, lease)
+    except leases.LeaseError as exc:
+        raise ToolError(str(exc)) from exc
+    token = leases.CURRENT.set(lease)
+    try:
+        return await forward(**kwargs)
+    finally:
+        leases.CURRENT.reset(token)
+
+
+_LEASE_ARG_DOC = (
+    "The handle from `claim` while you hold this device; omit for a device nobody has claimed."
+)
+
+
+def _lease_aware(tool: Tool) -> Tool:
+    if not _takes_device_port(tool):
+        return tool
+    name = tool.name
+
+    async def _with_lease(lease: str | None = None, **kwargs: Any) -> Any:
+        return await _with_lease_for(name, lease, kwargs)
+
+    wrapped = Tool.from_tool(tool, transform_fn=_with_lease)
+    props = dict(wrapped.parameters.get("properties", {}))
+    if "lease" in props:
+        props["lease"] = {**props["lease"], "description": _LEASE_ARG_DOC}
+        wrapped = wrapped.model_copy(
+            update={"parameters": {**wrapped.parameters, "properties": props}}
+        )
+    return wrapped
+
+
+class _LeaseTransform(Transform):
+    """Give every device tool a `lease` argument and refuse a call on someone else's lease."""
+
+    async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
+        return [_lease_aware(t) for t in tools]
+
+    async def get_tool(
+        self, name: str, call_next: GetToolNext, *, version: VersionSpec | None = None
+    ) -> Tool | None:
+        tool = await call_next(name, version=version)
+        return None if tool is None else _lease_aware(tool)
+
+
+app.add_transform(_LeaseTransform())
 app.add_transform(_AnnotationTransform())
 
 
@@ -812,6 +937,18 @@ def _resource_doctor() -> str:
 def _resource_capabilities() -> str:
     """One-line summary of which capability groups are active on this host."""
     return capabilities.detect().summary()
+
+
+@app.resource(
+    "meshtastic://recorder/schema",
+    name="Recorder query schema",
+    mime_type="application/json",
+)
+def _resource_recorder_schema() -> str:
+    """The views the `query` tool reads, with each column's DuckDB type."""
+    import json
+
+    return json.dumps(recorder_query.schema(), indent=2)
 
 
 @app.resource(
@@ -893,7 +1030,7 @@ def bringup_device(port: str = "", region: str = "US") -> str:
         "1. `list_devices` to find it (or use the given port / a tcp://host:port).\n"
         "2. `device_info` for firmware version + node identity; `list_nodes` for the DB.\n"
         f"3. Confirm region is set ({region}); if unset, `get_config('lora')` then `set_config`.\n"
-        "4. `send_text` a marker to ^all and confirm it leaves on the wire.\n"
+        "4. `send` a text marker to ^all and confirm it leaves on the wire.\n"
         "Report firmware version, region, node count, and any config that looks off."
     )
 
