@@ -46,7 +46,7 @@ Cause: the tool is hidden. Three settings hide tools:
 
 - `MESHTASTIC_MCP_TOOLSETS` names the groups to expose, and a tool outside them is not listed. A `-group` entry removes one.
 - `MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state.
-- The `legacy` toolset (`device_info`, `get_config`, `set_config`, `send_text`, `reboot` and the other pre-1.0 tools) is opt-in. It comes only when named: `MESHTASTIC_MCP_TOOLSETS=all,legacy`.
+- The `legacy` toolset (`device_info`, `get_config`, `set_config`, `send_text`, `reboot` and the other pre-1.0 tools) is opt-in. It comes only when named: `MESHTASTIC_MCP_TOOLSETS=all,legacy`. A call to a legacy name while it is hidden fails with the call that replaces it, and a `discord_*` or local-model name says where it went.
 
 A tool can also be missing because its capability is not active, for example the firmware tools without `MESHTASTIC_FIRMWARE_ROOT`, or the Android tools without `adb`.
 
@@ -66,7 +66,15 @@ Symptom: `nrf52_bootloader_info`, `nrf52_backup_firmware` or `nrf52_flash_uf2` c
 
 Cause: the tools read the drive where the operating system mounts it. A desktop automounts it, and a headless host does not. On Linux the tools look under `/run/media/<user>`, `/media/<user>`, `/media` and `/mnt`; on macOS under `/Volumes`.
 
-Fix: mount the drive by hand under one of those directories, for example `sudo mount /dev/disk/by-label/<label> /mnt/uf2`, then retry. Pass the board's app port, preferably its `/dev/serial/by-id/` path: the drive is matched by USB serial, and the by-id name still carries that serial after the link disappears in UF2 mode. The board stays in UF2 mode until a UF2 lands or it is power-cycled.
+Fix: `nrf52_mount_uf2(port=...)` mounts it through udisks2 (Linux) or `diskutil` (macOS), or mount it by hand under one of those directories, for example `sudo mount /dev/disk/by-label/<label> /mnt/uf2`, then retry. Pass the board's app port, preferably its `/dev/serial/by-id/` path: the drive is matched by USB serial, and the by-id name still carries that serial after the link disappears in UF2 mode. The board stays in UF2 mode until a UF2 lands or it is power-cycled.
+
+## Mounting or ejecting a UF2 drive is refused over SSH
+
+Symptom: `nrf52_mount_uf2` or `nrf52_eject_uf2` fails with "polkit refused".
+
+Cause: udisks2 lets only the desktop session mount or eject a drive; an SSH session or a systemd service is refused. Flashing never needs either tool.
+
+Fix: run the one-shot command the error prints, which grants only the actions that call needs. `doctor` reports the same under `udisks`. See [firmware-builds.md](firmware-builds.md#headless-linux-bench).
 
 ## `configure` returns `verified: false`
 

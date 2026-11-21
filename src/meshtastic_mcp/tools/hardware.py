@@ -25,6 +25,7 @@ from .. import (
     nrf52_bootloader,
     registry,
     serial_session,
+    uf2_host,
 )
 from .. import confirm as confirm_mod
 from .. import tasks as tasks_mod
@@ -627,8 +628,103 @@ async def nrf52_backup_firmware(port: str | None = None) -> dict[str, Any]:
     return cast(dict[str, Any], result)
 
 
+def _board_serial(port: str | None) -> str | None:
+    """The USB serial of `port`'s board, from its by-id name or the port listing."""
+    if port is None:
+        return None
+    m = _BY_ID_SERIAL.search(os.path.basename(port))
+    if m:
+        return m.group(1)
+    return nrf52_bootloader.port_usb_serial(port)
+
+
+def _host_drive_error(exc: uf2_host.HostDriveError) -> ToolError:
+    return ToolError(str(exc))
+
+
+@app.tool()
+async def nrf52_mount_uf2(port: str | None = None, device: str | None = None) -> dict[str, Any]:
+    """Mount a board's UF2 drive on a host that does not automount it, and return its info.
+
+    Flashing never needs it. Linux uses udisks2 (over SSH a refusal prints the one-shot polkit
+    rule to allow it), macOS `diskutil`. A drive that is already mounted is returned as is.
+    Returns `{mounted, drive}`.
+
+    Args:
+        port: The board's app port, ideally its `/dev/serial/by-id` path; its USB serial finds
+            the drive's block device. Omit when only one UF2 drive is mounted, or pass `device`.
+        device: The drive's block device (`/dev/sdb`, or `disk4` on macOS) when the port
+            cannot name it.
+    """
+
+    def _mount() -> dict[str, Any]:
+        try:
+            return {"mounted": False, "drive": _uf2_drive(port)}
+        except ToolError:
+            pass
+        dev = device
+        if dev is None:
+            serial = _board_serial(port)
+            dev = uf2_host.block_device_for_serial(serial) if serial else None
+        if dev is None:
+            raise ToolError(
+                "no UF2 block device found for that board; check it is in UF2 mode "
+                "(nrf52_enter_uf2) and pass its app port, or pass device="
+            )
+        try:
+            uf2_host.mount(dev)
+        except uf2_host.HostDriveError as exc:
+            raise _host_drive_error(exc) from None
+        return {"mounted": True, "drive": _wait_for_uf2_drive(port) if port else _uf2_drive(None)}
+
+    return cast(dict[str, Any], await _off_loop(_mount))
+
+
+@app.tool()
+async def nrf52_eject_uf2(
+    ctx: Context, port: str | None = None, confirm: bool = False
+) -> dict[str, Any]:
+    """Unmount and eject a board's UF2 drive, the way a desktop's eject does.
+
+    For testing how the bootloader handles an eject; flashing never needs it. Linux sends udisks2
+    `Drive.Eject` (over SSH a refusal prints the one-shot polkit rule to allow it), macOS
+    `diskutil eject`. Requires confirm=True, or the user's answer when the client
+    can ask. Returns `{ejected, label, device, steps}`.
+
+    Args:
+        port: The board's app port, ideally its `/dev/serial/by-id` path; omit when only one
+            UF2 drive is mounted.
+        confirm: `True` once the user agreed; omitted, a client that can ask prompts the
+            human.
+    """
+    drive = await _off_loop(lambda: _uf2_drive(port))
+    pending = await confirm_mod.gate(
+        ctx, f"eject the UF2 drive {drive.get('label')} at {drive.get('mount')}", confirm
+    )
+    if pending is not None:
+        return cast(dict[str, Any], pending)
+
+    def _eject() -> dict[str, Any]:
+        try:
+            steps = uf2_host.eject(drive.get("device"), drive.get("mount"))
+        except uf2_host.HostDriveError as exc:
+            raise _host_drive_error(exc) from None
+        return {
+            "ejected": True,
+            "label": drive.get("label"),
+            "device": drive.get("device"),
+            "steps": steps,
+        }
+
+    return cast(dict[str, Any], await _off_loop(_eject))
+
+
 def _check_softdevice(drive: dict[str, Any], uf2_path: str) -> dict[str, Any]:
     image = nrf52_bootloader.uf2_file_info(uf2_path)
+    # A bootloader self-update image (family 0xd663823c) starts at 0 by design; the bootloader
+    # moves it into place, so the application start does not apply.
+    if image.get("is_bootloader_update"):
+        return image
     softdevice = (drive.get("info") or {}).get("softdevice")
     start = _SD_APP_START.get(softdevice or "")
     target = image.get("target_start")
@@ -648,8 +744,10 @@ async def nrf52_flash_uf2(
 
     Several times faster than serial DFU, and no touch or DFU window is involved. The board
     must be in UF2 mode (`nrf52_enter_uf2`). Refuses a file that is not a UF2 and an image built
-    for the other SoftDevice than the one INFO_UF2.TXT reports. Requires confirm=True, or the
-    user's answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
+    for the other SoftDevice than the one INFO_UF2.TXT reports; a bootloader self-update image
+    (`update-*.uf2`) skips that check, says `bootloader_update: true`, and asks even with
+    confirm=True under `MESHTASTIC_MCP_CONFIRM=human`. Requires confirm=True, or the user's
+    answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
     result and logged before the wait; follow it with `flash_poll` if the call is canceled. A
     copy the bootloader did not take is a tool error.
 
@@ -662,10 +760,14 @@ async def nrf52_flash_uf2(
     """
     drive = await _off_loop(lambda: _uf2_drive(port))
     image = await _off_loop(lambda: _check_softdevice(drive, uf2_path))
+    bootloader = bool(image.get("is_bootloader_update"))
+    what = "the bootloader update " if bootloader else ""
     pending = await confirm_mod.gate(
         ctx,
-        f"flash {os.path.basename(uf2_path)} onto {drive.get('label')} at {drive.get('mount')}",
+        f"flash {what}{os.path.basename(uf2_path)} onto {drive.get('label')} at "
+        f"{drive.get('mount')}",
         confirm,
+        irreversible=bootloader,
     )
     if pending is not None:
         return cast(dict[str, Any], pending)
@@ -677,7 +779,7 @@ async def nrf52_flash_uf2(
         # A UF2 copy finishes in seconds, and flash_poll exists only with a firmware tree.
         poll_tool=None,
     )
-    return {**result, "image": image}
+    return {**result, "image": image, "bootloader_update": bootloader}
 
 
 def _uf2_result(res: dict[str, Any]) -> dict[str, Any]:

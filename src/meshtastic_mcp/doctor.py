@@ -1065,6 +1065,54 @@ def _mvgrind_check() -> Check:
 # ---------------------------------------------------------------------------
 # The server itself: which code it runs, and what its PATH hides
 # ---------------------------------------------------------------------------
+def _udisks_check() -> Check | None:
+    """Linux only: may this server mount and eject a UF2 drive through udisks2?
+
+    Normal flashing never needs it; only `nrf52_mount_uf2` and `nrf52_eject_uf2` do. A desktop
+    session is allowed by udisks2's defaults; an SSH session or a systemd service needs a polkit
+    rule. `pkcheck` answers for this process without prompting.
+    """
+    if not _IS_LINUX:
+        return None
+    from . import uf2_host
+
+    needed = "nrf52_mount_uf2 / nrf52_eject_uf2 on a headless bench (optional)"
+    pkcheck = _which("pkcheck")
+    if _which("udisksctl") is None or pkcheck is None:
+        return Check(
+            "udisks",
+            "observability",
+            STATUS_OK,
+            needed,
+            detail="udisks2 not installed; mount UF2 drives by hand if the host does not",
+        )
+    refused = []
+    for action in (uf2_host.MOUNT_ACTIONS[0], uf2_host.EJECT_ACTIONS[1]):
+        try:
+            res = subprocess.run(
+                [pkcheck, "--action-id", action, "--process", str(os.getpid())],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return Check(
+                "udisks", "observability", STATUS_OK, needed, detail="pkcheck did not answer"
+            )
+        if res.returncode != 0:
+            refused.append(action)
+    if not refused:
+        return Check("udisks", "observability", STATUS_OK, needed, detail="mount and eject allowed")
+    return Check(
+        "udisks",
+        "observability",
+        STATUS_DEGRADED,
+        needed,
+        detail="polkit refuses UF2 mount/eject from this session (not the desktop seat)",
+        fix=uf2_host.polkit_rule_command(uf2_host.POLKIT_ACTIONS),
+    )
+
+
 def _installed_version() -> str:
     from importlib import metadata
 
@@ -1364,6 +1412,9 @@ def run() -> DoctorReport:
     source = _install_source_check()
     if source is not None:
         checks.append(source)
+    udisks = _udisks_check()
+    if udisks is not None:
+        checks.append(udisks)
     _apply_path_gaps(checks)
     return DoctorReport(
         platform=f"{platform.system()} {platform.machine()} / Python {platform.python_version()}",

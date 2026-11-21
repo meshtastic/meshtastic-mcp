@@ -59,6 +59,7 @@ from . import vanity as vanity
 from .call_log import CallLogMiddleware
 from .recorder import get_recorder
 from .replay import ReplayParams as ReplayParams
+from .retired_tools import RetiredToolMiddleware
 from .schemas import DeviceEntry as DeviceEntry
 from .schemas import DeviceInfo as DeviceInfo
 from .schemas import DoctorReport as DoctorReport
@@ -195,9 +196,11 @@ from .tools.hardware import esptool_erase_flash as esptool_erase_flash
 from .tools.hardware import esptool_raw as esptool_raw
 from .tools.hardware import nrf52_backup_firmware as nrf52_backup_firmware
 from .tools.hardware import nrf52_bootloader_info as nrf52_bootloader_info
+from .tools.hardware import nrf52_eject_uf2 as nrf52_eject_uf2
 from .tools.hardware import nrf52_enter_uf2 as nrf52_enter_uf2
 from .tools.hardware import nrf52_factory_erase as nrf52_factory_erase
 from .tools.hardware import nrf52_flash_uf2 as nrf52_flash_uf2
+from .tools.hardware import nrf52_mount_uf2 as nrf52_mount_uf2
 from .tools.hardware import nrfutil_dfu as nrfutil_dfu
 from .tools.hardware import nrfutil_raw as nrfutil_raw
 from .tools.hardware import picotool_info as picotool_info
@@ -265,6 +268,7 @@ log = logging.getLogger(__name__)
 
 app.add_transform(toolsets.ToolsetTransform(os.environ, lambda: _READ_ONLY))
 app.add_middleware(CallLogMiddleware())
+app.add_middleware(RetiredToolMiddleware())
 
 
 def _start_recorder() -> None:
@@ -490,6 +494,7 @@ _DESTRUCTIVE = {
     "nrf52_flash_uf2",  # replaces the installed firmware
     "install",  # replaces the installed firmware, and with erase the whole flash
     "nrf52_factory_erase",  # wipes config, node DB and keys
+    "nrf52_eject_uf2",  # ejects the drive; the bootloader may leave UF2 mode
     "build_start",  # launches a pio subprocess; cannot be undone mid-flight
     "flash_start",  # launches a pio upload subprocess
     "vanity_grind_start",  # spawns a GPU grinder; writes private-key material to disk
@@ -590,6 +595,7 @@ _DESTRUCTIVE = {
 _ADDITIVE_WRITES = {
     "claim",  # takes a device lease; `release` or the TTL ends it
     "release",  # ends the caller's own lease
+    "nrf52_mount_uf2",  # mounts a drive on the host; unmounting undoes it
 }
 # Idempotent writes: calling with identical args leaves the device in identical
 # state. Clients can safely retry these on timeout without side-effects.
@@ -662,6 +668,8 @@ _OPEN_WORLD = {
     "nrf52_backup_firmware",
     "nrf52_flash_uf2",
     "nrf52_factory_erase",
+    "nrf52_mount_uf2",
+    "nrf52_eject_uf2",
     "push_fake_nodedb",
     # Talk to the external ImmersionRC power meter over USB; pa_sweep also drives
     # the node's TX onto the mesh.
@@ -738,6 +746,8 @@ _TITLE_OVERRIDES: dict[str, str] = {
     "nrf52_backup_firmware": "nRF52 Back Up Firmware",
     "nrf52_flash_uf2": "nRF52 Flash UF2",
     "nrf52_factory_erase": "nRF52 Factory Erase",
+    "nrf52_mount_uf2": "nRF52 Mount UF2 Drive",
+    "nrf52_eject_uf2": "nRF52 Eject UF2 Drive",
     "uhubctl_list": "USB Hub List",
     "uhubctl_power": "USB Hub Port Power",
     "uhubctl_cycle": "USB Hub Port Cycle",
@@ -804,8 +814,10 @@ _PORT_NOT_A_DEVICE = frozenset(
 _FINDS_ITS_OWN_BOARD = frozenset(
     {
         "esptool_raw",
+        "nrf52_eject_uf2",
         "nrf52_factory_erase",
         "nrf52_flash_uf2",
+        "nrf52_mount_uf2",
         "nrfutil_raw",
         "picotool_load",
         "picotool_raw",

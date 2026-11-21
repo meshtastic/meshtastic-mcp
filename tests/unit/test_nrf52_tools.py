@@ -49,8 +49,8 @@ def _drive(tmp_path, info_text):
     }
 
 
-def _uf2(path, target):
-    block = struct.pack("<IIIIIIII", 0x0A324655, 0x9E5D5157, 0x2000, target, 256, 0, 1, 0xADA52840)
+def _uf2(path, target, family=0xADA52840):
+    block = struct.pack("<IIIIIIII", 0x0A324655, 0x9E5D5157, 0x2000, target, 256, 0, 1, family)
     block += b"\0" * 476 + struct.pack("<I", 0x0AB16F30)
     path.write_bytes(block)
     return str(path)
@@ -121,6 +121,38 @@ def test_a_matching_image_asks_then_flashes_as_a_job(server, monkeypatch, tmp_pa
     result = _call(_app(server, "nrf52_flash_uf2"), "nrf52_flash_uf2", {"uf2_path": image}, handler)
     assert result.is_error is False and len(seen) == 1
     assert result.structured_content["job_id"]
+
+
+def test_a_bootloader_update_skips_the_softdevice_check_and_says_so(
+    server, monkeypatch, tmp_path
+) -> None:
+    drive = _drive(tmp_path, INFO_OTAFIX)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
+    monkeypatch.setattr(
+        nrf52_bootloader, "flash_uf2", lambda d, p, timeout_s: {"ok": True, "outcome": "detached"}
+    )
+    handler, seen = _accept()
+    image = _uf2(tmp_path / "update-rak4631_bootloader_nosd.uf2", 0x0, family=0xD663823C)
+    result = _call(_app(server, "nrf52_flash_uf2"), "nrf52_flash_uf2", {"uf2_path": image}, handler)
+    assert result.is_error is False, result.content[0].text
+    assert result.structured_content["bootloader_update"] is True
+    assert len(seen) == 1 and "bootloader update" in seen[0]
+
+
+def test_a_bootloader_update_asks_the_human_even_with_confirm(
+    server, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv(confirm.POLICY_ENV, "human")
+    drive = _drive(tmp_path, INFO_OTAFIX)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
+    monkeypatch.setattr(
+        nrf52_bootloader, "flash_uf2", lambda d, p, timeout_s: {"ok": True, "outcome": "detached"}
+    )
+    handler, seen = _accept()
+    image = _uf2(tmp_path / "update-rak4631_bootloader_nosd.uf2", 0x0, family=0xD663823C)
+    args = {"uf2_path": image, "confirm": True}
+    result = _call(_app(server, "nrf52_flash_uf2"), "nrf52_flash_uf2", args, handler)
+    assert result.is_error is False and len(seen) == 1
 
 
 def test_a_copy_the_bootloader_did_not_take_is_an_error(server, monkeypatch, tmp_path) -> None:

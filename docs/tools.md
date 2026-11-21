@@ -1521,6 +1521,23 @@ Returns `{drive}` for one board, or `{ok, count, drives, searched_roots, ...}`.
 | `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
 | `port` | string | `null` | Returns the drive for that board, matched by USB serial: pass the app port you used before, ideally its `/dev/serial/by-id` path, which still works after the link is gone in UF2 mode. Without it, lists every mounted UF2 drive. |
 
+### `nrf52_eject_uf2`
+
+Destructive, open world.
+
+Unmount and eject a board's UF2 drive, the way a desktop's eject does.
+
+For testing how the bootloader handles an eject; flashing never needs it. Linux sends udisks2
+`Drive.Eject` (over SSH a refusal prints the one-shot polkit rule to allow it), macOS
+`diskutil eject`. Requires confirm=True, or the user's answer when the client
+can ask. Returns `{ejected, label, device, steps}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `port` | string | `null` | The board's app port, ideally its `/dev/serial/by-id` path; omit when only one UF2 drive is mounted. |
+| `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
+
 ### `nrf52_enter_uf2`
 
 Destructive, open world.
@@ -1566,8 +1583,10 @@ Flash an nRF52 board by copying a .uf2 onto its bootloader UF2 drive.
 
 Several times faster than serial DFU, and no touch or DFU window is involved. The board
 must be in UF2 mode (`nrf52_enter_uf2`). Refuses a file that is not a UF2 and an image built
-for the other SoftDevice than the one INFO_UF2.TXT reports. Requires confirm=True, or the
-user's answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
+for the other SoftDevice than the one INFO_UF2.TXT reports; a bootloader self-update image
+(`update-*.uf2`) skips that check, says `bootloader_update: true`, and asks even with
+confirm=True under `MESHTASTIC_MCP_CONFIRM=human`. Requires confirm=True, or the user's
+answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
 result and logged before the wait; follow it with `flash_poll` if the call is canceled. A
 copy the bootloader did not take is a tool error.
 
@@ -1577,6 +1596,22 @@ copy the bootloader did not take is a tool error.
 | `uf2_path` | string | required | The .uf2 file to copy. |
 | `port` | string | `null` | The board's app port, ideally its `/dev/serial/by-id` path; omit when only one UF2 drive is mounted. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
+
+### `nrf52_mount_uf2`
+
+Open world.
+
+Mount a board's UF2 drive on a host that does not automount it, and return its info.
+
+Flashing never needs it. Linux uses udisks2 (over SSH a refusal prints the one-shot polkit
+rule to allow it), macOS `diskutil`. A drive that is already mounted is returned as is.
+Returns `{mounted, drive}`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
+| `port` | string | `null` | The board's app port, ideally its `/dev/serial/by-id` path; its USB serial finds the drive's block device. Omit when only one UF2 drive is mounted, or pass `device`. |
+| `device` | string | `null` | The drive's block device (`/dev/sdb`, or `disk4` on macOS) when the port cannot name it. |
 
 ### `nrfutil_dfu`
 
