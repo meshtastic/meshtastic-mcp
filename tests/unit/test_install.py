@@ -65,9 +65,12 @@ def test_erase_is_refused_for_a_board_that_is_not_esp32(bench) -> None:
     assert bench.calls == []
 
 
-@pytest.mark.parametrize(("ext", "method"), [(".zip", "nrfutil_dfu"), (".bin", "esptool_raw")])
-def test_a_file_goes_by_its_type(bench, ext, method) -> None:
-    path = bench.tmp / f"firmware{ext}"
+@pytest.mark.parametrize(
+    ("name", "method"),
+    [("firmware.zip", "nrfutil_dfu"), ("firmware-heltec-v3-2.8.3.abc.factory.bin", "esptool_raw")],
+)
+def test_a_file_goes_by_its_type(bench, name, method) -> None:
+    path = bench.tmp / name
     path.write_bytes(b"x")
     hardware._install(PORT, {"file": str(path)}, False, None, None)
     assert [c[0] for c in bench.calls] == [method]
@@ -84,3 +87,12 @@ def test_an_unknown_file_type_is_refused(bench) -> None:
     path.write_bytes(b"x")
     with pytest.raises(ToolError, match=r"\.uf2, \.zip or \.bin"):
         hardware._install(PORT, {"file": str(path)}, False, None, None)
+
+
+@pytest.mark.parametrize("name", ["firmware-heltec-v3-2.8.3.abc.bin", "bootloader.bin"])
+def test_a_bin_that_is_not_a_factory_image_is_refused(bench, name) -> None:
+    path = bench.tmp / name
+    path.write_bytes(b"x")
+    with pytest.raises(ToolError, match="not a factory image"):
+        hardware._install(PORT, {"file": str(path)}, False, None, None)
+    assert bench.calls == []

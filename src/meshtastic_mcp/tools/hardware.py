@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import tempfile
@@ -812,6 +813,14 @@ def _install(
             method = "nrfutil dfu"
             res = hw_tools.nrfutil_dfu(port, path, confirm=True)
         elif ext == ".bin":
+            # Only a factory image starts at 0x0; anything else there replaces the bootloader.
+            name = os.path.basename(path)
+            if not fnmatch.fnmatch(name, "firmware-*.factory.bin"):
+                raise ToolError(
+                    f"{name} is not a factory image, and writing it at 0x0 would replace the "
+                    "bootloader: pass the release's firmware-<board>-<version>.factory.bin, "
+                    "or install a build with env"
+                )
             method = "esptool write_flash"
             args = ["write_flash"] + (["--erase-all"] if erase else []) + ["0x0", path]
             res = hw_tools.esptool_raw(args, port=port, confirm=True)
