@@ -170,7 +170,8 @@ def test_an_unknown_part_is_refused(radio) -> None:
         core.inspect(what="everything")
 
 
-def test_a_ble_target_goes_to_the_sdk(radio, monkeypatch) -> None:
+def test_the_sdk_backend_reads_a_ble_target(radio, monkeypatch) -> None:
+    monkeypatch.setenv(backends.BACKEND_ENV, "sdk")
     calls = []
     monkeypatch.setattr(sdk_cli, "available", lambda: True)
 
@@ -187,12 +188,14 @@ def test_a_ble_target_goes_to_the_sdk(radio, monkeypatch) -> None:
 
 
 def test_the_sdk_backend_names_what_it_cannot_read(radio, monkeypatch) -> None:
+    monkeypatch.setenv(backends.BACKEND_ENV, "sdk")
     monkeypatch.setattr(sdk_cli, "available", lambda: True)
     with pytest.raises(ToolError, match="reads only"):
         core.inspect(node="ble:Heltec", what="config")
 
 
-def test_a_ble_target_without_the_sdk_says_how_to_get_it(radio, monkeypatch) -> None:
+def test_the_sdk_backend_without_its_cli_says_how_to_get_it(radio, monkeypatch) -> None:
+    monkeypatch.setenv(backends.BACKEND_ENV, "sdk")
     monkeypatch.setattr(sdk_cli, "available", lambda: False)
     with pytest.raises(ToolError, match=sdk_cli.CLI_ENV):
         core.inspect(node="ble:Heltec")
@@ -204,3 +207,8 @@ def test_the_channel_url_comes_when_named(radio) -> None:
         "primary": "https://meshtastic.org/e/#one",
         "all": "https://meshtastic.org/e/#all",
     }
+
+
+def test_a_ble_target_goes_to_the_python_backend_by_default(radio) -> None:
+    result = core.inspect(node="ble:Heltec")
+    assert radio.connects == ["ble:Heltec"] and result["backend"] == "python"
