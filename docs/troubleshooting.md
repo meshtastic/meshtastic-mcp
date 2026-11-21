@@ -46,7 +46,7 @@ Cause: the tool is hidden. Three settings hide tools:
 
 - `MESHTASTIC_MCP_TOOLSETS` names the groups to expose, and a tool outside them is not listed. A `-group` entry removes one.
 - `MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state.
-- The `legacy` toolset (`device_info`, `get_config`, `set_config`, `send_text`, `reboot` and the other pre-1.0 tools) is opt-in. It comes only when named: `MESHTASTIC_MCP_TOOLSETS=all,legacy`.
+- The `legacy` toolset (`device_info`, `get_config`, `set_config`, `send_text`, `reboot` and the other pre-1.0 tools) is opt-in. It comes only when named: `MESHTASTIC_MCP_TOOLSETS=all,legacy`. A call to a legacy name while it is hidden fails with the call that replaces it, and a `discord_*` or local-model name says where it went.
 
 A tool can also be missing because its capability is not active, for example the firmware tools without `MESHTASTIC_FIRMWARE_ROOT`, or the Android tools without `adb`.
 
