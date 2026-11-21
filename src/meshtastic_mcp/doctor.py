@@ -1212,6 +1212,33 @@ def _serve_version_check() -> Check:
             fix=restart,
         )
     theirs = str(info.get("version", ""))
+    ours_src = bridge.source_commit()
+    if ours_src is not None:
+        # An editable install: the version string is frozen at install time, the commit is not.
+        started = str(info.get("commit", ""))
+        now = ours_src["commit"]
+        if not started:
+            return Check(
+                "serve",
+                "core",
+                STATUS_DEGRADED,
+                needed,
+                detail=f"serve at {where} does not record its commit; the checkout is at "
+                f"{now[:9]}, so a restart is the only way to know it runs that code",
+                fix=restart,
+            )
+        if started != now:
+            return Check(
+                "serve",
+                "core",
+                STATUS_DEGRADED,
+                needed,
+                detail=f"serve at {where} started at {started[:9]}; the checkout is now at "
+                f"{now[:9]}",
+                fix=restart,
+            )
+        dirty = " with local changes" if info.get("dirty") else ""
+        return Check("serve", "core", STATUS_OK, needed, detail=f"{where} runs {now[:9]}{dirty}")
     ours = _installed_version()
     if theirs and ours and theirs != ours:
         return Check(
@@ -1233,7 +1260,11 @@ def _install_source_check() -> Check | None:
     needed = "run the code in the workspace checkout"
     label, editable = _install_source()
     if editable:
-        return Check("install-source", "core", STATUS_OK, needed, detail=label)
+        from . import bridge
+
+        src = bridge.source_commit()
+        at = f" at {src['commit'][:9]}" if src else ""
+        return Check("install-source", "core", STATUS_OK, needed, detail=f"{label}{at}")
     ours = _installed_version()
     head = _git_head(checkout)
     m = re.search(r"\+g([0-9a-f]{7,})", ours)

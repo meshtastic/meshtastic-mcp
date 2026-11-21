@@ -70,10 +70,41 @@ def _try_lock(fh: IO[bytes]) -> bool:
     return True
 
 
-def claim_host(url: str, token_file: str | None, version: str) -> IO[bytes]:
+def source_commit() -> dict[str, Any] | None:
+    """`{commit, dirty}` of the git checkout this code runs from, or None for a built install.
+
+    An editable install's package version is frozen when it is installed, so the commit is
+    what tells a server started before a pull from one started after it.
+    """
+    import subprocess
+
+    root = Path(__file__).resolve().parents[2]
+    if not (root / ".git").exists() or not (root / "pyproject.toml").is_file():
+        return None
+
+    def git(*args: str) -> str | None:
+        try:
+            res = subprocess.run(
+                ["git", "-C", str(root), *args], capture_output=True, text=True, timeout=5
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return res.stdout if res.returncode == 0 else None
+
+    head = (git("rev-parse", "HEAD") or "").strip()
+    if not head:
+        return None
+    status = git("status", "--porcelain", "--untracked-files=no")
+    return {"commit": head, "dirty": bool(status and status.strip())}
+
+
+def claim_host(
+    url: str, token_file: str | None, version: str, source: dict[str, Any] | None = None
+) -> IO[bytes]:
     """Take this host's server lock and publish where the server listens.
 
     Keep the returned handle open for the server's life; the lock goes with the process.
+    `source` is `source_commit()` for a server running from a checkout.
     Raises `ServerAlreadyRunning` naming the other server.
     """
     fh = open(_lock_path(), "a+b")  # noqa: SIM115  (held for the process lifetime)
@@ -82,7 +113,13 @@ def claim_host(url: str, token_file: str | None, version: str) -> IO[bytes]:
         other = _read_info()
         where = other.get("url", "an unknown address") if other else "an unknown address"
         raise ServerAlreadyRunning(f"a meshtastic-mcp server already runs on this host at {where}")
-    info = {"url": url, "token_file": token_file, "pid": os.getpid(), "version": version}
+    info: dict[str, Any] = {
+        "url": url,
+        "token_file": token_file,
+        "pid": os.getpid(),
+        "version": version,
+        **(source or {}),
+    }
     tmp = _info_path().with_suffix(".tmp")
     tmp.write_text(json.dumps(info), encoding="utf-8")
     os.replace(tmp, _info_path())
