@@ -59,7 +59,7 @@ dut = avd.tcp_dut_address(4403)  # "10.0.2.2:4403"
 
 # 4. Run a loop, e.g. inbound (device → app):
 TOKEN = f"E2E-{int(time.time())}"
-# tester sends via the MCP send_text / mesh_e2e.py against :4404 ...
+# tester sends via the MCP send / mesh_e2e.py against :4404 ...
 assert avd.poll_for_text(TOKEN, serial=serial, timeout=30)  # app rendered it → PASS
 ```
 

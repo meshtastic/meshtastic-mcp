@@ -44,12 +44,12 @@ meshtastic-mcp boards get heltec-v3     # full metadata for one board
 Fall back to MCP tools when already in an MCP session or when you need board metadata
 for a follow-on `build_start`:
 ```
-list_devices()                   # find candidates (include_unknown=True to see every port)
-device_info(port=P)              # firmware version, node identity, channel summary
-list_nodes(port=P)               # the node DB (long/short name, SNR, last-heard, position)
+devices()                        # attached radios by name; opens no port
+inspect(node=N)                  # firmware version, node identity, region, channel summary
+inspect(node=N, what="nodes")    # the node DB (long/short name, SNR, hops, last-heard)
 ```
 
-Pass `port` as the path `list_devices` reports (on Linux prefer the stable
+Pass `node` as a name `devices` reports (`heltec-v3-aa13`), the path `list_devices` reports (on Linux prefer the stable
 `/dev/serial/by-id/...` link) or `tcp://host:port`. Omit it only when exactly one radio is
 attached.
 
@@ -63,19 +63,21 @@ same call does not help.
 ## Configure (mutating)
 
 ```
-get_config(section="lora", port=P)                   # lora | device | position | power | ...
-set_config(path="lora.region", value="US", port=P)   # one field by dot-path
-get_channel_url(port=P)                              # the shareable channel URL (keys)
+inspect(node=N, what="lora")                         # a section, default values included
+configure(node=N, changes={"lora.region": "US", "owner.long_name": "Base"})
+configure(node=N, restore=<snapshot>)                # undo, from the snapshot it returned
+inspect(node=N, what="url")                          # the shareable channel URL (keys)
 set_channel_url(url=U, port=P)
-set_owner(long_name="...", short_name="ABCD", port=P)
 ```
-After a write, **reboot then re-read** to prove it persisted to NVS, not just RAM
-(`reboot(port=P)`, which is confirm-gated, then `get_config`). Region (`lora.region`) and
-`network.enabled_protocols` are the two that bite; see `meshtastic-e2e` `topology.md`.
+`configure` snapshots first and reads every change back over a fresh connection, so
+`verified: true` means it stuck; no restart is needed to commit. Fields the firmware changed
+on its own (a region change caps `tx_power`) come back as `side_effects`. Region
+(`lora.region`) and `network.enabled_protocols` are the two that bite; see `meshtastic-e2e`
+`topology.md`.
 
 ## Destructive tools and confirmation
 
-`reboot`, `shutdown`, `factory_reset`, the flash tools, the `nrf52_*` writers, `uhubctl_power`
+`admin` (restarts, power-off and resets), the flash tools, the `nrf52_*` writers, `uhubctl_power`
 (off) / `uhubctl_cycle`, `vanity_apply` and the destructive `esptool`/`nrfutil`/`picotool` calls
 take `confirm`.
 
@@ -84,7 +86,7 @@ take `confirm`.
 - A refusal naming `confirm=True` means this client cannot ask (subagents, `claude -p`). Tell
   the user what will happen and pass `confirm=True` only after they agree. Never retry with it
   on your own.
-- With `MESHTASTIC_MCP_CONFIRM=human` on the server, irreversible tools (`factory_reset`,
+- With `MESHTASTIC_MCP_CONFIRM=human` on the server, irreversible tools (`admin` resets,
   `erase_and_flash`, `nrf52_factory_erase`, `vanity_apply`, destructive vendor calls) ask even
   with `confirm=True`; "cannot ask" then means the user must run it from a client that can.
 - `vendor(tool="esptool", args=["flash_id"])` and other harmless subcommands never ask.
@@ -111,7 +113,9 @@ vanity_apply <private_key> <port>             # asks; irreversible (see Destruct
 ## Message + observe
 
 ```
-send_text <port> <text> [--dest <nodeId>]   # broadcast (^all) or directed
+send(node=N, text="...")                         # broadcast
+send(node=N, to="!c2c91376", text="...", want_ack=True)   # delivery: delivered | relayed | nak | no_ack
+send(node=N, to="!c2c91376", request="traceroute")       # or "telemetry"; returns the reply
 ```
 The **recorder** is always capturing to JSONL; query windows instead of tailing:
 ```
@@ -220,7 +224,7 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    ambiguous — resolve it to exactly one device before acting.** The app's
    advertised name is `<short_name>_<hex><hex>` where the hex suffix is the
    last two bytes of the nRF52's FICR `DEVICEADDR` (`getDeviceName()` in
-   `firmware/src/main.cpp`) — **not** derived from `my_node_num`/`device_info`'s
+   `firmware/src/main.cpp`) — **not** derived from `my_node_num`/`inspect`'s
    node id in any way you can compute offline. Scan (`BleakScanner.discover`)
    and match by the known `short_name` prefix, but confirm the scan turned up
    exactly one match before connecting: `nrf_dfu_py` (and most such tools)
@@ -239,7 +243,7 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    neither it nor a live debug log was actually checked in real time here;
    the passkey/display behavior below is reasoned from firmware source
    after the fact, not confirmed against what this device actually showed.
-   Whether the passkey is visible in a live debug log (`set_debug_log_api`)
+   Whether the passkey is visible in a live debug log (`security.debug_log_api_enabled`)
    depends on the exact firmware build — `onPairingPasskey`'s `LOG_INFO`
    included the passkey digits in
    `v2.7.26.54e0d8d` (what this was tested against) and still does on
@@ -252,9 +256,8 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    dropped. This is
    expected `RANDOM_PIN` behavior, not a bug — switch to `FIXED_PIN` (a value
    you already know) for scripted/headless testing instead of chasing it.
-   `get_config`-read the current `bluetooth.mode`/`fixed_pin` *before* changing
-   anything, and restore them (`set_config` + `reboot` + `get_config` to
-   confirm) once testing is done — a device left in `FIXED_PIN` carries a
+   `configure` snapshots `bluetooth.mode`/`fixed_pin` before changing them;
+   restore them with `configure(restore=<snapshot>)` once testing is done — a device left in `FIXED_PIN` carries a
    known, reusable pairing credential indefinitely otherwise.
    Separately, firmware `develop` (2.8) does carry two real nRF52 BLE-pairing
    fixes not yet in 2.7.x that are worth knowing about if pairing looks
@@ -333,7 +336,7 @@ minute on a T-Deck with a large node DB). Check `blank` on every shot.
 - **Typing:** any code with `kb_char` set, e.g. `{"event": 255, "kb_char": 104}` types `h`.
 - **Going back:** `BACK` is the back action. On BaseUI it closes an open menu and otherwise goes to
   the previous frame (firmware without meshtastic/firmware#12358 closes menus only on `CANCEL`).
-  A touch MUI board (`device_info` → `display.has_touch`) has no back key by design and ignores
+  A touch MUI board (`inspect(detail="full")` → `summary.display.has_touch`) has no back key by design and ignores
   `BACK`: tap the sidebar instead. Avoid `CANCEL` as a back key: on BaseUI with no menu open it
   turns the screen off.
 - **Enter sends:** `SELECT` or `SELECT_LONG` with a focused MUI text field submits it as a mesh
@@ -343,7 +346,7 @@ Two things that bite in practice:
 
 - **The content varies shot to shot.** Node counts, battery percentage and the clock all move,
   so a set captured over several minutes looks inconsistent. `push_fake_nodedb` (and
-  `sim(action="start")` for a simulated mesh) give every screenshot the same mesh; `set_owner` fixes
+  `sim(action="start")` for a simulated mesh) give every screenshot the same mesh; `configure(changes={"owner.long_name": ...})` fixes
   the device name.
 - **Real screens leak real data.** Node long_names, positions and message text from your own
   mesh end up in the image. Seed a fake node DB before capturing anything destined for a public
@@ -365,7 +368,7 @@ Two things that bite in practice:
 2. A config write lives in RAM until a reboot commits it; re-read after the reboot.
 3. Destructive tools ask the user when the client can; never pass `confirm=True` for an action
    the user has not agreed to.
-4. `factory_reset(full=true)` wipes BLE bonds + the identity key; `full=false` keeps them.
+4. `admin(action="factory_reset_full")` wipes BLE bonds + the identity key; `action="factory_reset"` keeps them.
 5. Prefer the recorder windows over ad-hoc reads: they're timestamped and align with app snapshots.
 6. A canceled flash keeps writing; follow its `job_id` with `flash_poll` before touching the board.
 7. Never apply a ground key whose `verified` is false, and never apply one without telling the
