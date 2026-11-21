@@ -70,9 +70,11 @@ nrf52_bootloader_info(port=P)                   # bootloader version, board, Sof
 nrf52_backup_firmware(port=P)                   # copy CURRENT.UF2 into the data dir
 nrf52_flash_uf2(uf2_path="fw.uf2", port=P)      # refuses a non-UF2 or wrong-SoftDevice image
 nrf52_factory_erase(port=P)                     # wipe saved data, keep the firmware
+nrf52_mount_uf2(port=P)                         # mount the drive where the host does not automount
+nrf52_eject_uf2(port=P)                         # unmount and eject it (asks first)
 ```
 
-Pass the board's app port, preferably its `/dev/serial/by-id/` path. The drive is matched by USB serial, and the by-id name still carries that serial after the link disappears in UF2 mode. The tools read the drive where the OS mounts it, so on a host that does not automount, mount it first. `nrf52_factory_erase` needs a bootloader whose `INFO_UF2.TXT` has a `Factory-Erase:` line.
+Pass the board's app port, preferably its `/dev/serial/by-id/` path. The drive is matched by USB serial, and the by-id name still carries that serial after the link disappears in UF2 mode. The tools read the drive where the OS mounts it, so on a host that does not automount, mount it first. `nrf52_factory_erase` needs a bootloader whose `INFO_UF2.TXT` has a `Factory-Erase:` line. `nrf52_flash_uf2` also takes a bootloader self-update (`update-*.uf2`); it asks even with `confirm=True` under `MESHTASTIC_MCP_CONFIRM=human`.
 
 Serial DFU still works. `nrfutil_dfu(port, package_path)` does the 1200 baud touch itself, dropping DTR as the nRF52 core needs, and fails unless adafruit-nrfutil printed `Device programmed.`. A board left sitting in serial DFU takes the package with no touch:
 
@@ -82,3 +84,7 @@ nrfutil_raw(args=["dfu", "serial", "--package", "fw.zip", "--port", "/dev/ttyACM
 ```
 
 A board whose USB serial has wedged fails the call within its timeout with a hint to power-cycle it; `uhubctl_cycle` on its hub port brings it back.
+
+### Headless Linux bench
+
+Flashing needs no mount or eject. `nrf52_mount_uf2` and `nrf52_eject_uf2` exist for benches that test the bootloader's eject handling or run with no desktop to automount the drive. On a desktop session and on macOS they need no setup. Over SSH or from a systemd service, udisks2 refuses them until polkit allows it; the refusal prints a ready-to-run `sudo tee /etc/polkit-1/rules.d/...` command with only the actions that call needs, and `doctor` reports `udisks` as degraded with the same command.

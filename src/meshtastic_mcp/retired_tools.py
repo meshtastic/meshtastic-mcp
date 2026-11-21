@@ -19,7 +19,7 @@ from . import toolsets
 
 # Each `legacy` tool and the call that replaces it.
 REPLACED_BY: dict[str, str] = {
-    "device_info": 'inspect(node=...)',
+    "device_info": "inspect(node=...)",
     "list_nodes": 'inspect(node=..., what=["nodes"])',
     "get_config": 'inspect(node=..., what=["<section>"])',
     "get_channel_url": 'inspect(node=..., what=["url"])',

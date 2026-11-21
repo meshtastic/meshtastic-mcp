@@ -10,6 +10,12 @@ All notable changes are documented here. Format loosely follows
   git or PyPI install next to a workspace checkout at another commit, and a binary that exists
   but is off the server's PATH (systemd's default PATH has no `sbin`) are `degraded`, each with
   the fix.
+- **`nrf52_mount_uf2` and `nrf52_eject_uf2`** - mount a board's UF2 drive on a host that does not
+  automount it, and eject it the way a desktop does, through udisks2 or `diskutil`, for bootloader
+  benches; flashing never needs them. A polkit refusal over SSH prints the one-shot rule, and
+  `doctor` reports it on Linux.
+- **A hidden or removed tool name says what replaces it** - a call to `device_info` while
+  `legacy` is hidden names `inspect` and the `all,legacy` opt-in instead of `Unknown tool`.
 
 ### Changed
 - **The pre-1.0 tools are opt-in** - `device_info`, `get_config`, `set_config`, `send_text`,
@@ -29,6 +35,8 @@ All notable changes are documented here. Format loosely follows
   `local_model_*` tools.
 
 ### Fixed
+- `nrf52_flash_uf2` flashes a bootloader self-update (`update-*.uf2`), which it refused as built
+  for the other SoftDevice, and asks even with `confirm=True` under `MESHTASTIC_MCP_CONFIRM=human`.
 - A refusal from meshtastic-python (an unknown destination name, a blank owner name, a config
   section it cannot write) is a tool error, not the end of the server.
 - Waiting for a restarted radio survives the library's handshake timeout, and a `configure` whose
