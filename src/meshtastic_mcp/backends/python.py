@@ -14,7 +14,7 @@ from typing import Any
 from meshtastic.protobuf import admin_pb2, localonly_pb2
 
 from .. import connection, display_mirror, info
-from . import BackendError
+from . import BackendError, library_guard
 from .protodict import to_dict
 
 
@@ -157,7 +157,7 @@ class PythonBackend:
     ) -> dict[str, Any]:
         out: dict[str, Any] = {}
         errors: dict[str, str] = {}
-        with connection.connect(port=target, timeout_s=timeout_s) as iface:
+        with library_guard(), connection.connect(port=target, timeout_s=timeout_s) as iface:
             out["target"] = getattr(iface, "devPath", None) or target
             readers = {
                 "summary": lambda: _summary(iface, detail),
@@ -190,7 +190,8 @@ class PythonBackend:
     ) -> dict[str, Any]:
         from .python_configure import configure
 
-        return configure(target, changes, restore, dry_run, timeout_s, save_snapshot)
+        with library_guard():
+            return configure(target, changes, restore, dry_run, timeout_s, save_snapshot)
 
     def admin(
         self,
@@ -203,7 +204,8 @@ class PythonBackend:
     ) -> dict[str, Any]:
         from .python_admin import admin
 
-        return admin(target, action, node_id, seconds, wait_back, timeout_s)
+        with library_guard():
+            return admin(target, action, node_id, seconds, wait_back, timeout_s)
 
     def send(
         self,
@@ -217,4 +219,5 @@ class PythonBackend:
     ) -> dict[str, Any]:
         from .python_send import send
 
-        return send(target, to, payload, channel, want_ack, hop_limit, wait_s)
+        with library_guard():
+            return send(target, to, payload, channel, want_ack, hop_limit, wait_s)

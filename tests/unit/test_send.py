@@ -160,3 +160,17 @@ def test_an_sdk_timeout_is_no_ack(radio, monkeypatch) -> None:
         lambda *a, **k: {"ok": False, "error": {"code": "timeout"}, "by_type": {}},
     )
     assert core.send(node="ble:Heltec", text="hi")["delivery"] == "no_ack"
+
+
+def test_a_name_missing_from_the_node_db_is_refused_not_exited(radio) -> None:
+    with pytest.raises(ToolError, match="node DB"):
+        core.send(text="hi", to="Base")
+    assert radio.sent == []
+
+
+def test_a_library_exit_while_sending_becomes_a_tool_error(radio, monkeypatch) -> None:
+    from meshtastic.util import our_exit
+
+    monkeypatch.setattr(radio, "_record", lambda **kw: our_exit("Warning: NodeId not found"))
+    with pytest.raises(ToolError, match="NodeId not found"):
+        core.send(text="hi", to="!c2c91376")

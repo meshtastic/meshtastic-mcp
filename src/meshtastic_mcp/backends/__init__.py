@@ -10,8 +10,10 @@ SDK's CLI. `MESHTASTIC_MCP_BACKEND` picks one (default `python`); both reach `bl
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterator
 from typing import Any, Protocol
 
 BACKEND_ENV = "MESHTASTIC_MCP_BACKEND"
@@ -24,6 +26,22 @@ UNSECRET_PARTS = tuple(p for p in PARTS if p != "url")
 
 class BackendError(RuntimeError):
     """A backend could not serve a request."""
+
+
+@contextlib.contextmanager
+def library_guard() -> Iterator[None]:
+    """Turn meshtastic-python's refusals into a BackendError.
+
+    The library prints a refusal to stdout and calls `sys.exit`; on stdio, stdout is the MCP
+    stream and the exit would end the server.
+    """
+    printed = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(printed):
+            yield
+    except SystemExit as exc:
+        said = printed.getvalue().strip() or f"exit {exc.code}"
+        raise BackendError(f"meshtastic-python refused the request: {said}") from None
 
 
 class Backend(Protocol):

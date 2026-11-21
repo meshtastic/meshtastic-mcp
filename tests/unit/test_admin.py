@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastmcp.exceptions import ToolError
+from meshtastic.mesh_interface import MeshInterface
 from meshtastic.protobuf import mesh_pb2
 
 from meshtastic_mcp import backends, confirm, connection
@@ -112,7 +113,14 @@ def test_a_node_db_action_without_a_node_is_refused(radio) -> None:
         _run(action="ignore")
 
 
-def test_a_radio_that_does_not_come_back_is_reported(radio, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        connection.ConnectionError("Serial open failed"),
+        MeshInterface.MeshInterfaceError("Timed out waiting for connection completion"),
+    ],
+)
+def test_a_radio_that_does_not_come_back_is_reported(radio, monkeypatch, error) -> None:
     real = connection.connect
     calls = {"n": 0}
 
@@ -120,10 +128,20 @@ def test_a_radio_that_does_not_come_back_is_reported(radio, monkeypatch) -> None
     def flaky(port=None, timeout_s=8.0, linger_s=0.0):
         calls["n"] += 1
         if calls["n"] > 1:
-            raise connection.ConnectionError("Serial open failed")
+            raise error
         with real(port=port) as iface:
             yield iface
 
     monkeypatch.setattr(connection, "connect", flaky)
     result = _run(action="reboot", confirm=True, timeout_s=0.01)
     assert result["back"] is False and "did not answer again" in result["error"]
+
+
+@pytest.mark.parametrize("action", ["factory_reset", "factory_reset_full", "reset_nodedb"])
+def test_a_reset_waits_out_the_firmware_restart_timer_before_reconnecting(
+    radio, monkeypatch, action
+) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(python_admin.time, "sleep", slept.append)
+    _run(action=action, confirm=True, timeout_s=60)
+    assert sum(slept) >= python_admin.REBOOT_DELAY_S + python_admin.BOOT_S

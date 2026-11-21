@@ -13,6 +13,8 @@ reboot counter in `MyNodeInfo` only counts on ESP32, and reads 0 on nRF52.
 
 from __future__ import annotations
 
+import inspect
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -33,6 +35,19 @@ BOOT_S = 3.0  # time for the radio to come back far enough to answer
 UPTIME_SLACK_S = 5.0  # clock and reply jitter allowed before a lower uptime counts as a restart
 OWNER_KEYS = ("owner.long_name", "owner.short_name")
 _IDENTITY = ("private_key", "public_key")
+
+
+def _writable_sections() -> frozenset[str] | None:
+    """The sections `Node.writeConfig` knows; it exits the process on any other."""
+    try:
+        from meshtastic.node import Node
+
+        return frozenset(re.findall(r'config_name == "(\w+)"', inspect.getsource(Node.writeConfig)))
+    except (OSError, TypeError):
+        return None
+
+
+WRITABLE = _writable_sections()
 
 
 @dataclass
@@ -87,6 +102,8 @@ def _working_copy(plan: _Plan, node: Any, section: str) -> Message:
 def _plan_changes(plan: _Plan, node: Any, changes: dict[str, Any]) -> None:
     for path, value in changes.items():
         if path in OWNER_KEYS:
+            if not str(value).strip():
+                raise BackendError(f"{path} cannot be blank")
             plan.owner[path.split(".", 1)[1]] = str(value)
             continue
         segments = [s for s in path.split(".") if s]
@@ -136,6 +153,10 @@ def _finish_plan(plan: _Plan, iface: Any) -> None:
         if not diff:
             del plan.sections[section]  # already so; writing it would only restart the radio
             continue
+        if WRITABLE is not None and section not in WRITABLE:
+            raise BackendError(
+                f"meshtastic-python cannot write the {section} section; leave it out of this call"
+            )
         plan.changes.update(diff)
     owner = _owner_now(iface)
     for key in list(plan.owner):
@@ -269,7 +290,7 @@ def configure(
                 after = _uptime(iface)
                 mismatches, side_effects = _read_back(plan, iface)
             break
-        except (connection.ConnectionError, OSError, TimeoutError) as exc:
+        except connection.not_answering() as exc:
             last_error = str(exc)
             if time.monotonic() >= deadline:
                 out.update(verified=False, restarted=None)

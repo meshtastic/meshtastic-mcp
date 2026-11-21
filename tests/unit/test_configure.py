@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastmcp.exceptions import ToolError
+from meshtastic.mesh_interface import MeshInterface
 from meshtastic.protobuf import config_pb2, localonly_pb2, mesh_pb2
 
 from meshtastic_mcp import backends, config_snapshot, connection, leases
@@ -215,7 +216,7 @@ def test_a_radio_that_never_comes_back_is_reported(radio, monkeypatch) -> None:
     def flaky(port=None, timeout_s=8.0, linger_s=0.0):
         calls["n"] += 1
         if calls["n"] > 1:
-            raise connection.ConnectionError("Serial open failed")
+            raise MeshInterface.MeshInterfaceError("Timed out waiting for connection completion")
         with real(port=port, timeout_s=timeout_s) as iface:
             yield iface
 
@@ -223,6 +224,7 @@ def test_a_radio_that_never_comes_back_is_reported(radio, monkeypatch) -> None:
     result = core.configure(changes={"device.role": "CLIENT_MUTE"}, timeout_s=0.01)
     assert result["verified"] is False and result["restarted"] is None
     assert "did not answer again" in result["errors"]["read_back"]
+    assert result["snapshot"]  # the way back survives the failure
 
 
 def test_a_radio_that_does_not_report_uptime_leaves_restarted_unknown(radio, monkeypatch) -> None:
@@ -236,3 +238,35 @@ def test_a_field_the_firmware_changed_itself_is_a_side_effect_not_a_failure(radi
     result = core.configure(changes={"lora.region": "EU_868"})
     assert result["verified"] is True and "mismatches" not in result
     assert result["side_effects"] == {"lora.tx_power": {"from": 30, "to": 27}}
+
+
+def test_a_blank_owner_name_is_refused_before_anything_is_written(radio) -> None:
+    with pytest.raises(ToolError, match="cannot be blank"):
+        core.configure(changes={"owner.long_name": " "})
+    assert radio.sent == []
+
+
+def test_a_section_the_library_cannot_write_is_refused_before_the_transaction(
+    radio, monkeypatch
+) -> None:
+    monkeypatch.setattr(python_configure, "WRITABLE", frozenset({"lora", "device"}))
+    with pytest.raises(ToolError, match="cannot write the mqtt section"):
+        core.configure(changes={"lora.region": "EU_868", "mqtt.enabled": True})
+    assert radio.sent == []
+
+
+def test_the_writable_sections_come_from_the_installed_library() -> None:
+    assert python_configure.WRITABLE is not None
+    assert {"lora", "device", "mqtt"} <= python_configure.WRITABLE
+
+
+def test_a_library_exit_becomes_a_tool_error_and_prints_nothing(radio, monkeypatch, capsys) -> None:
+    from meshtastic.util import our_exit
+
+    def refuse(*args, **kwargs):
+        our_exit("Error: No valid config with name lora")
+
+    monkeypatch.setattr(python_configure, "_apply", refuse)
+    with pytest.raises(ToolError, match="No valid config with name lora"):
+        core.configure(changes={"lora.region": "EU_868"})
+    assert capsys.readouterr().out == ""

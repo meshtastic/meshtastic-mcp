@@ -38,6 +38,19 @@ def _num(dest: str | int) -> int | None:
     return None
 
 
+def _check_dest(iface: Any, dest: str | int) -> None:
+    """meshtastic-python exits the process for a name it cannot find, so refuse it first."""
+    if isinstance(dest, int) or dest == "^all" or dest.startswith("!"):
+        return
+    if dest in (getattr(iface, "nodes", None) or {}):
+        return
+    if len(dest) == 8 and all(c in "0123456789abcdefABCDEF" for c in dest):
+        return
+    raise BackendError(
+        f"no node {dest!r} in the radio's node DB; pass its node id (!aabbccdd) or number"
+    )
+
+
 class _Reply:
     """The first answer to a packet. `on_response` is a plain function because meshtastic-python
     reads the callback's `__name__`."""
@@ -96,6 +109,7 @@ def send(
     started = time.monotonic()
     with connection.connect(port=target, timeout_s=10.0) as iface:
         my_num = iface.myInfo.my_node_num
+        _check_dest(iface, dest)
         dest_num = _num(dest)
         reply = _Reply()
         common: dict[str, Any] = {"channelIndex": channel, "hopLimit": hop_limit}

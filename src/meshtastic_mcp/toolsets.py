@@ -12,6 +12,7 @@ listed and cannot be called.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Collection, Mapping, Sequence
 
 from fastmcp.server.transforms import GetToolNext, Transform
@@ -120,6 +121,15 @@ _PREFIXES: dict[str, tuple[str, ...]] = {
 OPT_IN = frozenset({"legacy"})
 
 
+log = logging.getLogger(__name__)
+
+# Groups 0.x advertised that 1.0 no longer has: a config that names one still starts.
+RETIRED = {
+    "discord": "the discord_* tools moved to the separate meshtastic-mcp-discord server",
+    "local-model": "the local-model tools were removed",
+}
+
+
 class ToolsetError(ValueError):
     """An unknown toolset name was requested."""
 
@@ -150,14 +160,17 @@ def parse_toolsets(value: str | None) -> frozenset[str]:
     if value is None or not value.strip() or value.strip().lower() == "all":
         return default_toolsets()
     names = [part.strip().lower() for part in value.split(",") if part.strip()]
-    dropped = frozenset(n[1:] for n in names if n.startswith("-"))
-    named = frozenset(n for n in names if not n.startswith("-"))
+    for name in sorted({n.lstrip("-") for n in names} & RETIRED.keys()):
+        log.warning("MESHTASTIC_MCP_TOOLSETS names %r, which is gone: %s", name, RETIRED[name])
+    dropped = frozenset(n[1:] for n in names if n.startswith("-")) - RETIRED.keys()
+    asked = frozenset(n for n in names if not n.startswith("-"))
+    named = asked - RETIRED.keys()
     unknown = (named - {"all"} | dropped) - known_toolsets()
     if unknown:
         raise ToolsetError(
             f"unknown toolset(s) {sorted(unknown)}; choose from {sorted(known_toolsets())} or 'all'"
         )
-    if named and "all" not in named:
+    if asked and "all" not in asked:
         base = named
     else:
         base = default_toolsets() | (named - {"all"})

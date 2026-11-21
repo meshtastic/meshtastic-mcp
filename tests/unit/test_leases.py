@@ -204,6 +204,33 @@ def test_a_device_call_on_another_sessions_lease_is_refused(server, monkeypatch)
     assert ok.is_error is False, ok.content
 
 
+def test_a_portless_call_that_finds_its_own_board_is_refused_while_another_lease_is_held(
+    server, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        server.connection,
+        "resolve_port",
+        lambda port: (_ for _ in ()).throw(server.connection.ConnectionError("no device")),
+    )
+    held = leases.claim(PORT, holder="eval run")
+    refused = _call(server, "nrf52_flash_uf2", {"uf2_path": "/nowhere.uf2", "confirm": True})
+    assert refused.is_error and "names no port" in refused.content[0].text
+    mine = _call(
+        server,
+        "nrf52_flash_uf2",
+        {"uf2_path": "/nowhere.uf2", "confirm": True, "lease": held["lease"]},
+    )
+    assert "names no port" not in mine.content[0].text
+
+
+def test_a_port_given_in_vendor_args_is_checked_against_its_lease(server) -> None:
+    leases.claim(PORT, holder="eval run")
+    refused = _call(
+        server, "vendor", {"tool": "esptool", "args": ["--port", PORT, "chip_id"], "confirm": True}
+    )
+    assert refused.is_error and "leased to eval run" in refused.content[0].text
+
+
 def test_claim_and_release_tools(server, monkeypatch) -> None:
     out = _call(server, "claim", {"port": PORT, "holder": "me", "ttl_s": 30})
     assert out.is_error is False, out.content
