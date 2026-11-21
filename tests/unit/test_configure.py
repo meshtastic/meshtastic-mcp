@@ -236,3 +236,35 @@ def test_a_field_the_firmware_changed_itself_is_a_side_effect_not_a_failure(radi
     result = core.configure(changes={"lora.region": "EU_868"})
     assert result["verified"] is True and "mismatches" not in result
     assert result["side_effects"] == {"lora.tx_power": {"from": 30, "to": 27}}
+
+
+def test_a_blank_owner_name_is_refused_before_anything_is_written(radio) -> None:
+    with pytest.raises(ToolError, match="cannot be blank"):
+        core.configure(changes={"owner.long_name": " "})
+    assert radio.sent == []
+
+
+def test_a_section_the_library_cannot_write_is_refused_before_the_transaction(
+    radio, monkeypatch
+) -> None:
+    monkeypatch.setattr(python_configure, "WRITABLE", frozenset({"lora", "device"}))
+    with pytest.raises(ToolError, match="cannot write the mqtt section"):
+        core.configure(changes={"lora.region": "EU_868", "mqtt.enabled": True})
+    assert radio.sent == []
+
+
+def test_the_writable_sections_come_from_the_installed_library() -> None:
+    assert python_configure.WRITABLE is not None
+    assert {"lora", "device", "mqtt"} <= python_configure.WRITABLE
+
+
+def test_a_library_exit_becomes_a_tool_error_and_prints_nothing(radio, monkeypatch, capsys) -> None:
+    from meshtastic.util import our_exit
+
+    def refuse(*args, **kwargs):
+        our_exit("Error: No valid config with name lora")
+
+    monkeypatch.setattr(python_configure, "_apply", refuse)
+    with pytest.raises(ToolError, match="No valid config with name lora"):
+        core.configure(changes={"lora.region": "EU_868"})
+    assert capsys.readouterr().out == ""
