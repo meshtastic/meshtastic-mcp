@@ -53,6 +53,7 @@ STREAMS: dict[str, dict[str, str]] = {
         "id": "BIGINT",
         "payload_size": "INTEGER",
         "payload_hex_prefix": "VARCHAR",
+        "text": "VARCHAR",
     },
     "events": {
         **_COMMON,

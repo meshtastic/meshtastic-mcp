@@ -270,6 +270,13 @@ class TestSummarizePacket:
         assert out["portnum"] == "TEXT_MESSAGE_APP"
         assert out["payload_size"] == 5
         assert out["payload_hex_prefix"] == "68656c6c6f"
+        assert out["text"] == "hello"
+
+    def test_text_comes_from_the_decoded_field_and_only_for_text_messages(self) -> None:
+        pkt = {"decoded": {"portnum": "TEXT_MESSAGE_APP", "payload": b"x", "text": "héllo"}}
+        assert summarize_packet(pkt)["text"] == "héllo"
+        other = {"decoded": {"portnum": "POSITION_APP", "payload": b"hello"}}
+        assert summarize_packet(other)["text"] is None
 
     def test_no_decoded(self) -> None:
         out = summarize_packet({"fromId": "!abc"})
