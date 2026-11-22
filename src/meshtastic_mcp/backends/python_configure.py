@@ -26,8 +26,8 @@ from google.protobuf import json_format
 from google.protobuf.message import Message
 from meshtastic.protobuf import localonly_pb2, portnums_pb2, telemetry_pb2
 
-from .. import admin, connection
-from . import BackendError
+from .. import connection
+from . import BackendError, protopath
 from .protodict import to_dict
 
 PACE_S = 0.25  # between writes inside a transaction
@@ -107,7 +107,7 @@ def _section_diff(section: str, old: Message, new: Message) -> dict[str, dict[st
 
 def _working_copy(plan: _Plan, node: Any, section: str) -> Message:
     if section not in plan.sections:
-        live, parent = admin._section_container(node, section)
+        live, parent = protopath.section_container(node, section)
         copy = type(live)()
         copy.CopyFrom(live)
         plan.sections[section] = copy
@@ -159,9 +159,9 @@ def _plan_channel(plan: _Plan, node: Any, index: int, rest: str, value: Any) -> 
         current.settings.psk = fromPSK(str(value))
         return
     try:
-        parent, leaf = admin._walk_to_field(current.settings, segments)
-        setattr(parent, leaf.name, admin._coerce_scalar(leaf, value))
-    except (admin.AdminError, TypeError, ValueError) as exc:
+        parent, leaf = protopath.walk_to_field(current.settings, segments)
+        setattr(parent, leaf.name, protopath.coerce_scalar(leaf, value))
+    except (protopath.PathError, TypeError, ValueError) as exc:
         raise BackendError(f"channel.{index}.{rest}: {exc}") from exc
 
 
@@ -229,11 +229,11 @@ def _plan_changes(plan: _Plan, node: Any, changes: dict[str, Any]) -> None:
             raise BackendError(f"{path!r}: name a field, such as lora.region")
         try:
             copy = _working_copy(plan, node, segments[0])
-            parent, leaf = admin._walk_to_field(copy, segments[1:])
+            parent, leaf = protopath.walk_to_field(copy, segments[1:])
             if leaf.is_repeated:
                 raise BackendError(f"{path!r} is a repeated field; configure sets scalars only")
-            setattr(parent, leaf.name, admin._coerce_scalar(leaf, value))
-        except (admin.AdminError, TypeError, ValueError) as exc:
+            setattr(parent, leaf.name, protopath.coerce_scalar(leaf, value))
+        except (protopath.PathError, TypeError, ValueError) as exc:
             raise BackendError(str(exc)) from exc
 
 
@@ -275,7 +275,7 @@ def _channel_dict(ch: Message | None) -> dict[str, Any] | None:
 def _finish_plan(plan: _Plan, iface: Any, node: Any = None, num: int | None = None) -> None:
     node = node or iface.localNode
     for section in list(plan.sections):
-        live, _ = admin._section_container(node, section)
+        live, _ = protopath.section_container(node, section)
         diff = _section_diff(section, live, plan.sections[section])
         if not diff:
             del plan.sections[section]  # already so; writing it would only restart the radio
@@ -315,7 +315,7 @@ def _apply(plan: _Plan, iface: Any, node: Any = None, num: int | None = None) ->
     node = node or iface.localNode
     writes: list[Callable[[], Any]] = []
     for section, value in plan.sections.items():
-        container, _ = admin._section_container(node, section)
+        container, _ = protopath.section_container(node, section)
 
         def write_section(
             section: str = section, container: Any = container, value: Any = value
@@ -370,7 +370,7 @@ def _read_back(plan: _Plan, iface: Any) -> tuple[dict[str, Any], dict[str, Any]]
     side_effects: dict[str, dict[str, Any]] = {}
     node = iface.localNode
     for section, wanted in plan.sections.items():
-        live, _ = admin._section_container(node, section)
+        live, _ = protopath.section_container(node, section)
         for path, values in _section_diff(section, wanted, live).items():
             if section in plan.restored or path in plan.requested:
                 mismatches[path] = {"wanted": values["from"], "read_back": values["to"]}
@@ -459,8 +459,8 @@ def configure(
         out["snapshot"] = save_snapshot(
             str(port),
             {
-                "localConfig": admin._message_to_dict(iface.localNode.localConfig),
-                "moduleConfig": admin._message_to_dict(iface.localNode.moduleConfig),
+                "localConfig": protopath.message_to_dict(iface.localNode.localConfig),
+                "moduleConfig": protopath.message_to_dict(iface.localNode.moduleConfig),
             },
         )
         before = _uptime(iface)
@@ -559,7 +559,7 @@ def _configure_remote(
         _request_sections(node, set(plan.sections), iface, dest, acks)
         mismatches: dict[str, Any] = {}
         for section, wanted in plan.sections.items():
-            live, _ = admin._section_container(node, section)
+            live, _ = protopath.section_container(node, section)
             for path, values in _section_diff(section, wanted, live).items():
                 if path in plan.requested:
                     mismatches[path] = {"wanted": values["from"], "read_back": values["to"]}

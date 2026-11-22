@@ -15,7 +15,8 @@ import time
 
 import pytest
 
-from meshtastic_mcp import info, recovery, uhubctl
+from meshtastic_mcp import recovery, uhubctl
+from meshtastic_mcp.backends import legacy
 from tests import _power, _recovery
 from tests._port_discovery import resolve_port_by_role
 
@@ -67,7 +68,7 @@ def test_ladder_recovers_a_dead_node(baked_single: dict[str, object]) -> None:
     # Identity preserved — a hard reset, not a re-flash.
     new_port = resolve_port_by_role(role, timeout_s=30.0, require_openable=True)
     time.sleep(2.0)
-    post = info.device_info(port=new_port, timeout_s=10.0)
+    post = legacy.device_info(port=new_port, timeout_s=10.0)
     assert post.get("my_node_num") == node_num, (
         f"node identity changed during recovery: {node_num:#x} → {post.get('my_node_num')}"
     )

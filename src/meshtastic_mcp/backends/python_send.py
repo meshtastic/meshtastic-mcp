@@ -175,6 +175,7 @@ def send(
     want_ack: bool,
     hop_limit: int | None,
     wait_s: float,
+    linger_s: float | None = None,
 ) -> dict[str, Any]:
     kind, value = next(iter(payload.items()))
     dest = _dest(to)
@@ -249,5 +250,6 @@ def send(
             else:
                 out.update(_ack(reply, my_num, dest_num))
         # A broadcast still needs the port held while it waits its turn on the air.
-        time.sleep(max(0.0, LINGER_S - (time.monotonic() - started)))
+        hold = LINGER_S if linger_s is None else linger_s
+        time.sleep(max(0.0, hold - (time.monotonic() - started)))
     return out

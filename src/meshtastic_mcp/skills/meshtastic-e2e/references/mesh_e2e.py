@@ -50,7 +50,7 @@ def cmd_devices(_args) -> int:
 
 
 def cmd_info(args) -> int:
-    from meshtastic_mcp import info
+    from meshtastic_mcp.backends import legacy as info
 
     print(json.dumps(info.device_info(args.port), indent=2, default=str))
     return 0

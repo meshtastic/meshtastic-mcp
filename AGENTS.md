@@ -11,7 +11,8 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 ## Architecture: portable core + gated capabilities
 
 - **core** (always registered): `devices`, `serial_session`, `registry`, `connection`
-  (serial + TCP), `info`, `admin`, `backends/` (what the device tools run on a radio:
+  (serial + TCP), `backends/` (every device read and write the tools make; `legacy.py` keeps
+  the pre-1.0 result shapes over the same calls, `protopath.py` the config dot-paths; what runs on a radio:
   `python` in process, `sdk` through the Kotlin SDK CLI for `ble:` targets or with
   `MESHTASTIC_MCP_BACKEND=sdk`; each returns plain dicts, and `protodict` reports default
   values and withholds fields the protos mark `sensitive`), `recorder/` + `log_query` + `recorder_query` (`query`, read-only DuckDB SQL over the

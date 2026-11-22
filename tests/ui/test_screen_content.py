@@ -16,8 +16,8 @@ import time
 
 import pytest
 
-from meshtastic_mcp import info
 from meshtastic_mcp import ocr as ocr_mod
+from meshtastic_mcp.backends import legacy
 from meshtastic_mcp.input_events import InputEventCode
 
 from ._ocr_match import normalize, ocr_contains_any
@@ -55,7 +55,7 @@ def test_home_screen_shows_device_identity(
     its short or long name, region, or firmware version (digits OCR reliably)."""
     if not _ocr_available():
         pytest.skip("no OCR backend")
-    di = info.device_info(port=ui_port, timeout_s=8.0)
+    di = legacy.device_info(port=ui_port, timeout_s=8.0)
     candidates: list[str | None] = [
         di.get("short_name"),
         di.get("long_name"),

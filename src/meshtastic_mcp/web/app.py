@@ -20,7 +20,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from meshtastic_mcp import (
-    admin,
     boards,
     fixtures,
     log_query,
@@ -29,9 +28,7 @@ from meshtastic_mcp import (
 from meshtastic_mcp import (
     flash as flash_lib,
 )
-from meshtastic_mcp import (
-    info as mt_info,
-)
+from meshtastic_mcp.backends import legacy
 from meshtastic_mcp.config import ConfigError
 
 from .db import repo_builds as rb
@@ -384,7 +381,7 @@ def _mount_devices(api: APIRouter) -> None:
         db, hub = request.app.state.db, request.app.state.hub
         row = await _device_or_404(db, serial)
         port = row.get("current_port")
-        info = await _port_action(request, serial, mt_info.device_info, port)
+        info = await _port_action(request, serial, legacy.device_info, port)
         hw_model = info.get("hw_model")
         env = identity.env_for_hw_model(hw_model) if hw_model else None
         dev = await rd.update_enrichment(
@@ -446,7 +443,7 @@ def _mount_devices(api: APIRouter) -> None:
         return await _port_action(
             request,
             serial,
-            admin.reboot,
+            legacy.reboot,
             port,
             True,
             5,
@@ -461,7 +458,7 @@ def _mount_devices(api: APIRouter) -> None:
         return await _port_action(
             request,
             serial,
-            admin.factory_reset,
+            legacy.factory_reset,
             row.get("current_port"),
             True,
             kind="factory-reset",
@@ -472,7 +469,7 @@ def _mount_devices(api: APIRouter) -> None:
         row = await _device_or_404(request.app.state.db, serial)
         text = body.get("text", "")
         return await _port_action(
-            request, serial, admin.send_text, text, None, 0, False, row.get("current_port")
+            request, serial, legacy.send_text, text, None, 0, False, row.get("current_port")
         )
 
     @api.post("/devices/{serial}/inject-nodedb")
@@ -496,7 +493,7 @@ def _mount_devices(api: APIRouter) -> None:
         return await _port_action(
             request,
             serial,
-            admin.get_config,
+            legacy.get_config,
             section,
             port,
             auto_recover=True,
@@ -513,7 +510,7 @@ def _mount_devices(api: APIRouter) -> None:
         return await _port_action(
             request,
             serial,
-            admin.set_config,
+            legacy.set_config,
             path,
             body.get("value"),
             port,

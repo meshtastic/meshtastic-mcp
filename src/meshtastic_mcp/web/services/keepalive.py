@@ -112,7 +112,7 @@ class ScreenKeepAlive:
         await self.hub.publish("keepalive.update", self.status())
 
     async def _touch(self, device: dict) -> None:
-        from meshtastic_mcp import admin
+        from meshtastic_mcp.backends import legacy
 
         from . import test_runner
 
@@ -140,14 +140,14 @@ class ScreenKeepAlive:
             try:
                 if serial not in self._provisioned:
                     await asyncio.to_thread(
-                        admin.set_config,
+                        legacy.set_config,
                         "display.screen_on_secs",
                         int(self.cfg["screen_on_secs"]),
                         port,
                     )
                     self._provisioned.add(serial)
                     self.stats["provisioned"] = len(self._provisioned)
-                await asyncio.to_thread(admin.send_input_event, self.cfg["event"], 0, 0, 0, port)
+                await asyncio.to_thread(legacy.send_input_event, self.cfg["event"], 0, 0, 0, port)
                 self.stats["events_sent"] += 1
                 self.stats["last_error"] = None
             except Exception as exc:

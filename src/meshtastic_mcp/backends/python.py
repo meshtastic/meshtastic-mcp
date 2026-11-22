@@ -13,8 +13,8 @@ from typing import Any
 
 from meshtastic.protobuf import admin_pb2, localonly_pb2
 
-from .. import connection, display_mirror, info
-from . import BackendError, library_guard
+from .. import connection, display_mirror
+from . import BackendError, library_guard, protopath
 from .protodict import to_dict
 
 
@@ -35,6 +35,58 @@ def _enum_name(msg: Any, field: str) -> str | None:
         return None
 
 
+def primary_channel_name(iface: Any) -> str | None:
+    """The primary channel's name on a connected interface; "(default)" when unnamed."""
+    try:
+        channels = iface.localNode.channels or []
+    except AttributeError:
+        return None
+    for ch in channels:
+        if getattr(ch, "role", None) == 1:  # PRIMARY
+            name = getattr(getattr(ch, "settings", None), "name", None)
+            return name or "(default)"
+    return None
+
+
+def region_name(iface: Any) -> str | None:
+    """The LoRa region's enum name on a connected interface."""
+    local = getattr(iface, "localNode", None)
+    if local is None or getattr(local, "localConfig", None) is None:
+        return None
+    return _enum_name(local.localConfig.lora, "region")
+
+
+def node_record(n: dict[str, Any]) -> dict[str, Any]:
+    """One node-DB entry in the flat shape the tools report."""
+    user = n.get("user") or {}
+    position = n.get("position") or None
+    metrics = n.get("deviceMetrics") or {}
+    return {
+        "node_num": n.get("num"),
+        "user": {
+            "long_name": user.get("longName"),
+            "short_name": user.get("shortName"),
+            "hw_model": user.get("hwModel"),
+            "role": user.get("role"),
+        },
+        "position": (
+            {
+                "latitude": position.get("latitude"),
+                "longitude": position.get("longitude"),
+                "altitude": position.get("altitude"),
+                "time": position.get("time"),
+            }
+            if position
+            else None
+        ),
+        "snr": n.get("snr"),
+        "rssi": n.get("rssi"),
+        "last_heard": n.get("lastHeard"),
+        "battery_level": metrics.get("batteryLevel"),
+        "is_favorite": bool(n.get("isFavorite", False)),
+    }
+
+
 def _summary(iface: Any, detail: str) -> dict[str, Any]:
     my = iface.myInfo
     num = getattr(my, "my_node_num", None)
@@ -51,7 +103,7 @@ def _summary(iface: Any, detail: str) -> dict[str, Any]:
         "region": _enum_name(lora, "region"),
         "modem_preset": _enum_name(lora, "modem_preset"),
         "channel_num": lora.channel_num,
-        "primary_channel": info.primary_channel_name(iface),
+        "primary_channel": primary_channel_name(iface),
         "num_nodes": len(iface.nodesByNum or {}),
     }
     if detail == "full":
@@ -82,7 +134,7 @@ def _channels(iface: Any) -> list[dict[str, Any]]:
 
 
 def _node_brief(n: dict[str, Any]) -> dict[str, Any]:
-    rec = info._node_record(n)
+    rec = node_record(n)
     user = rec.pop("user")
     rec.pop("position", None)
     num = rec.get("node_num")
@@ -220,11 +272,12 @@ class PythonBackend:
         want_ack: bool,
         hop_limit: int | None,
         wait_s: float,
+        linger_s: float | None = None,
     ) -> dict[str, Any]:
         from .python_send import send
 
         with library_guard():
-            return send(target, to, payload, channel, want_ack, hop_limit, wait_s)
+            return send(target, to, payload, channel, want_ack, hop_limit, wait_s, linger_s)
 
     def import_channels(
         self, target: str | None, url: str, add_only: bool, timeout_s: float
@@ -258,3 +311,11 @@ class PythonBackend:
         with library_guard(), connection.connect(port=target) as iface:
             iface.localNode._sendAdmin(msg)  # meshtastic-python has no public wrapper
         return {"ok": True, "event_code": event_code, "kb_char": kb_char}
+
+    def raw_config(self, target: str | None, timeout_s: float) -> dict[str, Any]:
+        with library_guard(), connection.connect(port=target, timeout_s=timeout_s) as iface:
+            node = iface.localNode
+            return {
+                "localConfig": protopath.message_to_dict(node.localConfig),
+                "moduleConfig": protopath.message_to_dict(node.moduleConfig),
+            }

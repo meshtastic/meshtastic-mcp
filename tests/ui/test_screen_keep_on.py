@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from meshtastic_mcp import admin
+from meshtastic_mcp.backends import legacy
 from meshtastic_mcp.input_events import InputEventCode
 
 from ._screen_log import wait_for_any_frame
@@ -26,7 +26,7 @@ from .conftest import FrameCapture, send_event
 def test_screen_on_provisioned(ui_port: str) -> None:
     """The session keeps the OLED on (display.screen_on_secs high) for the UI
     tier — confirm the device actually reports it provisioned."""
-    cfg = admin.get_config(section="display", port=ui_port)["config"]["display"]
+    cfg = legacy.get_config(section="display", port=ui_port)["config"]["display"]
     secs = int(cfg.get("screen_on_secs") or 0)
     assert secs >= 3600, (
         f"screen_on_secs={secs}: OLED not provisioned to stay on — keep-alive "

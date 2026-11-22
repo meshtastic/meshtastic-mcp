@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import admin, info
+from meshtastic_mcp.backends import legacy
 
 
 @pytest.mark.timeout(60)
@@ -27,8 +27,8 @@ def test_bake_sets_region_preset_and_slot(
     preset, slot, and channel name that the profile specified."""
     for role, state in baked_mesh.items():
         port = state["port"]
-        live = info.device_info(port=port, timeout_s=8.0)
-        lora = admin.get_config(section="lora", port=port)["config"]["lora"]
+        live = legacy.device_info(port=port, timeout_s=8.0)
+        lora = legacy.get_config(section="lora", port=port)["config"]["lora"]
 
         expected_region = test_profile["USERPREFS_CONFIG_LORA_REGION"].rsplit("_", 1)[-1]
         expected_preset = test_profile["USERPREFS_LORACONFIG_MODEM_PRESET"].rsplit("_", 2)[-2:]

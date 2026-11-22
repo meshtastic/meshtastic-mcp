@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import admin
+from meshtastic_mcp.backends import legacy
 
 from ._receive import ReceiveCollector
 
@@ -35,7 +35,7 @@ def test_broadcast_delivers(
     unique = f"mcp-{tx_role}-to-{rx_role}-{int(time.time())}"
 
     with ReceiveCollector(rx_port, topic="meshtastic.receive.text") as rx:
-        admin.send_text(text=unique, port=tx_port)
+        legacy.send_text(text=unique, port=tx_port)
 
         got = rx.wait_for(
             lambda pkt: pkt.get("decoded", {}).get("text") == unique,

@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import admin
+from . import backends
 
 
 def _snapshot_dir() -> Path:
@@ -75,15 +75,14 @@ def capture(name: str, port: str | None = None) -> dict[str, Any]:
     what was captured (counts, path).
     """
     path = _snapshot_path(name)
-    cfg = admin.get_config(section=None, port=port)  # full config
+    config: dict[str, Any] = backends.for_target(port).raw_config(port, 10.0)
     snapshot = {
         "name": name,
         "captured_at": time.time(),
         "port": port,
-        "config": cfg.get("config", cfg),
+        "config": config,
     }
     _write_private_json(path, snapshot)
-    config = snapshot["config"]
     local = config.get("localConfig", {})
     module = config.get("moduleConfig", {})
     return {
@@ -178,8 +177,7 @@ def diff(
     """
     config_a = _load(name_a)["config"]
     if name_b is None:
-        live = admin.get_config(section=None, port=port)
-        config_b = live.get("config", live)
+        config_b = backends.for_target(port).raw_config(port, 10.0)
         label_b = "live"
     else:
         config_b = _load(name_b)["config"]

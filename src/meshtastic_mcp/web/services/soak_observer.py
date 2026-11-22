@@ -284,7 +284,7 @@ class SoakObserver:
         """Primary-channel name and region from the held interface's config
         (fetched during the connect handshake) — the preflight check without
         another connect."""
-        from meshtastic_mcp import info as mt_info
+        from meshtastic_mcp.backends import python as mt_info
 
         held = self._held.get(serial)
         if held is None or held.iface is None:

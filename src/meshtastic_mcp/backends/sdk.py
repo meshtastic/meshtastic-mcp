@@ -166,6 +166,9 @@ class SdkBackend:
             "the SDK backend cannot send input events yet; use a serial or TCP target"
         )
 
+    def raw_config(self, target: str | None, timeout_s: float) -> dict[str, Any]:
+        raise BackendError("the SDK backend cannot snapshot config yet; use a serial or TCP target")
+
     def send(
         self,
         target: str | None,
@@ -175,6 +178,7 @@ class SdkBackend:
         want_ack: bool,
         hop_limit: int | None,
         wait_s: float,
+        linger_s: float | None = None,
     ) -> dict[str, Any]:
         kind, value = next(iter(payload.items()))
         if kind != "text":

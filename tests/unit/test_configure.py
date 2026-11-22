@@ -43,7 +43,9 @@ class _Radio:
         if section == "lora" and value.region == config_pb2.Config.LoRaConfig.RegionCode.EU_868:
             value = type(value)(region=value.region, tx_power=27)  # the firmware caps power
         parent = (
-            self.local if section in python_configure.admin.LOCAL_CONFIG_SECTIONS else self.module
+            self.local
+            if section in python_configure.protopath.LOCAL_CONFIG_SECTIONS
+            else self.module
         )
         getattr(parent, section).CopyFrom(value)
         if section != "lora" and not self.in_transaction:
@@ -69,7 +71,7 @@ class _Radio:
             def writeConfig(self, section):
                 parent = (
                     self.localConfig
-                    if section in python_configure.admin.LOCAL_CONFIG_SECTIONS
+                    if section in python_configure.protopath.LOCAL_CONFIG_SECTIONS
                     else self.moduleConfig
                 )
                 radio.store(section, getattr(parent, section))

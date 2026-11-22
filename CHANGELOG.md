@@ -32,9 +32,11 @@ All notable changes are documented here. Format loosely follows
 ### Changed
 - **One device path** - `set_channel_url`, `send_input_event`, the `meshtastic://device/*`
   resources, `nrf52_enter_uf2`, `install`'s UF2 entry, the `info` and `nodes` CLI commands and the
-  legacy `reboot`, `shutdown` and `factory_reset` all reach the radio through the backend the
-  intent tools use. `meshtastic>=2.7.10` is required, for its fixed `factoryReset` and its
-  contact URLs.
+  legacy tools all reach the radio through the backend the intent tools use, and so do the web
+  control plane, recovery, the PA sweep, the RF oracle and the hardware suite. `info.py` and
+  `admin.py` are gone. Legacy `get_config` now withholds the fields the protos mark sensitive,
+  as `inspect` does; config snapshots still keep them for restore. `meshtastic>=2.7.10` is
+  required, for its fixed `factoryReset` and its contact URLs.
 - **The pre-1.0 tools are opt-in** - `device_info`, `get_config`, `set_config`, `send_text`,
   `reboot`, the `replay_*` tools and the rest form a `legacy` toolset that is hidden unless named:
   `MESHTASTIC_MCP_TOOLSETS=all,legacy`. `inspect`, `configure`, `send`, `admin`, `sim` and
