@@ -80,4 +80,4 @@ Emit one line per loop so a calling agent (or `/e2e` command) can parse:
 LOOP <name> <PASS|FAIL> token=<...> latency=<ms> hops=<n>
 ```
 On FAIL attach, for the same wall-clock window: the app `layout`/screenshot at deadline
-**and** the recorder `packets_window` + `logs_window` tail.
+**and** `query` over the recorder's `packets` and `logs` views for that window.

@@ -1265,18 +1265,27 @@ def telemetry_timeline(
 
 
 @app.tool()
-def devices() -> DevicesResult:
+def devices(include_unknown: bool = False) -> DevicesResult:
     """The radios on this host by name, attached now or seen before, without opening any.
 
     A radio is named `<host>/<model>-<last four hex of its node id>` the first time a
     connection to it succeeds, and keeps that name across reboots, port changes and UF2.
     Every tool that takes `port` also takes the name. Returns `{devices: [{name, port,
-    attached, node_num, model, long_name, short_name, last_seen, leased_to, key}]}`; the
-    node fields are what the last connection saw, and `name` is null for a radio no
-    connection has reached yet (use its `port`).
+    attached, node_num, model, long_name, short_name, last_seen, leased_to, key}],
+    other_ports?}`; the node fields are what the last connection saw, and `name` is null for
+    a radio no connection has reached yet (use its `port`).
+
+    Args:
+        include_unknown: Also return `other_ports`, every serial port not detected as a radio
+            (`port`, `vid`, `pid`, `description`), to find a board that is not recognized.
     """
     attached = [d["port"] for d in devices_mod.list_devices()]
-    return cast(DevicesResult, {"devices": device_names.listing(attached)})
+    out: dict[str, Any] = {"devices": device_names.listing(attached)}
+    if include_unknown:
+        out["other_ports"] = [
+            d for d in devices_mod.list_devices(include_unknown=True) if d["port"] not in attached
+        ]
+    return cast(DevicesResult, out)
 
 
 @app.tool()

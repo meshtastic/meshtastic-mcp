@@ -42,6 +42,51 @@ REPLACED_BY: dict[str, str] = {
     "replay_inject_fileinfo": 'inject(session_id, "fileinfo", ...)',
     "replay_inject_traceroute": 'inject(session_id, "traceroute", ...)',
     "replay_inject_waypoint": 'inject(session_id, "waypoint", ...)',
+    "list_devices": "devices(include_unknown=True)",
+    "events_window": 'query(sql="SELECT * FROM events WHERE ts > epoch(now()) - 900")',
+    "logs_window": 'query(sql="SELECT * FROM logs WHERE ts > epoch(now()) - 900")',
+    "packets_window": 'query(sql="SELECT * FROM packets WHERE ts > epoch(now()) - 900")',
+    "telemetry_timeline": 'query(sql="SELECT time, from_node, fields FROM telemetry ...")',
+    "triage_bundle": "query(sql=...) over the packets, logs and events views",
+    "drive_display_poll": "job(job_id, wait_s=...)",
+    "screenshot_set_poll": "job(job_id, wait_s=...)",
+    "build_start": 'build(env=...), or install(port=..., source={"env": ...})',
+    "build_poll": "job(job_id, wait_s=...)",
+    "flash_start": 'install(port=..., source={"env": ...})',
+    "flash_poll": "job(job_id, wait_s=...)",
+    "pio_flash": 'install(port=..., source={"env": ...})',
+    "update_flash": 'install(port=..., source={"env": ...})',
+    "erase_and_flash": 'install(port=..., source={"env": ...}, erase=True)',
+    "esptool_chip_info": 'vendor(tool="esptool", args=["chip_id"], port=...)',
+    "esptool_erase_flash": 'vendor(tool="esptool", args=["erase_flash"], port=...)',
+    "nrfutil_dfu": 'install(port=..., source={"file": "<package>.zip"})',
+    "picotool_info": 'vendor(tool="picotool", args=["info", "-a"])',
+    "picotool_load": 'vendor(tool="picotool", args=["load", "-x", "-t", "uf2", "<file>.uf2"])',
+    "nrf52_flash_uf2": 'install(port=..., source={"file": "<file>.uf2"})',
+    "serial_list": "devices(include_unknown=True)",
+    "serial_read": 'query(sql="SELECT * FROM logs WHERE port = ... ORDER BY ts DESC")',
+    "ble_sniff_poll": "job(job_id, wait_s=...)",
+    "vanity_grind_poll": "job(job_id, wait_s=...)",
+    "sdk_device_info": "inspect(node=...) with MESHTASTIC_MCP_BACKEND=sdk",
+    "sdk_list_nodes": 'inspect(node=..., what=["nodes"]) with MESHTASTIC_MCP_BACKEND=sdk',
+    "sdk_send_text": "send(node=..., text=...) with MESHTASTIC_MCP_BACKEND=sdk",
+    "sdk_status": "doctor()",
+    "replay_fuzz_presets": "sim_status(fuzz_presets=True)",
+    "android_tap": 'app(platform="android", action="tap", ...)',
+    "android_swipe": 'app(platform="android", action="swipe", ...)',
+    "android_type_text": 'app(platform="android", action="type_text", ...)',
+    "android_clear_logcat": 'app(platform="android", action="clear_logcat")',
+    "android_screenshot": 'app_view(platform="android", action="screenshot")',
+    "android_ui_dump": 'app_view(platform="android", action="ui_dump")',
+    "android_find_text": 'app_view(platform="android", action="find_text", token=...)',
+    "android_poll_for_text": 'app_view(platform="android", action="poll_for_text", token=...)',
+    "android_read_logcat": 'app_view(platform="android", action="read_logcat")',
+    "android_resolve": 'app_view(platform="android", action="resolve", label=...)',
+    "ios_boot": 'app(platform="ios", action="boot")',
+    "ios_open_url": 'app(platform="ios", action="open_url", url=...)',
+    "ios_tap": 'app(platform="ios", action="tap", x=..., y=...)',
+    "ios_type_text": 'app(platform="ios", action="type_text", text=...)',
+    "ios_ui_dump": 'app_view(platform="ios", action="ui_dump")',
 }
 
 _LOCAL_MODEL = frozenset(
@@ -63,6 +108,12 @@ def pointer(name: str) -> str | None:
             f"{name} is a pre-1.0 tool this server hides by default. Call "
             f"{REPLACED_BY[name]} instead, or set {toolsets.TOOLSETS_ENV}=all,legacy on the "
             "server and restart it to get the old tool back."
+        )
+    group = toolsets.toolset_of(name)
+    if group in toolsets.OPT_IN and group != toolsets.LEGACY:
+        return (
+            f"{name} is in the {group!r} toolset, which this server leaves out by default. "
+            f"Set {toolsets.TOOLSETS_ENV}=all (or add {group}) on the server and restart it."
         )
     if name.startswith("discord_"):
         return (

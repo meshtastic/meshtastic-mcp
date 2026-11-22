@@ -82,7 +82,7 @@ stays suppressed). `CLIENT_MUTE` nodes never rebroadcast at all, compounding it.
 
 ### Correct handling
 - **Assert the outbound loop on wire truth, not the UI checkmark.** The receiving node *does*
-  get the `TEXT_MESSAGE_APP` (verify via the recorder `packets_window` / a
+  get the `TEXT_MESSAGE_APP` (verify via `query` over the recorder's `packets` view / a
   `meshtastic.receive.text` listener on the tester). The bubble's delivery state is a separate,
   topology-dependent signal that is unreliable in a flat virtual mesh.
 - **For app-visible delivery success, send a directed message (DM), not a broadcast.** A DM gets

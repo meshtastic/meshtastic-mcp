@@ -23,6 +23,15 @@ All notable changes are documented here. Format loosely follows
   `reboot`, the `replay_*` tools and the rest form a `legacy` toolset that is hidden unless named:
   `MESHTASTIC_MCP_TOOLSETS=all,legacy`. `inspect`, `configure`, `send`, `admin`, `sim` and
   `inject` replace them, and `legacy` is removed in 1.1.
+- **The default tool list is about 40 tools** - the tools a 1.0 tool replaces joined `legacy`:
+  the `_start`/`_poll` pairs (`job` follows every job), the recorder windows,
+  `telemetry_timeline` and `triage_bundle` (`query`), `serial_read` and `serial_list`,
+  `list_devices` (`devices(include_unknown=True)`), the per-flasher tools (`install`, `vendor`),
+  the `android_*`/`ios_*` drivers `app` and `app_view` cover, `replay_fuzz_presets`
+  (`sim_status(fuzz_presets=True)`) and the `sdk_*` bridge (`MESHTASTIC_MCP_BACKEND=sdk`).
+  Unset `MESHTASTIC_MCP_TOOLSETS` now exposes `core`, `app`, `hardware` and `replay`; `all`
+  adds the specialist groups `firmware`, `display`, `android`, `apple`, `tak`, `rf` and `sdk`.
+  Calling a tool from a group left out says which setting adds it.
 - **Discord moved to its own server** - the `discord_*` tools are served by
   `meshtastic-mcp-discord`, not this server.
 - **A stdio client on the bench host bridges to a running `serve`** - so one server owns the

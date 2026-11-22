@@ -94,7 +94,7 @@ practice it does not always fail open — a Pro gate run on 2026-09-10 correctly
 assert on an impossible step rather than fabricating a pass — but the structure permits it,
 and one honest run is not a guarantee. Treat `report_task_status`, `output.md` and every Checker verdict as a **hint**. The
 `LOOP <name> <PASS|FAIL>` line in rule 6 above is still computed from the device plane —
-the recorder, `packets_window`, `mesh_e2e.py` — exactly as for a scripted run. Nothing
+the recorder, `query`, `mesh_e2e.py` — exactly as for a scripted run. Nothing
 about the oracle changes; only who does the tapping.
 
 ### Interleaving, per journey

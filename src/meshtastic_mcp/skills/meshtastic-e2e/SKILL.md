@@ -11,7 +11,7 @@ test stimulates one plane and asserts on the *other*.
 
 | Plane | Stimulus | Oracle (observation) |
 |---|---|---|
-| **Device** (Meshtastic MCP) | `send`, `configure`, `push_fake_nodedb`, `send_input_event`, `uhubctl_cycle`, `send(request="traceroute")` | `wait_for`, `query`, recorder `packets_window` / `telemetry_timeline` / `logs_window` / `events_window`, `inspect`, serial logs, `capture_screen`+OCR |
+| **Device** (Meshtastic MCP) | `send`, `configure`, `push_fake_nodedb`, `send_input_event`, `uhubctl_cycle`, `send(request="traceroute")` | `wait_for`, `query` over the recorder's `packets` / `telemetry` / `logs` / `events` views, `inspect`, serial logs, `capture_screen`+OCR |
 | **App — Android** (android CLI + adb) | `adb shell input tap/text/swipe`, `android run` | `android layout --diff`, `android screen capture [--annotate]` |
 | **App — Android, agent-driven** (Artemis MCP) | `mobile_run_task` runs a whole journey out of context | **none — never its own oracle**; the device plane decides (see `references/journeys.md`) |
 | **App — Apple** (xcrun simctl + idb) | `idb ui tap/text`, `simctl install/launch` | `idb ui describe-all`, `simctl io screenshot` |
@@ -121,7 +121,7 @@ Before running any loop, verify all of these. Missing items cause silent failure
 | Requirement | Check | How to fix |
 |---|---|---|
 | `MESHTASTIC_FIRMWARE_ROOT` set | `echo $MESHTASTIC_FIRMWARE_ROOT` | Set to your firmware checkout path |
-| Two radios (TESTER + DUT) | `list_devices()` → ≥2 ports with `likely_meshtastic=true` | Plug in both radios; use TCP DUT if only one physical radio |
+| Two radios (TESTER + DUT) | `devices()` → ≥2 attached radios | Plug in both radios; use TCP DUT if only one physical radio |
 | App reachable on the plane you are testing | Android: `adb shell pm list packages \| grep meshtastic` · Apple: `xcrun simctl listapps` · Desktop: MCP `status` → `connected: true` | `android run` / `adb install`; `simctl install`; `./gradlew :desktopApp:hotRun` |
 | Recorder running (process-global) | `recorder_status()` → `running=true` | Auto-starts on first MCP serial call; captures every interface |
 | `uhubctl` available (Loop 5 only) | `uhubctl -l` returns hub info | `brew install uhubctl`; set `MESHTASTIC_UHUBCTL_LOCATION_TESTER` |
@@ -258,7 +258,7 @@ plain TCP streaming input) to eyeball the sim's squad on a live map.
 
 Emit a compact verdict per loop: `LOOP <n> <PASS|FAIL> token=<...> latency=<ms> hops=<n>`.
 On FAIL, attach: the app `layout`/`screen capture` at deadline, and the recorder
-`packets_window` + `logs_window` tail for the same wall-clock window (they share epoch
+`query` over `packets` and `logs` for the same wall-clock window (they share epoch
 timestamps — that alignment is the whole point of the dual-plane design).
 
 ## Related

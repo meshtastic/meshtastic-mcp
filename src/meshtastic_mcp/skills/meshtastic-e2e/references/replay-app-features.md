@@ -76,7 +76,7 @@ st = sim_status(sid)
 
 **What to assert (app side):** the app stays responsive under load — the a11y tree still answers
 (`poll_for_text`), no ANR dialog in `poll_notification`/`poll_logcat`, the node list reaches the
-expected count, the message list scrolls. Pair with the recorder’s `logs_window` on the app’s
+expected count, the message list scrolls. Pair with `query` over the recorder’s `logs` on the app’s
 logcat for the same window if you ship logs there.
 
 **Local device metrics + local stats:** the connected node reports its own telemetry via two

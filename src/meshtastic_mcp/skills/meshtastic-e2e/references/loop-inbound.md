@@ -49,6 +49,6 @@ On FAIL, capture both planes for the same window:
 android screen capture -o /tmp/inbound_fail.png
 $MCP -c "from meshtastic_mcp import log_query as q,json; print(json.dumps(q.packets_window(max=20)))"
 ```
-- Token present in `packets_window` but not in the app → **app-side** bug (parse/render/wrong channel).
-- Token absent from `packets_window` too → **device/RF** problem (the send never reached the DUT;
+- Token present in the recorder's `packets` view but not in the app → **app-side** bug (parse/render/wrong channel).
+- Token absent from `packets` too → **device/RF** problem (the send never reached the DUT;
   check region/channel match, hop count, NodeInfo warmup).
