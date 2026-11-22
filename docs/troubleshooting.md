@@ -10,7 +10,7 @@ Symptom: a tool fails with `Port <port> is busy: another device operation is in 
 
 Cause: the server allows one call per serial port at a time. A second call fails at once instead of queuing, so a poll loop or two agents on one radio collide.
 
-Fix: retry after a few seconds. Do not poll `inspect` in a tight loop; read the recorder with `events_window` or `logs_window` for ongoing observation. If the same port stays busy, another process may hold it, such as FleetSuite (its monitors own the bench's ports while it runs) or a terminal monitor.
+Fix: retry after a few seconds. Do not poll `inspect` in a tight loop; read the recorder with `query` or `wait_for` for ongoing observation. If the same port stays busy, another process may hold it, such as FleetSuite (its monitors own the bench's ports while it runs) or a terminal monitor.
 
 ## A lease is held by another session
 
@@ -62,7 +62,7 @@ A binary that exists but is off the server's PATH shows as `degraded` with "foun
 
 ## The UF2 drive is not mounted on a headless host
 
-Symptom: `nrf52_bootloader_info`, `nrf52_backup_firmware` or `nrf52_flash_uf2` cannot find the board's drive, although the board is in UF2 mode.
+Symptom: `nrf52_bootloader_info`, `nrf52_backup_firmware` or `install` with a `.uf2` cannot find the board's drive, although the board is in UF2 mode.
 
 Cause: the tools read the drive where the operating system mounts it. A desktop automounts it, and a headless host does not. On Linux the tools look under `/run/media/<user>`, `/media/<user>`, `/media` and `/mnt`; on macOS under `/Volumes`.
 
@@ -87,10 +87,10 @@ Cause and fix depend on which key is present:
 
 A radio restarts for most config sections, so a result with `restarted: true` is normal. If the call fails on a restart that takes too long, raise `timeout_s`.
 
-## A sent message does not show up in `packets_window`
+## A sent message does not show up in the packet stream
 
-Symptom: a message went out, and `packets_window` or the recorder's packet stream shows nothing for it.
+Symptom: a message went out, and `query` over the recorder's packets shows nothing for it.
 
 Cause: a node never sees its own transmission on the receive path. The library drops the firmware's echo of a packet the node sent, so the stream stays empty even when the message was delivered.
 
-Fix: do not confirm a local send with the packet stream. Watch the firmware's own `Started Tx` log line instead, which reaches the recorder only while the radio's debug log API is on (`security.debug_log_api_enabled` through `configure`). For end-to-end delivery, send a direct message with `want_ack=True`, or observe the packet on a second node. The legacy `send_text(wait_for_tx=True)` reports `tx_confirmed` as `true` (seen), `false` (logs flowed and showed no TX) or `null` (not observable, which is not a failure).
+Fix: do not confirm a local send with the packet stream. Watch the firmware's own `Started Tx` log line instead, which reaches the recorder only while the radio's debug log API is on (`security.debug_log_api_enabled` through `configure`). For end-to-end delivery, send a direct message with `want_ack=True`, or observe the packet on a second node. `send(..., wait_for_tx=True)` reports `tx_confirmed` as `true` (seen), `false` (logs flowed and showed no TX) or `null` (not observable, which is not a failure).

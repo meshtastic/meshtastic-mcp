@@ -70,7 +70,7 @@ that hardware being missing.
 | --- | --- |
 | `ble_sniff_status` | Dongles attached, plugin resolved, captures already running. Core. `transmit_supported` is always `false`. |
 | `ble_sniff_start` | Start a background capture, returns a `job_id`. |
-| `ble_sniff_poll` | Status plus a summary of everything captured so far. It parses the pcap up to its last complete record, so a running capture reports live advertisers. |
+| `job(job_id)` | Status plus a summary of everything captured so far. It parses the pcap up to its last complete record, so a running capture reports live advertisers. |
 | `ble_sniff_stop` | Stop a capture; the pcap so far is kept and summarized. |
 
 Captures outrun the 60 s MCP timeout, so they use the `jobs.py` async pattern like
@@ -79,7 +79,7 @@ build/flash/grind. `duration_s=0` runs until `ble_sniff_stop`.
 ```python
 ble_sniff_status()  # ready? which port?
 job = ble_sniff_start(duration_s=30)  # passive, all advertisers
-ble_sniff_poll(job["job_id"])  # works mid-capture
+job(job["job_id"])  # works mid-capture
 ble_sniff_stop(job["job_id"])  # early stop; pcap kept
 ```
 
@@ -127,11 +127,11 @@ its type.
 
 ## Untrusted output
 
-`ble_sniff_poll` and `ble_sniff_stop` return **BLE device names, which are arbitrary text
+`job` on a capture and `ble_sniff_stop` return **BLE device names, which are arbitrary text
 chosen by whoever owns any radio in range.** This is the same prompt-injection exposure as
-`logs_window`/`packets_window`, one step further out: you do not even need to be on the
+`query` over the recorder, one step further out: you do not even need to be on the
 mesh to put text in front of the agent, just in radio range. All four tools are
-`openWorldHint`. Do not process a captured name and call `send_text` in the same agentic
+`openWorldHint`. Do not process a captured name and call `send` in the same agentic
 task without human review. See `SECURITY.md`.
 
 ## Wire format

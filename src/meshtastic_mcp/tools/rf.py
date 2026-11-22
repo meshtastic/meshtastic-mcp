@@ -287,7 +287,7 @@ def ble_sniff_start(
     """Capture the BLE air in the background: the phone-to-node link, from outside.
 
     The independent check when the app says "no devices found" and the node says
-    "advertising". Returns a `job_id` at once; poll `ble_sniff_poll`. See
+    "advertising". Returns a `job_id` at once; follow it with `job`. See
     docs/ble-sniffer.md.
 
     Args:
@@ -342,7 +342,7 @@ def ble_sniff_stop(job_id: str) -> dict[str, Any]:
 
     The pcap has no trailer, so a terminated capture is a valid file; open `pcap_path` in
     Wireshark for the per-packet view this summary flattens. The summary carries the same
-    untrusted device names as `ble_sniff_poll`.
+    untrusted device names as `job` on the capture.
 
     Args:
         job_id: Id from `ble_sniff_start`.
@@ -384,7 +384,7 @@ def vanity_grind_start(
 ) -> dict[str, Any]:
     """Grind for a keypair whose node id / app color matches, in the background.
 
-    Returns a `job_id` in under a second; poll `vanity_grind_poll`. Ask for an id, a color,
+    Returns a `job_id` in under a second; follow it with `job`. Ask for an id, a color,
     or both; an impossible pair is rejected in the job log. Hits are private keys, written
     to a 0600 file and returned by the poll: treat them as secrets. See docs/vanity.md.
 
@@ -455,7 +455,7 @@ async def vanity_apply(
     UNSET. The board reboots (~7 s). See docs/vanity.md.
 
     Args:
-        private_key: The vanity private key, hex or base64, as `vanity_grind_poll` or
+        private_key: The vanity private key, hex or base64, as `job` on a grind or
             `vanity_preview` shows it.
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.

@@ -29,6 +29,11 @@ All notable changes are documented here. Format loosely follows
 - **A hidden or removed tool name says what replaces it** - a call to `device_info` while
   `legacy` is hidden names `inspect` and the `all,legacy` opt-in instead of `Unknown tool`.
 
+- **Generated configuration and index.** `docs/configuration.md` lists every environment variable
+  the package reads, from `env_vars.py`; a test fails when the code reads one it does not name.
+  The group table in `docs/toolsets.md` and `llms.txt` are generated too. New pages:
+  `docs/bench.md` for a shared bench and `docs/e2e.md` for the app test loop.
+
 ### Changed
 - **One device path** - `set_channel_url`, `send_input_event`, the `meshtastic://device/*`
   resources, `nrf52_enter_uf2`, `install`'s UF2 entry, the `info` and `nodes` CLI commands and the
@@ -65,6 +70,8 @@ All notable changes are documented here. Format loosely follows
   duration and, on failure, the reason. Argument values other than the target are never logged.
 
 ### Removed
+
+- `docs/sim-realism-plan.md`, a plan rather than a user doc.
 - **The local-model tools** - `summarize_window`, `vision_oracle`, `triage_window` and the
   `local_model_*` tools.
 

@@ -82,7 +82,7 @@ The RF gateway observer set by `sim_profile["observer"]` is not the connected no
 | `adversary` | Spoofing, flooding, forged ACKs, rogue ADMIN, evil-twin impersonation. |
 | `chaos` | Everything, frame corruption included. |
 
-`fuzz_seed` seeds it so a crash reproduces. `sim_status` reports fuzz activity (counts and recent events) under `fuzz`. `replay_fuzz_presets` lists the presets with the fault categories each enables.
+`fuzz_seed` seeds it so a crash reproduces. `sim_status` reports fuzz activity (counts and recent events) under `fuzz`. `sim_status(fuzz_presets=True)` lists the presets with the fault categories each enables.
 
 ## Injecting packets into a running session
 

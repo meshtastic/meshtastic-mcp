@@ -18,10 +18,10 @@ The gate runs before the tool takes a port lock or starts a job. An answer count
 
 ### Which actions are gated
 
-- Asks for: `reboot`, `shutdown`, `inject_frame`, `pa_sweep`, `uhubctl_power` (`off` only), `uhubctl_cycle`, `push_fake_nodedb` (`target="hardware"` only), `pio_flash`, `flash_start`, `update_flash`, `nrf52_enter_uf2`, `nrf52_flash_uf2`, `nrf52_eject_uf2`.
-- Irreversible, so `human` policy asks even with `confirm=True`: `factory_reset`, `erase_and_flash`, `vanity_apply`, `atak_fleet_down` with `delete_clones=True`, `nrf52_factory_erase`, `nrf52_flash_uf2` with a bootloader update, and the destructive `esptool_*`, `nrfutil_*` and `picotool_*` calls.
+- Asks for: `admin` restarts and resets, `install`, `inject_frame`, `pa_sweep`, `uhubctl_power` (`off` only), `uhubctl_cycle`, `push_fake_nodedb` (`target="hardware"` only), `nrf52_enter_uf2`, `nrf52_eject_uf2`.
+- Irreversible, so `human` policy asks even with `confirm=True`: the `admin` factory resets, `install` with `erase=True` or a bootloader update, `vanity_apply`, `atak_fleet_down` with `delete_clones=True`, `nrf52_factory_erase`, and every `vendor` call outside the read-only list.
 
-The vendor tools look at their subcommand first. `esptool_raw(args=["flash_id"])` never asks; `esptool_raw(args=["erase_flash"])` does. Only a short list of read-only subcommands runs without asking (esptool `chip_id`, `flash_id`, `read_mac` and the like, nrfutil `version` and `device list`, picotool `info`); any subcommand the list does not name asks, and counts as irreversible under `human` policy.
+`vendor` looks at its subcommand first. `vendor(tool="esptool", args=["flash_id"])` never asks; `vendor(tool="esptool", args=["erase_flash"])` does. Only a short list of read-only subcommands runs without asking (esptool `chip_id`, `flash_id`, `read_mac` and the like, nrfutil `version` and `device list`, picotool `info`); any subcommand the list does not name asks, and counts as irreversible under `human` policy.
 
 ### Over HTTP
 
@@ -65,26 +65,17 @@ An MCP client usually gives up on a call after about 60 seconds. A PlatformIO bu
 
 A job runs in the server process and keeps a log under the data dir. Its id is good until the server restarts, because jobs are not saved. Under `serve`, every client shares one job registry, so a `job_id` one client started can be followed from another.
 
-| Start | Follow | Stop |
-| --- | --- | --- |
-| `build_start` | `build_poll(build_id=...)` | cancel the `build` task |
-| `flash_start` | `flash_poll(job_id=...)` | cannot be stopped mid-write |
-| `vanity_grind_start` | `vanity_grind_poll` | `vanity_grind_stop` |
-| `ble_sniff_start` | `ble_sniff_poll` | `ble_sniff_stop` |
-| `drive_display_start` | `drive_display_poll` | |
-| `screenshot_set_start` | `screenshot_set_poll` | |
-
-The `job(id)` tool follows any job by its id. Poll every few seconds until `status` is `done` or `failed`; a poll returns the exit code, the artifacts and the tail of the log.
+Tools that start long work return a `job_id` at once: `build` and `install` when the call is abandoned, and `vanity_grind_start`, `ble_sniff_start`, `drive_display_start` and `screenshot_set_start` always. `job(job_id, wait_s=...)` follows any of them; with `wait_s` one call waits up to 55 seconds for the job to finish, so a loop of short polls is not needed. `job()` with no id lists every job. A grind or a capture stops with its own `_stop` tool; a build stops when its task is canceled.
 
 ### A flash cannot be canceled
 
-`build`, `pio_flash`, `erase_and_flash`, `update_flash` and `nrf52_flash_uf2` start a job and wait for it in the same call. Their result carries the `job_id`, and a failure is a tool error with the tail of the output.
+`build` and `install` start a job and wait for it in the same call. Their result carries the `job_id`, and a failure is a tool error with the tail of the output.
 
-Before it waits, each flash tool logs a line to the client naming its job, for example `flashes job 3f2a... started for heltec-v3; ... flash_poll(job_id='3f2a...') follows it`. A flash keeps writing after its call is canceled or times out. Follow that job to the end before you reset, unplug or reflash the board. `build`'s job is the same one `build_start` makes, so `build_poll(build_id=<job_id>)` reads it.
+Before it waits, each flash tool logs a line to the client naming its job, for example `flashes job 3f2a... started for heltec-v3`. A flash keeps writing after its call is canceled or times out. Follow that job with `job` to the end before you reset, unplug or reflash the board.
 
 ### Progress
 
-While they wait, these five tools send MCP progress notifications to a client that asked for them with a progress token. The esptool, nrfutil and picotool tools (`esptool_raw`, `nrfutil_dfu`, `picotool_load` and the rest) send them while they run.
+While they wait, `build`, `install` and `vendor` send MCP progress notifications to a client that asked for them with a progress token.
 
 - esptool's write counts bytes over the images esptool has named a flash range for, so the total grows when the next image starts.
 - picotool's bar counts percent.
@@ -96,32 +87,32 @@ A caller gets at most one notification a second however fast a build prints, and
 
 ### MCP background tasks
 
-Install the `[tasks]` extra to let those five tools run as MCP background tasks:
+Install the `[tasks]` extra to let `build` and `install` run as MCP background tasks:
 
 ```bash
 uv tool install 'meshtastic-mcp[tasks]'
 ```
 
-A client that supports tasks gets a task handle back at once and collects the result later. Other clients, and servers without the extra, run the tools inline: the call blocks until the job ends, so those clients should prefer `build_start` and `flash_start` with their poll tools.
+A client that supports tasks gets a task handle back at once and collects the result later. Other clients, and servers without the extra, run the tools inline: the call blocks until the job ends or the client gives up, and the job keeps running either way.
 
-Canceling a `build` task stops the build and its whole process group. Canceling a flash task leaves the write running; follow it with `flash_poll`. An inline `build` that a client abandons on a timeout keeps building, and only an explicit task cancel stops it. A build that runs past its 15 minute limit is killed with every process it started.
+Canceling a `build` task stops the build and its whole process group. Canceling a flash task leaves the write running; follow it with `job`. An inline `build` that a client abandons on a timeout keeps building, and only an explicit task cancel stops it. A build that runs past its 15 minute limit is killed with every process it started.
 
 A gated tool inside a task still asks for confirmation, through the task's `input_required` state, so an irreversible flash can be confirmed there.
 
 ### Choosing
 
-- The client runs tasks: call `build` or `pio_flash` and wait for the task.
-- It does not: call `build_start` or `flash_start`, then poll.
-- A call failed or was canceled after it started a job: find the job id in the log line or the result, and poll it.
+- The client runs tasks: call `build` or `install` and wait for the task.
+- It does not: call them anyway, and if the call times out, follow the logged `job_id` with `job`.
+- A call failed or was canceled after it started a job: find the job id in the log line or the result, and follow it with `job`.
 
 ## Untrusted input
 
 Some tools return text that a stranger controls, and an agent that reads it can be steered by instructions hidden in it:
 
-- Mesh traffic: `logs_window`, `packets_window` and the node and message fields of `inspect` carry names and text written by any node on the mesh.
-- App surfaces: `android_ui_dump`, `android_screenshot` and `android_read_logcat` echo the same node names and messages one hop removed.
+- Mesh traffic: `query`, `wait_for` and the node and message fields of `inspect` carry names and text written by any node on the mesh.
+- App surfaces: `app_view` screenshots, UI dumps and logcat echo the same node names and messages one hop removed.
 - TAK peers: `cot_relay_status` returns callsigns supplied by connected TAK clients.
 - Discord: every `discord_*` message is public text from anyone on the server. The per-message `trust` tier is a reading aid, not authentication.
-- BLE: `ble_sniff_poll` returns device names chosen by whoever owns any radio in range, so an attacker needs proximity and nothing else.
+- BLE: a BLE sniffer capture returns device names chosen by whoever owns any radio in range, so an attacker needs proximity and nothing else.
 
 The risk is the combination of private data (config, channel URLs, the node list), untrusted content and a way out (`send` broadcasts on the mesh). Do not read untrusted mesh content and send messages in the same task without a human reviewing the step in between. Use `MESHTASTIC_MCP_READ_ONLY=1` for sessions that only need to look. [SECURITY.md](../SECURITY.md) covers reporting a vulnerability and the mitigations in place.

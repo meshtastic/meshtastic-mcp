@@ -137,11 +137,10 @@ async def build(
     """Build firmware for one env with `pio run -e <env>`.
 
     Runs as an MCP background task when the client supports them (`[tasks]` extra);
-    otherwise the call blocks for the whole compile, so use `build_start` + `build_poll`
-    there. Canceling the task stops the build; an abandoned call keeps building, and
-    `build_poll(build_id=<job_id>)` reads it. A failed build is a tool error. A finished
-    build is perishable: another session's build in the shared tree can delete it, so flash
-    it at once. See docs/firmware-builds.md.
+    otherwise the call blocks for the whole compile. Canceling the task stops the build; an
+    abandoned call keeps building, and `job(job_id, wait_s=...)` follows it. A failed build
+    is a tool error. A finished build is perishable: another session's build in the shared
+    tree can delete it, so flash it at once. See docs/firmware-builds.md.
 
     Returns `{job_id, status, exit_code, artifacts, duration_s, log_tail, worker_error,
     build_flags}`, with artifacts under `.pio/build/<env>/` and the last 200 log lines.
@@ -481,9 +480,9 @@ def userprefs_testing_profile(
 
     For a multi-device test cluster, pass the same `psk_seed` to every call so every device
     shares the same PSK and lands on the same isolated mesh. The returned dict is ready to
-    pass straight to `build`, `pio_flash`, `erase_and_flash`, or `update_flash` via their
-    `userprefs` parameter, e.g. `userprefs_testing_profile(psk_seed="ci-run-2026-04-16")`
-    then `erase_and_flash(env="tbeam", port=..., confirm=True, userprefs=profile)`.
+    pass straight to `build` or `install` via their `userprefs` parameter, e.g.
+    `userprefs_testing_profile(psk_seed="ci-run-2026-04-16")` then
+    `install(port=..., source={"env": "tbeam"}, erase=True, confirm=True, userprefs=profile)`.
 
     Args:
         psk_seed: Seed for a deterministic 32-byte PSK via SHA-256. None = random (fine
