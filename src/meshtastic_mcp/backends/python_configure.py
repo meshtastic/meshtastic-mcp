@@ -237,7 +237,40 @@ def _plan_changes(plan: _Plan, node: Any, changes: dict[str, Any]) -> None:
             raise BackendError(str(exc)) from exc
 
 
+def full_snapshot(iface: Any) -> dict[str, Any]:
+    """Config, owner and all channel slots of the attached radio, secrets kept."""
+    node = iface.localNode
+    return {
+        "localConfig": protopath.message_to_dict(node.localConfig),
+        "moduleConfig": protopath.message_to_dict(node.moduleConfig),
+        "owner": _owner_now(iface),
+        "channels": {
+            str(i): protopath.message_to_dict(ch)
+            for i, ch in enumerate(getattr(node, "channels", None) or [])
+        },
+    }
+
+
+def _plan_restore_owner_channels(plan: _Plan, node: Any, snapshot: dict[str, Any]) -> None:
+    owner = snapshot.get("owner") or {}
+    for key in ("long_name", "short_name"):
+        if owner.get(key):
+            plan.owner[key] = owner[key]
+    for key in ("is_licensed", "is_unmessagable"):
+        if key in owner:
+            plan.flags[key] = bool(owner[key])
+    live = getattr(node, "channels", None) or []
+    for index, saved in (snapshot.get("channels") or {}).items():
+        i = int(index)
+        if i >= len(live):
+            continue
+        channel = type(live[i])()
+        json_format.ParseDict(saved, channel, ignore_unknown_fields=True)
+        plan.channels[i] = channel
+
+
 def _plan_restore(plan: _Plan, node: Any, snapshot: dict[str, Any]) -> None:
+    _plan_restore_owner_channels(plan, node, snapshot)
     sources = (
         ("localConfig", localonly_pb2.LocalConfig(), node.localConfig),
         ("moduleConfig", localonly_pb2.LocalModuleConfig(), node.moduleConfig),
@@ -456,13 +489,7 @@ def configure(
         if dry_run or not plan.changes:
             out.update(verified=None if dry_run else True, restarted=False if not dry_run else None)
             return out
-        out["snapshot"] = save_snapshot(
-            str(port),
-            {
-                "localConfig": protopath.message_to_dict(iface.localNode.localConfig),
-                "moduleConfig": protopath.message_to_dict(iface.localNode.moduleConfig),
-            },
-        )
+        out["snapshot"] = save_snapshot(str(port), full_snapshot(iface))
         before = _uptime(iface)
         out["transaction"] = _apply(plan, iface)
         time.sleep(2.5)  # let the radio finish its flash write before the port closes

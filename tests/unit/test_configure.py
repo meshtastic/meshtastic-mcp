@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from fastmcp.exceptions import ToolError
 from meshtastic.mesh_interface import MeshInterface
-from meshtastic.protobuf import config_pb2, localonly_pb2, mesh_pb2
+from meshtastic.protobuf import channel_pb2, config_pb2, localonly_pb2, mesh_pb2
 
 from meshtastic_mcp import backends, config_snapshot, connection, leases
 from meshtastic_mcp.backends import python_configure
@@ -30,6 +30,9 @@ class _Radio:
         self.module = localonly_pb2.LocalModuleConfig()
         self.module.mqtt.SetInParent()
         self.owner = {"longName": "Heltec", "shortName": "HV3"}
+        self.channels = [channel_pb2.Channel(index=i) for i in range(8)]
+        self.channels[0].role = channel_pb2.Channel.Role.PRIMARY
+        self.channels[0].settings.psk = b"\x01"
         self.uptime = 1000
         self.sent: list[str] = []
         self.drop: set[str] = set()
@@ -67,6 +70,13 @@ class _Radio:
                 self.localConfig.CopyFrom(radio.local)
                 self.moduleConfig = localonly_pb2.LocalModuleConfig()
                 self.moduleConfig.CopyFrom(radio.module)
+                self.channels = [channel_pb2.Channel() for _ in radio.channels]
+                for mine, theirs in zip(self.channels, radio.channels, strict=True):
+                    mine.CopyFrom(theirs)
+
+            def writeChannel(self, index):
+                radio.sent.append(f"channel{index}")
+                radio.channels[index].CopyFrom(self.channels[index])
 
             def writeConfig(self, section):
                 parent = (
@@ -76,10 +86,12 @@ class _Radio:
                 )
                 radio.store(section, getattr(parent, section))
 
-            def setOwner(self, long_name=None, short_name=None, **_flags):
+            def setOwner(self, long_name=None, short_name=None, is_licensed=False, **_flags):
                 radio.sent.append("owner")
                 if "owner" not in radio.drop:
                     radio.owner = {"longName": long_name, "shortName": short_name}
+                    if is_licensed:
+                        radio.owner["isLicensed"] = True
 
             def beginSettingsTransaction(self):
                 radio.sent.append("begin")
@@ -202,6 +214,30 @@ def test_restore_puts_the_snapshot_back_but_never_the_keys(radio) -> None:
     assert radio.local.lora.region == config_pb2.Config.LoRaConfig.RegionCode.US
     assert radio.local.security.private_key == b"\x01" * 32
     assert result["verified"] is True
+
+
+def test_snapshot_and_restore_cover_owner_and_channels(radio) -> None:
+    radio.channels[1].role = channel_pb2.Channel.Role.SECONDARY
+    radio.channels[1].settings.name = "bench"
+    radio.channels[1].settings.psk = b"\x07" * 16
+    first = core.configure(changes={"device.role": "CLIENT_MUTE"})
+    saved = config_snapshot.load_config(first["snapshot"]["name"])
+    assert saved["owner"]["long_name"] == "Heltec"
+    assert saved["channels"]["1"]["settings"]["name"] == "bench"
+    radio.owner = {"longName": "Erased", "shortName": "E"}
+    radio.channels[1].CopyFrom(channel_pb2.Channel(index=1))
+    result = core.configure(restore=first["snapshot"]["name"])
+    assert radio.owner["longName"] == "Heltec" and radio.owner["shortName"] == "HV3"
+    assert radio.channels[1].settings.name == "bench"
+    assert radio.channels[1].settings.psk == b"\x07" * 16
+    assert result["verified"] is True
+
+
+def test_diff_withholds_channel_keys(radio) -> None:
+    config_snapshot.save("a", "/dev/ttyUSB0", {"channels": {"1": {"settings": {"psk": "AQ=="}}}})
+    config_snapshot.save("b", "/dev/ttyUSB0", {"channels": {"1": {"settings": {"psk": "Ag=="}}}})
+    changed = config_snapshot.diff("a", "b")["changed"]
+    assert changed == {"channels.1.settings.psk": {"from": "<redacted>", "to": "<redacted>"}}
 
 
 def test_a_bad_value_is_refused_before_anything_is_written(radio) -> None:

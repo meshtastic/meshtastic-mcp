@@ -80,6 +80,10 @@ All notable changes are documented here. Format loosely follows
   `local_model_*` tools.
 
 ### Fixed
+- **Snapshots keep owner and channels** - `config_snapshot` and the snapshot `configure` takes
+  before a write now hold the owner and all eight channel slots, keys included, and
+  `configure(restore=...)` puts them back. A restore after an erase left the radio unnamed and on
+  default channels. Channel keys are withheld in `config_diff`. Older snapshots still restore.
 - `nrf52_flash_uf2` flashes a bootloader self-update (`update-*.uf2`), which it refused as built
   for the other SoftDevice, and asks even with `confirm=True` under `MESHTASTIC_MCP_CONFIRM=human`.
 - A refusal from meshtastic-python (an unknown destination name, a blank owner name, a config
