@@ -74,6 +74,19 @@ class RunStats:
     output_tokens: int = 0
     tool_calls: Counter[str] = field(default_factory=Counter)
     tool_errors: int = 0
+    tool_error_texts: list[str] = field(default_factory=list)
+
+
+_ERROR_TEXT_MAX = 300
+
+
+def _result_text(block: dict[str, Any]) -> str:
+    content = block.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(str(c.get("text", "")) for c in content if isinstance(c, dict))
+    return ""
 
 
 def load_tasks(path: Path = TASKS_PATH) -> list[Task]:
@@ -134,6 +147,7 @@ def build_command(
 def parse_stream(lines: list[str]) -> RunStats:
     """Fold stream-json events into a :class:`RunStats`."""
     stats = RunStats()
+    names: dict[str, str] = {}
     for line in lines:
         line = line.strip()
         if not line:
@@ -147,12 +161,16 @@ def parse_stream(lines: list[str]) -> RunStats:
             for block in event.get("message", {}).get("content", []):
                 if block.get("type") == "tool_use":
                     stats.tool_calls[block.get("name", "?")] += 1
+                    names[str(block.get("id"))] = block.get("name", "?")
         elif kind == "user":
             content = event.get("message", {}).get("content", [])
             if isinstance(content, list):
-                stats.tool_errors += sum(
-                    1 for b in content if b.get("type") == "tool_result" and b.get("is_error")
-                )
+                for b in content:
+                    if b.get("type") == "tool_result" and b.get("is_error"):
+                        stats.tool_errors += 1
+                        name = names.get(str(b.get("tool_use_id")), "?")
+                        text = " ".join(_result_text(b).split())[:_ERROR_TEXT_MAX]
+                        stats.tool_error_texts.append(f"{name}: {text}")
         elif kind == "result":
             usage = event.get("usage", {})
             stats.result_text = event.get("result", "") or ""
@@ -310,6 +328,7 @@ def run_task(
         "tool_calls": dict(stats.tool_calls),
         "tool_call_total": sum(stats.tool_calls.values()),
         "tool_errors": stats.tool_errors,
+        "tool_error_texts": stats.tool_error_texts,
         "input_tokens": stats.input_tokens,
         "output_tokens": stats.output_tokens,
         "cost_usd": stats.cost_usd,
@@ -440,6 +459,7 @@ def _skipped(task: Task) -> dict[str, Any]:
         "tool_calls": {},
         "tool_call_total": 0,
         "tool_errors": 0,
+        "tool_error_texts": [],
         "input_tokens": 0,
         "output_tokens": 0,
         "cost_usd": 0.0,
