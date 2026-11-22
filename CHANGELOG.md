@@ -6,6 +6,12 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Text messages carry their text in the recorder** - the `packets` view has a `text` column
+  with the decoded text of each `TEXT_MESSAGE_APP` packet, so `query` and `wait_for` match a
+  message directly (`text = 'hello'`). Rows recorded before it read as null.
+- **`wait_for` takes `node`** like `inspect`, `send` and `configure`; `port` still works.
+- **Eval results name each tool error** - every run records `tool_error_texts`, the tool and
+  its error message.
 - **More requests from `send`** - `request` takes `position`, `neighbor_info` and `node_info`
   besides `traceroute` and `telemetry`, and `telemetry` names the metrics it asks for (`device`,
   `environment`, `air_quality`, `power`, `local_stats`, `health`, `host`). Every request goes with

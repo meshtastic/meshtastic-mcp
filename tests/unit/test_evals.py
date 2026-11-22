@@ -353,3 +353,40 @@ def test_every_destructive_or_leasing_task_restores_or_verifies() -> None:
     for task in runner.load_tasks():
         if task.setup:
             assert task.teardown, task.id
+
+
+def test_parse_stream_records_each_tool_error_with_its_tool_name() -> None:
+    lines = [
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": "mcp__m__wait_for", "input": {}}
+                    ]
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t1",
+                            "is_error": True,
+                            "content": [
+                                {"type": "text", "text": "unexpected\n keyword " + "x" * 400}
+                            ],
+                        }
+                    ]
+                },
+            }
+        ),
+    ]
+    stats = runner.parse_stream(lines)
+    assert stats.tool_errors == 1
+    (text,) = stats.tool_error_texts
+    assert text.startswith("mcp__m__wait_for: unexpected keyword x")
+    assert len(text) <= len("mcp__m__wait_for: ") + 300

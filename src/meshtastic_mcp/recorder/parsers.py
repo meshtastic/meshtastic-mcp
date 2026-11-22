@@ -269,6 +269,15 @@ def summarize_packet(packet: dict[str, Any], *, payload_hex_len: int = 64) -> di
         # Some decoded payloads (text messages) come as decoded strings.
         payload_size = len(payload)
         payload_hex = None  # not bytes
+    text = None
+    if portnum == "TEXT_MESSAGE_APP" and isinstance(decoded, dict):
+        decoded_text = decoded.get("text")
+        if isinstance(decoded_text, str):
+            text = decoded_text
+        elif isinstance(payload, str):
+            text = payload
+        elif isinstance(payload, (bytes, bytearray, memoryview)):
+            text = bytes(payload).decode("utf-8", errors="replace")
     return {
         "from_node": packet.get("fromId") or packet.get("from"),
         "to_node": packet.get("toId") or packet.get("to"),
@@ -281,6 +290,7 @@ def summarize_packet(packet: dict[str, Any], *, payload_hex_len: int = 64) -> di
         "id": packet.get("id"),
         "payload_size": payload_size,
         "payload_hex_prefix": payload_hex,
+        "text": text,
     }
 
 
