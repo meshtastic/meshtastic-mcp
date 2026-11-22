@@ -13,6 +13,8 @@ from fastmcp import Client, FastMCP
 from mcp.types import ElicitResult
 
 from meshtastic_mcp import admin, confirm, nrf52_bootloader
+from meshtastic_mcp.tools import hardware as tools_hardware
+from tests.unit._tool_fns import tool_fn
 
 INFO_OTAFIX = (
     "UF2 Bootloader 2.6.0\r\nModel: WisBlock RAK4631 Board\r\nBoard-ID: WisBlock-RAK4631-Board\r\n"
@@ -59,7 +61,7 @@ def _uf2(path, target, family=0xADA52840):
 def _app(server, *names):
     app = FastMCP("t")
     for name in names:
-        tool = getattr(server, name)
+        tool = tool_fn(name)
         app.tool()(getattr(tool, "fn", tool))
     return app
 
@@ -93,7 +95,7 @@ def test_a_gone_app_port_still_finds_its_drive_by_serial(server, monkeypatch, tm
 
     monkeypatch.setattr(nrf52_bootloader, "find_drive_for_port", fake_match)
     gone = str(tmp_path / "usb-RAKwireless_WisCore_RAK4631_Board_7885014CB2C5B186-if00")
-    assert server._uf2_drive(gone)["label"] == "RAK4631"
+    assert tools_hardware._uf2_drive(gone)["label"] == "RAK4631"
     assert asked == {"port": None, "serial_number": "7885014CB2C5B186"}
 
 

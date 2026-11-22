@@ -9,6 +9,8 @@ from typing import Any
 
 import pytest
 
+from meshtastic_mcp.tools import apple as tools_apple
+
 
 @pytest.fixture(scope="module")
 def server():
@@ -36,6 +38,6 @@ def test_screenshot_set_start_forwards_beacon_listen(
     monkeypatch.setattr(jobs, "start", lambda kind, label, body: {"job_id": "j1"})
     monkeypatch.setenv("MESHTASTIC_MCP_CAPTURE_DIR", str(tmp_path))
 
-    server.screenshot_set_start(["nodes"], out_dir="shots", beacon_listen=beacon_listen)
+    tools_apple.screenshot_set_start(["nodes"], out_dir="shots", beacon_listen=beacon_listen)
 
     assert [p.beacon_listen for p in plans] == [beacon_listen]

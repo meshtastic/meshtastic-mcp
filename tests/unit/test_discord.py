@@ -694,11 +694,11 @@ def test_discord_server_imports_no_device_module() -> None:
 
 
 def test_device_server_lists_no_discord_tool() -> None:
-    from meshtastic_mcp import server
+    from meshtastic_mcp import server, tool_meta
 
     names = {tool.name for tool in asyncio.run(server.app.list_tools())}
     assert not {n for n in names if n.startswith("discord_")}
-    assert not (TOOLS & set(server._READ_ONLY | server._OPEN_WORLD))
+    assert not (TOOLS & set(tool_meta.META))
 
 
 # -- channel readability -----------------------------------------------------

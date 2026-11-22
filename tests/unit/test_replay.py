@@ -30,6 +30,7 @@ from meshtastic_mcp.replay.engine import (
     OBSERVER_NUM,
     _representative_radio_metrics,
 )
+from meshtastic_mcp.tools import replay as tools_replay
 
 ALL_PORTNUMS = {1, 3, 4, 5, 6, 8, 34, 37, 65, 66, 67, 70, 71}
 
@@ -1976,7 +1977,6 @@ def test_cli_replay_builds_session_from_args():
 
 
 def test_mcp_replay_start_wires_dupe_every(monkeypatch):
-    from meshtastic_mcp import server
 
     cap = sim.generate(nodes=2, days=1, seed=1, start=1_700_000_000)
     captured = None
@@ -1993,7 +1993,7 @@ def test_mcp_replay_start_wires_dupe_every(monkeypatch):
     )
     monkeypatch.setattr("meshtastic_mcp.tools.replay.get_replay_manager", lambda: Manager())
 
-    assert server.replay_start(dupe_every=23, mdns=False) == {"id": "test"}
+    assert tools_replay.replay_start(dupe_every=23, mdns=False) == {"id": "test"}
     assert captured is not None
     assert captured.dupe_every == 23
 

@@ -13,6 +13,7 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from meshtastic_mcp import config, flash, hw_tools, pio
+from tests.unit._tool_fns import tool_fn
 
 
 @pytest.fixture
@@ -121,7 +122,7 @@ def server():
 
 def _call(server, name, args):
     app = FastMCP("t")
-    tool = getattr(server, name)
+    tool = tool_fn(name)
     app.tool()(getattr(tool, "fn", tool))
 
     async def run():

@@ -22,6 +22,7 @@ from ..replay import fuzz as replay_fuzz
 from ..replay import get_manager as get_replay_manager
 from ..replay import sim as replay_sim
 from ..schemas import InjectResult, SimResult, SimStatusResult
+from ..tool_meta import meta
 from ._app import app
 
 # ---------- Replay: simulated Meshtastic TCP device -----------------------
@@ -68,6 +69,7 @@ def _load_replay_capture(
 
 
 @app.tool()
+@meta("destructive", port="not_device")
 def replay_start(
     source: str = "meshcon",
     kind: str = "auto",
@@ -221,6 +223,7 @@ def replay_start(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject(
     session_id: str,
     kind: str,
@@ -262,6 +265,7 @@ def replay_inject(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject_beacon(
     session_id: str,
     message: str = "Mesh beacon — join the network",
@@ -311,6 +315,7 @@ def replay_inject_beacon(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject_fileinfo(
     session_id: str,
     file_name: str,
@@ -347,6 +352,7 @@ def replay_inject_fileinfo(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject_client_notification(
     session_id: str,
     variant: str = "low_entropy_key",
@@ -399,6 +405,7 @@ def replay_inject_client_notification(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject_traceroute(
     session_id: str,
     destination_node: int,
@@ -459,6 +466,7 @@ def replay_inject_traceroute(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject_waypoint(
     session_id: str,
     lat: float,
@@ -582,6 +590,7 @@ _INJECT_REQUIRED: dict[str, tuple[str, ...]] = {
 
 
 @app.tool()
+@meta("destructive")
 def inject(
     session_id: str,
     kind: Literal[
@@ -738,6 +747,7 @@ def inject(
 
 
 @app.tool()
+@meta("read")
 def replay_fuzz_presets() -> dict[str, Any]:
     """List the built-in replay fuzz presets and the fault categories each enables.
 
@@ -778,6 +788,7 @@ def replay_fuzz_presets() -> dict[str, Any]:
 
 
 @app.tool()
+@meta("read")
 def replay_status(session_id: str | None = None) -> dict[str, Any]:
     """Status of replay sessions: connection state, packets sent and total, mode.
 
@@ -792,6 +803,7 @@ def replay_status(session_id: str | None = None) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive")
 def replay_stop(session_id: str | None = None) -> dict[str, Any]:
     """Stop a replay session, or every session when `session_id` is omitted.
 
@@ -804,6 +816,7 @@ def replay_stop(session_id: str | None = None) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive", port="not_device")
 def sim(
     action: Literal["start", "stop"],
     session_id: str | None = None,
@@ -935,6 +948,7 @@ def sim(
 
 
 @app.tool()
+@meta("read")
 def sim_status(session_id: str | None = None, fuzz_presets: bool = False) -> SimStatusResult:
     """Status of simulated radio sessions: connection state, packets sent and total, mode.
 
@@ -986,6 +1000,7 @@ def _safe_session_name(session: str) -> str:
 
 
 @app.tool()
+@meta("destructive", open_world=True, port="not_device")
 def cot_relay_start(port: int = 8087, session: str | None = None) -> dict[str, Any]:
     """Start a CoT capture and relay server for real ATAK/iTAK traffic.
 
@@ -1031,6 +1046,7 @@ def cot_relay_start(port: int = 8087, session: str | None = None) -> dict[str, A
 
 
 @app.tool()
+@meta("read", open_world=True)
 def cot_relay_status() -> dict[str, Any]:
     """Live capture/relay state: connected peers, total events, per-CoT-type counts.
 
@@ -1045,6 +1061,7 @@ def cot_relay_status() -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive")
 def cot_relay_stop() -> dict[str, Any]:
     """Stop the CoT relay and close its capture files.
 

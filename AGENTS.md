@@ -34,19 +34,18 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
   tools; see `docs/toolsets.md`), `schemas.py` (the TypedDict output schemas)
   `serve.py` (`meshtastic-mcp serve`, HTTP with a bearer token; see `docs/serve.md`) and
   `bridge.py` (one `serve` per host, found through a lock in the data dir; the plain stdio entry
-  bridges to it unless `MESHTASTIC_MCP_STANDALONE=1`). Tool
-  hints come from the `_READ_ONLY` / `_DESTRUCTIVE` / `_OPEN_WORLD` maps through
-  `_AnnotationTransform` in `server.py`.
+  bridges to it unless `MESHTASTIC_MCP_STANDALONE=1`). Each tool declares its hints and
+  lease handling with `@meta(...)` (`tool_meta.py`) directly above its `def`, and
+  `_AnnotationTransform` in `server.py` applies them.
 - **where tools live**: `tools/`, one module per toolset group in `toolsets.py` (`core.py`,
   `firmware.py`, `hardware.py`, `android.py`, `apple.py`, `replay.py`, `rf.py`,
   `sdk.py`). `tools/_app.py` holds the `FastMCP` app, `CAPS` and the
   capability decorators, and `tools/_shared.py` the helpers several modules use (`_off_loop`,
   `_run_job`, `_raise_if_failed`, `_confirmed_hw_call`). `server.py` imports every tool module,
   which registers its tools, then adds the transforms, starts the recorder and registers the
-  resources and prompts. A new tool goes in its group's module, its hints in the maps in
-  `server.py`; a new module also needs an import in `server.py`. `server.py` re-exports the tool
-  modules' names, but a re-export is a second binding: a test patches a helper in the module
-  whose tool calls it (`meshtastic_mcp.tools.hardware._uf2_drive`), not on `server`.
+  resources and prompts. A new tool goes in its group's module with `@meta(...)` above its
+  `def`; a new module also needs an import in `server.py`. Import a tool or helper from the
+  module that defines it, and patch it there (`meshtastic_mcp.tools.hardware._uf2_drive`).
 - **firmware capability** (needs `MESHTASTIC_FIRMWARE_ROOT` + `pio`): `flash`, `boards`,
   `userprefs`, `pio`, `fixtures`.
 - **android capability** (needs `android` + `adb`): `emulator/` native-node + AVD
@@ -133,7 +132,7 @@ decoupled so the device/admin/recorder core works with **no firmware checkout**.
 
 `capabilities.detect()` drives this; the active set is logged at startup. `config.firmware_root()`
 raises when absent; use `config.firmware_root_or_none()` for capability checks. The `firmware_tool`
-decorator (in `tools/_app.py`; `_FIRMWARE_TOOLS` in `server.py`) registers the firmware-coupled
+decorator (in `tools/_app.py`, which records what it gates in `GATED`) registers the firmware-coupled
 tools only when `CAPS.firmware` is active, and each other capability has its own decorator the
 same way. The power-meter tools, `vanity_preview`/`vanity_apply` and `ble_sniff_status` always
 register. Don't write tool counts down: the startup log names the tools each inactive capability
@@ -213,7 +212,7 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   a lease follows a board into its bootloader.
   `_LeaseTransform` in `server.py` adds a `lease` argument to each tool whose `port` is a
   device and refuses the call while someone else's lease is live; a tool whose `port` means
-  something else goes in `_PORT_NOT_A_DEVICE`. A job keeps the lease it started under until
+  something else declares `@meta(..., port="not_device")`. A job keeps the lease it started under until
   it ends. Leases are optional for now: an unleased device works as before, and servers
   from `master`, the `meshtastic` CLI and `pio` ignore them. `uhubctl_*` takes a hub port,
   not a device, so it is not checked.
@@ -257,13 +256,14 @@ the session-key gate and every "from a remote node" branch. Use it to reproduce 
   and commit the result. `tests/unit/test_docs_gen.py`, which CI runs, fails when it is stale. The
   description in code is the only per-tool prose; don't restate it in other docs.
 - **Every new tool gets a toolset.** A tool outside `core` goes into `toolsets._GROUPS` or
-  `_PREFIXES`; `_GROUPS["firmware"]` must equal `_FIRMWARE_TOOLS` (a test checks it). `core` is
+  `_PREFIXES`; the firmware gate's tools must sit in `firmware` or `legacy` (a test checks it).
+  Every tool also needs `@meta(...)`; `tests/unit/test_tool_annotations.py` fails without it. `core` is
   the portable device set, the tools that need only the base install and a radio, and
   `tests/unit/test_toolsets.py` pins it to an allowlist read from every tool `tools/`
   defines, so a tool that matches no group fails there until it gets one.
 - **Destructive tools stay `confirm`-gated** (`reboot`, `factory_reset`, the flash and `nrf52_*`
   tools, `uhubctl_*`; the full list is in `docs/confirmations.md`) **and
-  `destructiveHint`-annotated** (see the annotation maps in `server.py`). Don't bypass the gate.
+  `destructiveHint`-annotated** (`@meta("destructive")` at the tool). Don't bypass the gate.
   New tools get the right read/destructive/open-world hint. A tool calls `confirm.gate(ctx, ...)`
   before taking any lock or starting any job, because on the modern protocol the call runs again
   from the top once the human answers: without `confirm=True` a client that declared elicitation

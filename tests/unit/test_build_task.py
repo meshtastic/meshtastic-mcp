@@ -16,6 +16,7 @@ from fastmcp import Client, FastMCP
 from fastmcp_tasks import TasksExtension, call_tool_task
 
 from meshtastic_mcp import flash, jobs, pio
+from meshtastic_mcp.tools import firmware as tools_firmware
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +27,6 @@ def _data_dir(tmp_path, monkeypatch):
 @pytest.fixture
 def build_app(monkeypatch):
     # Deferred: importing `server` starts the recorder (see test_tool_annotations).
-    from meshtastic_mcp import server
 
     def fake_build_start(env, **_kw):
         def body(state, log_path):
@@ -44,7 +44,7 @@ def build_app(monkeypatch):
     monkeypatch.setattr(flash, "build_start", fake_build_start)
     app = FastMCP("t")
     app.add_extension(TasksExtension())
-    app.tool(task=True)(getattr(server.build, "fn", server.build))
+    app.tool(task=True)(getattr(tools_firmware.build, "fn", tools_firmware.build))
     return app
 
 

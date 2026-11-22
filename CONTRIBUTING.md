@@ -30,7 +30,7 @@ The firmware tier needs `MESHTASTIC_FIRMWARE_ROOT`; hardware tiers need real rad
 - **Capability discipline:** core modules must import and run with no firmware checkout. Gate
   firmware/emulator-only tools with the `firmware_tool` decorator / capability checks.
 - **Tool annotations:** a new MCP tool goes in its group's module under `tools/` and gets
-  `readOnlyHint`/`destructiveHint`/`openWorldHint` via the maps in `server.py` and a group in
+  `readOnlyHint`/`destructiveHint`/`openWorldHint` from `@meta(...)` above its `def` and a group in
   `toolsets.py`; destructive tools also take a `confirm` arg and call `confirm.gate` before any
   side effect (see `docs/confirmations.md`). Its return shape goes in `schemas.py`. Its docstring
   is a description and an `Args:` section, nothing else: fastmcp drops `Returns:` and any text

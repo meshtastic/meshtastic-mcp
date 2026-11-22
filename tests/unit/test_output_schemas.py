@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from meshtastic_mcp import admin, confirm, power_meter
+from meshtastic_mcp import admin, confirm, log_query, power_meter
 
 TYPED = {
     "list_devices",
@@ -140,7 +140,7 @@ def test_window_results_satisfy_their_schemas(server, monkeypatch, tool, rows_ke
         "dropped": 0,
         "window": {"start": 1.0, "end": 2.0},
     }
-    monkeypatch.setattr(server.log_query, tool, lambda **_: payload)
+    monkeypatch.setattr(log_query, tool, lambda **_: payload)
     assert _call(server, tool).is_error is False
 
 

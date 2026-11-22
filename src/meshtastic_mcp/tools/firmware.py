@@ -18,11 +18,13 @@ from .. import confirm as confirm_mod
 from .. import tasks as tasks_mod
 from .. import userprefs as userprefs_mod
 from ..schemas import FlashStartResult
+from ..tool_meta import meta
 from ._app import firmware_tool
 from ._shared import _off_loop, _output_tail, _run_job, _to_markdown_table
 
 
 @firmware_tool()
+@meta("read")
 def list_boards(
     architecture: str | None = None,
     actively_supported_only: bool = False,
@@ -64,6 +66,7 @@ def list_boards(
 
 
 @firmware_tool()
+@meta("read")
 def get_board(env: str) -> dict[str, Any]:
     """Full metadata for one PlatformIO env, including raw pio config fields.
 
@@ -77,6 +80,7 @@ def get_board(env: str) -> dict[str, Any]:
 
 
 @firmware_tool()
+@meta("destructive", title="Build Firmware (Async Start)")
 def build_start(
     env: str,
     with_manifest: bool = True,
@@ -105,6 +109,7 @@ def build_start(
 
 
 @firmware_tool()
+@meta("read", title="Build Firmware (Poll Status)")
 def build_poll(build_id: str, tail_lines: int = 50) -> dict[str, Any]:
     """Poll the status of a background build.
 
@@ -121,6 +126,7 @@ def build_poll(build_id: str, tail_lines: int = 50) -> dict[str, Any]:
 
 
 @firmware_tool(**tasks_mod.task_kwargs())
+@meta("destructive")
 async def build(
     ctx: Context,
     env: str,
@@ -179,6 +185,7 @@ async def build(
 
 
 @firmware_tool()
+@meta("destructive")
 def clean(env: str) -> dict[str, Any]:
     """Clean one env's build output via `pio run -e <env> -t clean`, for a branch switch or
     a stale-cache build failure.
@@ -192,6 +199,7 @@ def clean(env: str) -> dict[str, Any]:
 
 
 @firmware_tool(**tasks_mod.task_kwargs())
+@meta("destructive", open_world=True, title="PlatformIO Flash")
 async def pio_flash(
     ctx: Context,
     env: str,
@@ -238,6 +246,7 @@ async def pio_flash(
 
 
 @firmware_tool()
+@meta("destructive", open_world=True, title="Flash Firmware (Async Start)")
 async def flash_start(
     ctx: Context,
     env: str,
@@ -277,6 +286,7 @@ async def flash_start(
 
 
 @firmware_tool()
+@meta("read", title="Flash Firmware (Poll Status)")
 def flash_poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
     """Poll the status of a flash job.
 
@@ -295,6 +305,7 @@ def flash_poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
 
 
 @firmware_tool(**tasks_mod.task_kwargs())
+@meta("destructive", open_world=True, title="Erase and Factory Flash (ESP32)")
 async def erase_and_flash(
     ctx: Context,
     env: str,
@@ -338,6 +349,7 @@ async def erase_and_flash(
 
 
 @firmware_tool(**tasks_mod.task_kwargs())
+@meta("destructive", open_world=True, title="OTA App-Partition Flash (ESP32)")
 async def update_flash(
     ctx: Context,
     env: str,
@@ -383,6 +395,7 @@ async def update_flash(
 
 
 @firmware_tool()
+@meta("read")
 def userprefs_manifest() -> dict[str, Any]:
     """Full manifest of the `USERPREFS_*` keys the firmware knows.
 
@@ -397,6 +410,7 @@ def userprefs_manifest() -> dict[str, Any]:
 
 
 @firmware_tool()
+@meta("read")
 def userprefs_get() -> dict[str, Any]:
     """Return the current userPrefs.jsonc state.
 
@@ -414,6 +428,7 @@ def userprefs_get() -> dict[str, Any]:
 
 
 @firmware_tool()
+@meta("destructive", idempotent=True)
 def userprefs_set(prefs: dict[str, Any]) -> dict[str, Any]:
     """Merge `prefs` into userPrefs.jsonc persistently (uncommenting keys).
 
@@ -430,6 +445,7 @@ def userprefs_set(prefs: dict[str, Any]) -> dict[str, Any]:
 
 
 @firmware_tool()
+@meta("destructive")
 def userprefs_reset() -> dict[str, Any]:
     """Restore userPrefs.jsonc from the most recent MCP backup (if any).
 
@@ -442,6 +458,7 @@ def userprefs_reset() -> dict[str, Any]:
 
 
 @firmware_tool()
+@meta("destructive")
 def userprefs_testing_profile(
     psk_seed: str | None = None,
     channel_name: str = "McpTest",
@@ -500,6 +517,7 @@ def userprefs_testing_profile(
 
 
 @firmware_tool()
+@meta("destructive", open_world=True)
 async def push_fake_nodedb(
     ctx: Context,
     size: int,

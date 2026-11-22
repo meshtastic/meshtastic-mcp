@@ -23,6 +23,7 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from meshtastic_mcp import config, confirm, flash, jobs, pio, port_recovery, userprefs
+from tests.unit._tool_fns import tool_fn
 
 PORT = "/dev/progress-test-port"
 
@@ -125,7 +126,7 @@ def firmware_tree(tmp_path, monkeypatch):
 def _app(server, *names: str, task: bool = False) -> FastMCP:
     app = FastMCP("t")
     for name in names:
-        tool = getattr(server, name)
+        tool = tool_fn(name)
         register = app.tool(task=True) if task else app.tool()
         register(getattr(tool, "fn", tool))
     return app

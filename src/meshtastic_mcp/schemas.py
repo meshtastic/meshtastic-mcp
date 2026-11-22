@@ -544,3 +544,56 @@ class AppResult(TypedDict):
     platform: str
     action: str
     result: Annotated[Any, Field(description="what the backing tool returns; its shape varies")]
+
+
+# ---------- background jobs, install and vendor ------------------------------
+
+
+class JobListEntry(TypedDict, total=False):
+    job_id: str
+    kind: str
+    label: str
+    status: str
+    elapsed_s: float
+
+
+class JobResult(TypedDict, total=False):
+    """`job` result: one job's state (plus the keys its kind's poller adds), or `jobs`."""
+
+    jobs: Annotated[list[JobListEntry], Field(description="every job, when no id was given")]
+    job_id: str
+    kind: str
+    label: str
+    status: Annotated[str, Field(description="running, done, failed or canceled")]
+    elapsed_s: float
+    duration_s: float | None
+    exit_code: int | None
+    artifacts: list[Any]
+    log_tail: Any
+    log_path: str
+    worker_error: Any
+
+
+class VendorResult(TypedDict, total=False):
+    """`vendor` result: the command's exit code and output; parsed keys vary by subcommand."""
+
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    stdout_tail: Any
+    stderr_tail: Any
+    raw_stdout_tail: Any
+    duration_s: float
+
+
+class InstallResult(TypedDict, total=False):
+    """`install` result: the flash job, the method it used and what the board reports after."""
+
+    job_id: str
+    method: Annotated[str, Field(description="the flasher used, e.g. esptool-ota, uf2, nrfutil")]
+    exit_code: int | None
+    stdout_tail: Any
+    stderr_tail: Any
+    back: Annotated[bool, Field(description="the board answered after the write")]
+    firmware_version: str | None
+    error: Any

@@ -16,6 +16,8 @@ from fastmcp import Client, FastMCP
 from mcp.types import ElicitResult, InputRequiredResult
 
 from meshtastic_mcp import admin, confirm, flash, hw_tools, jobs, pio
+from meshtastic_mcp.tools import core as tools_core
+from meshtastic_mcp.tools import firmware as tools_firmware
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +56,7 @@ def test_a_slow_gated_tool_does_not_stall_other_calls(server, monkeypatch) -> No
         ),
     )
     app = FastMCP("t")
-    app.tool()(getattr(server.reboot, "fn", server.reboot))
+    app.tool()(getattr(tools_core.reboot, "fn", tools_core.reboot))
 
     @app.tool()
     def ping() -> str:
@@ -97,7 +99,9 @@ def test_a_task_asks_the_human_and_then_flashes(server, monkeypatch, args, polic
     )
     app = FastMCP("t")
     app.add_extension(tasks_mod.TasksExtension())
-    app.tool(task=True)(getattr(server.erase_and_flash, "fn", server.erase_and_flash))
+    app.tool(task=True)(
+        getattr(tools_firmware.erase_and_flash, "fn", tools_firmware.erase_and_flash)
+    )
     handler, seen = _answer()
 
     async def run():
@@ -273,7 +277,7 @@ def test_run_sync_hands_over_the_job_id_before_the_job_finishes() -> None:
 def test_a_flash_tool_logs_its_job_id_to_the_client(server, monkeypatch) -> None:
     monkeypatch.setattr(flash, "flash", lambda *a, **k: {"exit_code": 0})
     app = FastMCP("t")
-    app.tool()(getattr(server.pio_flash, "fn", server.pio_flash))
+    app.tool()(getattr(tools_firmware.pio_flash, "fn", tools_firmware.pio_flash))
     messages: list[str] = []
 
     async def log_handler(message) -> None:

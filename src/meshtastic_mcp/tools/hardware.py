@@ -29,12 +29,14 @@ from .. import (
 )
 from .. import confirm as confirm_mod
 from .. import tasks as tasks_mod
-from ..schemas import SerialCloseResult
+from ..schemas import InstallResult, SerialCloseResult, VendorResult
+from ..tool_meta import meta
 from ._app import app
 from ._shared import _confirmed_hw_call, _off_loop, _run_job
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 def touch_1200bps(port: str, settle_ms: int = 250) -> dict[str, Any]:
     """Open `port` at 1200 baud and close it, rebooting an nRF52840, native-USB ESP32-S3,
     RP2040 or similar into its USB bootloader; on an nRF52 it also drops DTR, which its
@@ -57,6 +59,7 @@ def touch_1200bps(port: str, settle_ms: int = 250) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 def serial_open(
     port: str,
     baud: int = 115200,
@@ -109,6 +112,7 @@ def serial_open(
 
 
 @app.tool()
+@meta("read", open_world=True)
 def serial_read(
     session_id: str,
     max_lines: int = 200,
@@ -131,12 +135,14 @@ def serial_read(
 
 
 @app.tool()
+@meta("read")
 def serial_list() -> list[dict[str, Any]]:
     """List all active serial monitor sessions."""
     return [serial_session.session_summary(s) for s in registry.all_sessions()]
 
 
 @app.tool()
+@meta("destructive")
 def serial_close(session_id: str) -> SerialCloseResult:
     """Terminate a serial monitor session and free its port.
 
@@ -153,6 +159,7 @@ def serial_close(session_id: str) -> SerialCloseResult:
 
 
 @app.tool()
+@meta("read", open_world=True)
 def capture_screen(role: str | None = None, ocr: bool = True) -> dict[str, Any]:
     """Grab a frame from the USB webcam pointed at the device screen.
 
@@ -194,6 +201,7 @@ def capture_screen(role: str | None = None, ocr: bool = True) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("read", open_world=True, title="USB Hub List")
 def uhubctl_list() -> list[dict[str, Any]]:
     """List every USB hub + per-port device attachment as seen by `uhubctl`. Read-only.
 
@@ -210,6 +218,7 @@ def uhubctl_list() -> list[dict[str, Any]]:
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="USB Hub Port Power", port="not_device")
 async def uhubctl_power(
     ctx: Context,
     action: str,
@@ -255,6 +264,7 @@ async def uhubctl_power(
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="USB Hub Port Cycle", port="not_device")
 async def uhubctl_cycle(
     ctx: Context,
     location: str | None = None,
@@ -311,6 +321,7 @@ def _resolve_uhubctl_target(
 
 
 @app.tool()
+@meta("read", open_world=True, title="ESPTool Chip Info")
 def esptool_chip_info(port: str) -> dict[str, Any]:
     """Run `esptool flash_id` and return chip, MAC, crystal, and flash size.
 
@@ -324,6 +335,7 @@ def esptool_chip_info(port: str) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="ESPTool Erase Flash")
 async def esptool_erase_flash(ctx: Context, port: str, confirm: bool = False) -> dict[str, Any]:
     """Full-chip erase via `esptool erase_flash`. Leaves the device unbootable.
 
@@ -342,6 +354,7 @@ async def esptool_erase_flash(ctx: Context, port: str, confirm: bool = False) ->
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="ESPTool Raw Pass-Through", port="finds_own")
 async def esptool_raw(
     ctx: Context, args: list[str], port: str | None = None, confirm: bool = False
 ) -> dict[str, Any]:
@@ -370,6 +383,7 @@ async def esptool_raw(
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="nRF DFU Flash")
 async def nrfutil_dfu(
     ctx: Context, port: str, package_path: str, confirm: bool = False
 ) -> dict[str, Any]:
@@ -395,6 +409,7 @@ async def nrfutil_dfu(
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="nRFUtil Raw Pass-Through", port="finds_own")
 async def nrfutil_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
     """Pass-through to `nrfutil`.
 
@@ -425,13 +440,14 @@ _VENDORS = {
 
 
 @app.tool()
+@meta("destructive", title="Vendor Flash Tool Pass-Through", port="finds_own")
 async def vendor(
     ctx: Context,
     tool: Literal["esptool", "nrfutil", "picotool"],
     args: list[str],
     port: str | None = None,
     confirm: bool = False,
-) -> dict[str, Any]:
+) -> VendorResult:
     """Run esptool, nrfutil or picotool with arguments, for what `install` and `admin` do not do.
 
     A read-only subcommand (esptool `flash_id`, nrfutil `device list`, picotool `info` and the
@@ -450,10 +466,11 @@ async def vendor(
             human.
     """
     run = _VENDORS[tool]
-    return await _confirmed_hw_call(ctx, lambda c: run(args, port, c), confirm)
+    return cast(VendorResult, await _confirmed_hw_call(ctx, lambda c: run(args, port, c), confirm))
 
 
 @app.tool()
+@meta("read", open_world=True)
 def picotool_info(port: str | None = None) -> dict[str, Any]:
     """Run `picotool info -a`.
 
@@ -467,6 +484,7 @@ def picotool_info(port: str | None = None) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="Picotool Load UF2", port="finds_own")
 async def picotool_load(ctx: Context, uf2_path: str, confirm: bool = False) -> dict[str, Any]:
     """Load a UF2 to a Pico in BOOTSEL mode via `picotool load -x -t uf2`.
 
@@ -484,6 +502,7 @@ async def picotool_load(ctx: Context, uf2_path: str, confirm: bool = False) -> d
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="Picotool Raw Pass-Through", port="finds_own")
 async def picotool_raw(ctx: Context, args: list[str], confirm: bool = False) -> dict[str, Any]:
     """Pass-through to `picotool`.
 
@@ -558,6 +577,7 @@ def _wait_for_uf2_drive(port: str, timeout_s: float = 15.0) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("read", open_world=True, title="nRF52 Bootloader Info")
 def nrf52_bootloader_info(port: str | None = None) -> dict[str, Any]:
     """Read the mounted nRF52 bootloader UF2 drive(s): bootloader version, board, SoftDevice,
     whether it accepts the factory-erase file, and any recorded fault (`Last-Fault`).
@@ -576,6 +596,7 @@ def nrf52_bootloader_info(port: str | None = None) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="nRF52 Enter UF2 Mode")
 async def nrf52_enter_uf2(
     ctx: Context, port: str | None = None, confirm: bool = False
 ) -> dict[str, Any]:
@@ -610,6 +631,7 @@ async def nrf52_enter_uf2(
 
 
 @app.tool()
+@meta("read", open_world=True, title="nRF52 Back Up Firmware")
 async def nrf52_backup_firmware(port: str | None = None) -> dict[str, Any]:
     """Copy CURRENT.UF2 (the installed application) off a board's UF2 drive into the data dir.
 
@@ -643,6 +665,7 @@ def _host_drive_error(exc: uf2_host.HostDriveError) -> ToolError:
 
 
 @app.tool()
+@meta("write", open_world=True, title="nRF52 Mount UF2 Drive", port="finds_own")
 async def nrf52_mount_uf2(port: str | None = None, device: str | None = None) -> dict[str, Any]:
     """Mount a board's UF2 drive on a host that does not automount it, and return its info.
 
@@ -681,6 +704,7 @@ async def nrf52_mount_uf2(port: str | None = None, device: str | None = None) ->
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="nRF52 Eject UF2 Drive", port="finds_own")
 async def nrf52_eject_uf2(
     ctx: Context, port: str | None = None, confirm: bool = False
 ) -> dict[str, Any]:
@@ -737,6 +761,7 @@ def _check_softdevice(drive: dict[str, Any], uf2_path: str) -> dict[str, Any]:
 
 
 @app.tool(**tasks_mod.task_kwargs())
+@meta("destructive", open_world=True, title="nRF52 Flash UF2", port="finds_own")
 async def nrf52_flash_uf2(
     ctx: Context, uf2_path: str, port: str | None = None, confirm: bool = False
 ) -> dict[str, Any]:
@@ -789,6 +814,7 @@ def _uf2_result(res: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="nRF52 Factory Erase", port="finds_own")
 async def nrf52_factory_erase(
     ctx: Context, port: str | None = None, confirm: bool = False
 ) -> dict[str, Any]:
@@ -945,6 +971,7 @@ def _uf2_drive_or_none(port: str) -> dict[str, Any] | None:
 
 
 @app.tool(**tasks_mod.task_kwargs())
+@meta("destructive")
 async def install(
     ctx: Context,
     port: str,
@@ -953,7 +980,7 @@ async def install(
     confirm: bool = False,
     userprefs: dict[str, Any] | None = None,
     build_flags: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> InstallResult:
     """Install firmware on a board, picking the flasher from the board, and read back its version.
 
     `source` is `{"env": "<pio env>"}` (build from the firmware tree; ESP32 OTA-updates the
@@ -993,11 +1020,12 @@ async def install(
         irreversible=erase,
     )
     if pending is not None:
-        return cast(dict[str, Any], pending)
-    return await _run_job(
+        return cast(InstallResult, pending)
+    result = await _run_job(
         ctx,
         "flashes",
         str(label),
         lambda: _install(port, source, erase, userprefs, build_flags),
         poll_tool=None,
     )
+    return cast(InstallResult, result)

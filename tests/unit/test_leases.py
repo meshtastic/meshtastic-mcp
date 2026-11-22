@@ -189,7 +189,7 @@ def test_device_tools_take_a_lease_and_other_port_tools_do_not(server) -> None:
     has_lease = {n for n, t in tools.items() if "lease" in t.parameters.get("properties", {})}
     for name in ("device_info", "set_config", "reboot", "send_text", "get_config"):
         assert name in has_lease, name
-    for name in server._PORT_NOT_A_DEVICE - {"claim"}:
+    for name in {n for n, m in server.tool_meta.META.items() if m.port == "not_device"} - {"claim"}:
         if name in tools:
             assert name not in has_lease, name
     assert tools["device_info"].annotations.read_only_hint is True

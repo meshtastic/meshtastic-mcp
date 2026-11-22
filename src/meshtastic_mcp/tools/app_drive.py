@@ -20,6 +20,7 @@ from typing import Any, Literal
 from fastmcp.exceptions import ToolError
 
 from ..schemas import AppResult
+from ..tool_meta import meta
 from ._app import CAPS
 from ._app import app as _mcp_app
 from ._shared import _off_loop
@@ -201,6 +202,7 @@ async def _dispatch(
 
 
 @app_drive_tool()
+@meta("read", open_world=True)
 async def app_view(
     platform: Platform,
     action: Literal[
@@ -284,6 +286,7 @@ async def app_view(
 
 
 @app_drive_tool()
+@meta("destructive", open_world=True)
 async def app(
     platform: Platform,
     action: Literal[
