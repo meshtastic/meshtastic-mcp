@@ -37,7 +37,7 @@ _HELP_FLAGS = {"-h", "--help", "--version", "-V"}
 
 
 def _norm(word: str) -> str:
-    return word.replace("-", "_")
+    return word.replace("-", "_").lower()
 
 
 def _unsafe_call(
