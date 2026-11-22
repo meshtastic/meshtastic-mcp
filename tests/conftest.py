@@ -51,14 +51,10 @@ if str(_MCP_SRC) not in sys.path:
 # Default firmware root: the repo this mcp-server/ lives inside.
 os.environ.setdefault("MESHTASTIC_FIRMWARE_ROOT", str(_HERE.parent.parent))
 
-from meshtastic_mcp import (
-    admin,
-    info,
-    serial_session,
-    userprefs,
-)
 from meshtastic_mcp import config as mcp_config
 from meshtastic_mcp import devices as devices_module
+from meshtastic_mcp import serial_session, userprefs
+from meshtastic_mcp.backends import legacy
 
 from . import (
     _bench,
@@ -741,7 +737,7 @@ def _reset_transmit_history_state(role: str, port: str) -> str:
         return port
     for _ in range(20):
         try:
-            if info.device_info(port=fresh, timeout_s=5.0).get("my_node_num"):
+            if legacy.device_info(port=fresh, timeout_s=5.0).get("my_node_num"):
                 return fresh
         except Exception:
             time.sleep(1.5)
@@ -831,7 +827,7 @@ def baked_mesh(
         except Exception:
             pass
         try:
-            live = info.device_info(port=port, timeout_s=12.0)
+            live = legacy.device_info(port=port, timeout_s=12.0)
         except Exception as exc:
             # Per-role failure — drop this role from the baked set and let
             # any test parametrized against it skip with the actionable
@@ -841,7 +837,7 @@ def baked_mesh(
         # `device_info` surfaces region/primary_channel but not modem preset
         # or channel_num directly; pull those via a separate get_config call.
         try:
-            lora_cfg = admin.get_config(section="lora", port=port)["config"]["lora"]
+            lora_cfg = legacy.get_config(section="lora", port=port)["config"]["lora"]
         except Exception as exc:
             per_role_errors[role] = f"get_config(lora) failed: {exc!r}"
             continue
@@ -881,7 +877,7 @@ def baked_mesh(
         # LOG_ calls that race in-flight FromRadio emissions corrupt the byte
         # stream, triggering protobuf DecodeError in meshtastic-python and killing
         # the SerialInterface. Operators who want log capture can opt in via the
-        # `set_debug_log_api` MCP tool (or `admin.set_debug_log_api` directly) on
+        # `set_debug_log_api` MCP tool (or `legacy.set_debug_log_api` directly) on
         # a case-by-case basis. The autouse `_debug_log_buffer` fixture is still
         # armed below — if a test explicitly enables the flag, its output will
         # be captured and attached to failures. Firmware-side fix would need
@@ -1013,7 +1009,7 @@ def baked_single(
     port = entry.get("port")
     if port:
         try:
-            _run_with_timeout(lambda: info.device_info(port=port, timeout_s=3.0), 5.0)
+            _run_with_timeout(lambda: legacy.device_info(port=port, timeout_s=3.0), 5.0)
         except Exception:
             # Device didn't respond. Try a power-cycle recovery if uhubctl
             # is installed; otherwise surface a skip that names the root
@@ -1464,13 +1460,13 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
             state: dict[str, Any] = {"role": role, "port": port}
             try:
                 state["device_info"] = _run_with_timeout(
-                    lambda p=port: info.device_info(port=p, timeout_s=4.0), 6.0
+                    lambda p=port: legacy.device_info(port=p, timeout_s=4.0), 6.0
                 )
             except Exception as exc:
                 state["device_info_error"] = repr(exc)
             try:
                 state["config"] = _run_with_timeout(
-                    lambda p=port: admin.get_config(section="lora", port=p), 6.0
+                    lambda p=port: legacy.get_config(section="lora", port=p), 6.0
                 )
             except Exception as exc:
                 state["config_error"] = repr(exc)

@@ -15,7 +15,7 @@ from fastmcp.exceptions import ToolError
 from meshtastic.mesh_interface import MeshInterface
 from meshtastic.node import Node
 
-from meshtastic_mcp import admin, connection
+from meshtastic_mcp import connection
 
 
 @pytest.fixture
@@ -36,7 +36,8 @@ def radio(monkeypatch: pytest.MonkeyPatch) -> Iterator[MeshInterface]:
 def test_a_url_the_library_rejects_is_a_tool_error(radio: MeshInterface) -> None:
     real_stdout = sys.stdout
     with pytest.raises(ToolError, match=r"refused the request: .*Invalid URL"):
-        admin.set_channel_url("https://meshtastic.org/e/LongFast")
+        with connection.connect("x") as iface:
+            iface.localNode.setURL("https://meshtastic.org/e/LongFast")
     assert sys.stdout is real_stdout
 
 

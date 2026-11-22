@@ -177,7 +177,7 @@ class DeviceDiscovery:
             asyncio.create_task(self._enrich(serial))
 
     async def _enrich(self, serial: str) -> None:
-        from meshtastic_mcp import info as mt_info
+        from meshtastic_mcp.backends import legacy as mt_info
 
         from . import test_runner
 

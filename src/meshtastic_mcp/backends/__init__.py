@@ -109,6 +109,13 @@ class Backend(Protocol):
     ) -> dict[str, Any]:
         """Inject an input event (button, key, touch) into the radio's UI."""
 
+    def raw_config(self, target: str | None, timeout_s: float) -> dict[str, Any]:
+        """`{localConfig, moduleConfig}` with secrets kept and unset fields left out.
+
+        Snapshots store this so a restore puts the keys back; never return it from a tool.
+        """
+        ...
+
     def send(
         self,
         target: str | None,
@@ -118,8 +125,13 @@ class Backend(Protocol):
         want_ack: bool,
         hop_limit: int | None,
         wait_s: float,
+        linger_s: float | None = None,
     ) -> dict[str, Any]:
-        """Send one of `text`, `position`, `waypoint` or `request` (`payload` has one key)."""
+        """Send one of `text`, `position`, `waypoint` or `request` (`payload` has one key).
+
+        `linger_s` is how long the port stays open after the send so a queued packet reaches
+        the air; None keeps the backend's default.
+        """
         ...
 
 

@@ -44,9 +44,9 @@ STEP_LABELS = {
 
 # --- individual techniques (each independently callable) -------------------
 def step_reboot(port: str | None) -> dict[str, Any]:
-    from . import admin
+    from .backends import legacy
 
-    return admin.reboot(port=port, confirm=True, seconds=2)
+    return legacy.reboot(port=port, confirm=True, seconds=2)
 
 
 def step_power_cycle(location: str, port: int, *, delay_s: int = 3) -> dict[str, Any]:
@@ -72,9 +72,9 @@ def step_reflash(env: str, port: str | None) -> dict[str, Any]:
 
 
 def step_factory_reset(port: str | None) -> dict[str, Any]:
-    from . import admin
+    from .backends import legacy
 
-    return admin.factory_reset(port=port, confirm=True)
+    return legacy.factory_reset(port=port, confirm=True)
 
 
 # --- health probe ----------------------------------------------------------
@@ -87,7 +87,7 @@ def is_healthy(
     """Poll ``device_info`` until the node answers with a firmware version — proof
     it booted and its CDC is alive — or the timeout elapses. ``resolve_port``
     re-finds the port after a re-enumeration (power-cycle / bootloader touch)."""
-    from . import info
+    from .backends import legacy
 
     deadline = time.monotonic() + timeout_s
     detail: Any = None
@@ -95,7 +95,7 @@ def is_healthy(
         p = (resolve_port() if resolve_port else None) or port
         if p:
             try:
-                di = info.device_info(port=p, timeout_s=6.0)
+                di = legacy.device_info(port=p, timeout_s=6.0)
                 if di.get("firmware_version"):
                     return True, di
                 detail = "connected but no firmware_version"

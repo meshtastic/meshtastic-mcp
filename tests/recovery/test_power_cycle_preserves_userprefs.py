@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from meshtastic_mcp import admin, info
+from meshtastic_mcp.backends import legacy
 from tests import _power
 from tests._port_discovery import resolve_port_by_role
 
@@ -29,7 +29,7 @@ def test_lora_config_survives_power_cycle(
     role = baked_single["role"]
     pre_port = baked_single["port"]
 
-    pre_config = admin.get_config(section="lora", port=pre_port)["config"]["lora"]
+    pre_config = legacy.get_config(section="lora", port=pre_port)["config"]["lora"]
     pre_region = pre_config.get("region")
     pre_preset = pre_config.get("modem_preset")
     assert pre_region, f"lora.region not set pre-cycle on {role}"
@@ -41,10 +41,10 @@ def test_lora_config_survives_power_cycle(
     # Let the firmware complete boot before admin reads.
     time.sleep(2.0)
     # Quick readiness probe.
-    probe = info.device_info(port=new_port, timeout_s=10.0)
+    probe = legacy.device_info(port=new_port, timeout_s=10.0)
     assert probe.get("my_node_num") is not None, f"device {role!r} didn't respond after power-cycle"
 
-    post_config = admin.get_config(section="lora", port=new_port)["config"]["lora"]
+    post_config = legacy.get_config(section="lora", port=new_port)["config"]["lora"]
     post_region = post_config.get("region")
     post_preset = post_config.get("modem_preset")
 
@@ -56,5 +56,5 @@ def test_lora_config_survives_power_cycle(
     )
 
     # Channel-0 name should also match the test profile.
-    pri_ch = admin.get_channel_url(port=new_port)
+    pri_ch = legacy.get_channel_url(port=new_port)
     assert pri_ch.get("url"), f"channel URL empty after power-cycle on {role}"

@@ -60,7 +60,7 @@ def _node(monkeypatch, *, restore_fails: bool) -> None:
         if restore_fails and path == "lora.override_duty_cycle" and value is False:
             raise RuntimeError("serial link lost")
 
-    monkeypatch.setattr(pa_sweep.admin, "set_config", set_config)
+    monkeypatch.setattr(pa_sweep.legacy, "set_config", set_config)
 
 
 def test_a_failed_sweep_names_the_override_it_left_on(monkeypatch) -> None:

@@ -288,9 +288,9 @@ def _patch_sweep(monkeypatch, *, original_duty: bool) -> list[tuple[str, object]
     """Wire sweep()'s collaborators to fakes; return the recorded set_config calls."""
     calls: list[tuple[str, object]] = []
     monkeypatch.setattr(
-        pa_sweep.admin, "set_config", lambda path, value, port=None: calls.append((path, value))
+        pa_sweep.legacy, "set_config", lambda path, value, port=None: calls.append((path, value))
     )
-    monkeypatch.setattr(pa_sweep.admin, "send_text", lambda **_k: {"ok": True, "packet_id": 1})
+    monkeypatch.setattr(pa_sweep.legacy, "send_text", lambda **_k: {"ok": True, "packet_id": 1})
     monkeypatch.setattr(
         pa_sweep,
         "read_lora_context",
@@ -370,9 +370,9 @@ def test_sweep_passes_tuned_tx_linger_to_send_text(monkeypatch) -> None:
     # Bursts must key with the sweep's tuned tx_linger_s, not send_text's 8 s
     # interactive default (which would be paid per burst per step).
     sent: list[dict] = []
-    monkeypatch.setattr(pa_sweep.admin, "set_config", lambda path, value, port=None: None)
+    monkeypatch.setattr(pa_sweep.legacy, "set_config", lambda path, value, port=None: None)
     monkeypatch.setattr(
-        pa_sweep.admin, "send_text", lambda **k: (sent.append(k), {"ok": True, "packet_id": 1})[1]
+        pa_sweep.legacy, "send_text", lambda **k: (sent.append(k), {"ok": True, "packet_id": 1})[1]
     )
     monkeypatch.setattr(
         pa_sweep,
@@ -406,8 +406,8 @@ def test_sweep_restores_independently_and_reports_errors(monkeypatch) -> None:
         if path == "lora.tx_power" and value == 99:  # the restore of the original
             raise RuntimeError("port COM7 is busy - retry shortly")
 
-    monkeypatch.setattr(pa_sweep.admin, "set_config", flaky_set_config)
-    monkeypatch.setattr(pa_sweep.admin, "send_text", lambda **_k: {"ok": True, "packet_id": 1})
+    monkeypatch.setattr(pa_sweep.legacy, "set_config", flaky_set_config)
+    monkeypatch.setattr(pa_sweep.legacy, "send_text", lambda **_k: {"ok": True, "packet_id": 1})
     monkeypatch.setattr(
         pa_sweep,
         "read_lora_context",

@@ -28,10 +28,12 @@ def test_capture_replaces_permissive_snapshot_with_owner_only_file(monkeypatch):
     path = config_snapshot._snapshot_path("private")
     path.write_text("stale", encoding="utf-8")
     path.chmod(0o644)
+    from meshtastic_mcp.backends import python as backends_python
+
     monkeypatch.setattr(
-        config_snapshot.admin,
-        "get_config",
-        lambda section, port: {"config": {"localConfig": {"security": {"private_key": "secret"}}}},
+        backends_python.PythonBackend,
+        "raw_config",
+        lambda self, port, timeout_s: {"localConfig": {"security": {"private_key": "secret"}}},
     )
 
     config_snapshot.capture("private")

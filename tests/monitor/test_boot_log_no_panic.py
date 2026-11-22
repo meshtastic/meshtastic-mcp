@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import admin
+from meshtastic_mcp.backends import legacy
 
 # Substrings that indicate a panic/assert/crash. Case-insensitive.
 _PANIC_MARKERS = [
@@ -46,11 +46,11 @@ def test_boot_log_no_panic(
     port = baked_single["port"]
     env = role_env(role)
 
-    # Reboot FIRST, then start the monitor. admin.reboot() opens the port with
+    # Reboot FIRST, then start the monitor. legacy.reboot() opens the port with
     # an exclusive lock; if the capture (a `pio device monitor`) already held the
     # port, the reboot would fail with [Errno 35]. The device reboots in `seconds`,
     # so the capture comes up before the actual reset banner + early boot.
-    admin.reboot(port=port, confirm=True, seconds=3)
+    legacy.reboot(port=port, confirm=True, seconds=3)
     # Let reboot's exclusive fd fully release before the monitor opens, or the
     # pio-monitor open can race it and come up capturing nothing. reboot fires at
     # `seconds`, so a 1s settle still starts the monitor before the reset banner.

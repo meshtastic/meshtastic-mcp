@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from meshtastic_mcp import admin, confirm, log_query, power_meter
+from meshtastic_mcp import confirm, log_query, power_meter
 
 TYPED = {
     "list_devices",
@@ -73,10 +73,10 @@ def test_doctor_result_satisfies_its_schema(server) -> None:
 
 
 def test_device_info_result_satisfies_its_schema(server, monkeypatch) -> None:
-    from meshtastic_mcp import info
+    from meshtastic_mcp.backends import legacy
 
     monkeypatch.setattr(
-        info,
+        legacy,
         "device_info",
         lambda port=None, timeout_s=8.0: {
             "port": "/dev/ttyACM0",
@@ -97,9 +97,10 @@ def test_device_info_result_satisfies_its_schema(server, monkeypatch) -> None:
 
 
 def test_list_nodes_result_satisfies_its_schema(server, monkeypatch) -> None:
-    from meshtastic_mcp import info
+    from meshtastic_mcp.backends import legacy
+    from meshtastic_mcp.backends.python import node_record
 
-    node = info._node_record(
+    node = node_record(
         {
             "num": 1234,
             "user": {"longName": "Peer", "shortName": "PR", "hwModel": "TBEAM", "role": "CLIENT"},
@@ -111,8 +112,8 @@ def test_list_nodes_result_satisfies_its_schema(server, monkeypatch) -> None:
             "isFavorite": True,
         }
     )
-    bare = info._node_record({"num": 5})
-    monkeypatch.setattr(info, "list_nodes", lambda port=None, timeout_s=8.0: [node, bare])
+    bare = node_record({"num": 5})
+    monkeypatch.setattr(legacy, "list_nodes", lambda port=None, timeout_s=8.0: [node, bare])
     result = _call(server, "list_nodes")
     assert result.is_error is False
     rows = result.structured_content["result"]
@@ -217,11 +218,14 @@ class _Node:
 
 
 class _Iface:
+    myInfo = SimpleNamespace(my_node_num=1)
+    nodes: dict = {}
+
     def __init__(self) -> None:
         self.localNode = _Node()
         self.packet_id: int | None = 1234
 
-    def sendText(self, text, destinationId, wantAck, channelIndex):
+    def sendData(self, data, destinationId, portNum, **_kwargs):
         return SimpleNamespace(id=self.packet_id) if self.packet_id is not None else object()
 
 
@@ -233,13 +237,20 @@ def iface(monkeypatch) -> _Iface:
     def connect(port=None, **_kwargs):
         yield fake
 
-    monkeypatch.setattr(admin, "connect", connect)
     # The intent tools and their legacy adapters reach the radio through the backends.
     from meshtastic_mcp import backends, connection
-    from meshtastic_mcp.backends import python_admin
+    from meshtastic_mcp.backends import python as backends_python
+    from meshtastic_mcp.backends import python_admin, python_send
 
     monkeypatch.setattr(connection, "connect", connect)
     monkeypatch.setattr(python_admin.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(python_send.time, "sleep", lambda _s: None)
+
+    def configure(self, target, changes, restore, dry_run, timeout_s, save_snapshot, dest=None):
+        shown = {k: {"from": None, "to": v} for k, v in (changes or {}).items()}
+        return {"target": target, "dry_run": dry_run, "changes": shown, "verified": True}
+
+    monkeypatch.setattr(backends_python.PythonBackend, "configure", configure)
     monkeypatch.delenv(backends.BACKEND_ENV, raising=False)
     monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
     return fake
@@ -285,13 +296,16 @@ def test_config_snapshot_and_diff_results_satisfy_their_schemas(
             "moduleConfig": {"mqtt": {"enabled": False}},
         }
     }
-    # get_config's full read is wrapped in `config`; capture also takes the bare shape.
     bare = {
         "localConfig": {"lora": {"region": "EU_868"}, "device": {"role": "ROUTER"}},
         "moduleConfig": {"mqtt": {"enabled": False}},
     }
-    reads = iter([wrapped, bare, bare])
-    monkeypatch.setattr(admin, "get_config", lambda section=None, port=None: next(reads))
+    reads = iter([wrapped["config"], bare, bare])
+    from meshtastic_mcp.backends import python as backends_python
+
+    monkeypatch.setattr(
+        backends_python.PythonBackend, "raw_config", lambda self, port, timeout_s: next(reads)
+    )
 
     first = _ok(_run_tool(tools.core.config_snapshot, {"name": "before"}))
     assert first["local_sections"] == ["lora"]
@@ -529,8 +543,8 @@ def test_pa_sweep_results_satisfy_their_schema(
         def stop(self) -> list[float]:
             return list(next(batches))
 
-    monkeypatch.setattr(pa_sweep.admin, "set_config", set_config)
-    monkeypatch.setattr(pa_sweep.admin, "send_text", lambda **_: {"ok": True, "packet_id": 1})
+    monkeypatch.setattr(pa_sweep.legacy, "set_config", set_config)
+    monkeypatch.setattr(pa_sweep.legacy, "send_text", lambda **_: {"ok": True, "packet_id": 1})
     monkeypatch.setattr(
         pa_sweep,
         "read_lora_context",

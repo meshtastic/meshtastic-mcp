@@ -19,7 +19,8 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import admin, flash, info
+from meshtastic_mcp import flash
+from meshtastic_mcp.backends import legacy
 
 
 @pytest.mark.skip(
@@ -68,7 +69,7 @@ def test_unset_region_blocks_tx(
 
     try:
         # After bake, device should boot with region=UNSET
-        live = info.device_info(port=port, timeout_s=12.0)
+        live = legacy.device_info(port=port, timeout_s=12.0)
         assert live.get("region") in (None, "UNSET", "UNSET_0", ""), (
             f"expected region UNSET after baking without region pref; got {live.get('region')!r}"
         )
@@ -78,7 +79,7 @@ def test_unset_region_blocks_tx(
         # or it may accept the call but the firmware rejects on air.
         send_failed = False
         try:
-            admin.send_text(text="should not transmit", port=port)
+            legacy.send_text(text="should not transmit", port=port)
         except Exception:
             send_failed = True
 

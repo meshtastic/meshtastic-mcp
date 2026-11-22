@@ -15,12 +15,10 @@ from typing import Any, Literal, cast
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
-from .. import admin as admin_mod
 from .. import (
     backends,
     connection,
     device_names,
-    info,
     jobs,
     leases,
     log_query,
@@ -31,6 +29,7 @@ from .. import confirm as confirm_mod
 from .. import devices as devices_mod
 from .. import doctor as doctor_mod
 from .. import inject as inject_mod
+from ..backends import legacy
 from ..backends import python as backends_python
 from ..recorder import get_recorder
 from ..schemas import (
@@ -148,7 +147,7 @@ def device_info(port: str | None = None, timeout_s: float = 8.0) -> DeviceInfo:
             is auto-selected; otherwise the tool errors with the candidate list.
         timeout_s: Seconds to wait for the node to answer.
     """
-    return cast(DeviceInfo, info.device_info(port=port, timeout_s=timeout_s))
+    return cast(DeviceInfo, legacy.device_info(port=port, timeout_s=timeout_s))
 
 
 @app.tool()
@@ -171,7 +170,7 @@ def list_nodes(
             nodes: repeating every field name per row in JSON costs ~7k tokens for 100
             nodes, and a table header appears once.
     """
-    result = info.list_nodes(port=port, timeout_s=timeout_s)
+    result = legacy.list_nodes(port=port, timeout_s=timeout_s)
     if format == "table":
         # Flatten nested user dict for tabular display
         flat = [
@@ -350,7 +349,7 @@ def set_owner(
             Meshtastic device.
     """
     return cast(
-        SetOwnerResult, admin_mod.set_owner(long_name=long_name, short_name=short_name, port=port)
+        SetOwnerResult, legacy.set_owner(long_name=long_name, short_name=short_name, port=port)
     )
 
 
@@ -371,7 +370,7 @@ def get_config(section: str | None = None, port: str | None = None) -> dict[str,
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
     """
-    return admin_mod.get_config(section=section, port=port)
+    return legacy.get_config(section=section, port=port)
 
 
 @app.tool()
@@ -395,7 +394,7 @@ def set_config(path: str, value: Any, port: str | None = None) -> SetConfigResul
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
     """
-    return cast(SetConfigResult, admin_mod.set_config(path=path, value=value, port=port))
+    return cast(SetConfigResult, legacy.set_config(path=path, value=value, port=port))
 
 
 @app.tool()
@@ -411,7 +410,7 @@ def get_channel_url(include_all: bool = False, port: str | None = None) -> dict[
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
     """
-    return admin_mod.get_channel_url(include_all=include_all, port=port)
+    return legacy.get_channel_url(include_all=include_all, port=port)
 
 
 @app.tool()
@@ -458,7 +457,7 @@ def set_debug_log_api(enabled: bool, port: str | None = None) -> dict[str, Any]:
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
     """
-    return admin_mod.set_debug_log_api(enabled=enabled, port=port)
+    return legacy.set_debug_log_api(enabled=enabled, port=port)
 
 
 # ---------- Config snapshots + diff ---------------------------------------
@@ -730,7 +729,7 @@ def send_text(
             ~4 s politeness delay and the airtime finish before the port resets, which
             would drop a queued broadcast.
     """
-    result = admin_mod.send_text(
+    result = legacy.send_text(
         text=text,
         to=to,
         channel_index=channel_index,

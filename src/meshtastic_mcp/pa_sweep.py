@@ -38,7 +38,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import admin, lora_compliance, power_meter
+from . import lora_compliance, power_meter
+from .backends import legacy
 from .rf_oracle import read_lora_context
 
 
@@ -403,7 +404,7 @@ def _key_burst(
     """
     queued = 0
     for i in range(repeat):
-        admin.send_text(text=text, channel_index=channel_index, port=port, tx_linger_s=tx_linger_s)
+        legacy.send_text(text=text, channel_index=channel_index, port=port, tx_linger_s=tx_linger_s)
         queued += 1
         if i + 1 < repeat:
             time.sleep(gap_s)
@@ -431,7 +432,7 @@ def _restore_config(
     """
     for i in range(attempts):
         try:
-            admin.set_config(path, value, port=port)
+            legacy.set_config(path, value, port=port)
             return
         except Exception as exc:
             if "busy" in str(exc).lower() and i + 1 < attempts:
@@ -536,15 +537,15 @@ def sweep(
         # then we know the original value to put back, and we never write a device
         # that was already configured the way we want.
         if override_duty_cycle and not original_duty_override:
-            admin.set_config("lora.override_duty_cycle", True, port=port)
+            legacy.set_config("lora.override_duty_cycle", True, port=port)
             duty_override_touched = True
 
         failure: Exception | None = None
         try:
             for p in powers:
-                admin.set_config("lora.tx_power", int(p), port=port)
+                legacy.set_config("lora.tx_power", int(p), port=port)
                 if reboot_between_steps:
-                    admin.reboot(port=port, confirm=True)
+                    legacy.reboot(port=port, confirm=True)
                     time.sleep(reboot_wait_s)
                 else:
                     time.sleep(settle_s)

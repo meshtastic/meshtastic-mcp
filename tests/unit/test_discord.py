@@ -687,7 +687,7 @@ def test_discord_server_imports_no_device_module() -> None:
     code = (
         "import sys; import meshtastic_mcp.discord_server; "
         "bad = [m for m in ('meshtastic_mcp.recorder', 'meshtastic_mcp.server', "
-        "'meshtastic_mcp.admin', 'meshtastic_mcp.connection') if m in sys.modules]; "
+        "'meshtastic_mcp.backends.legacy', 'meshtastic_mcp.connection') if m in sys.modules]; "
         "assert not bad, bad"
     )
     subprocess.run([sys.executable, "-c", code], check=True)

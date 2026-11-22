@@ -179,7 +179,7 @@ class ReceiveCollector:
         """Send a text packet through the already-open SerialInterface.
 
         Use this when a test also has a ReceiveCollector open on the same port
-        — `admin.send_text(port=...)` would try to open a second SerialInterface
+        — `legacy.send_text(port=...)` would try to open a second SerialInterface
         and fail the port lock.
         """
         if self._iface is None:

@@ -17,7 +17,8 @@ from typing import Any
 import pytest
 import serial
 
-from meshtastic_mcp import admin, info, port_recovery
+from meshtastic_mcp import port_recovery
+from meshtastic_mcp.backends import legacy
 
 from .._port_discovery import resolve_port_by_role
 
@@ -42,15 +43,15 @@ def test_baked_prefs_survive_factory_reset(
     port = baked_single["port"]
 
     # Snapshot pre-reset config
-    pre_reset = info.device_info(port=port, timeout_s=8.0)
+    pre_reset = legacy.device_info(port=port, timeout_s=8.0)
     original_long_name = pre_reset.get("long_name")
 
     # Poison the owner name with a non-default marker
-    admin.set_owner(long_name="PoisonMarker", short_name="POIZ", port=port)
+    legacy.set_owner(long_name="PoisonMarker", short_name="POIZ", port=port)
     time.sleep(2.0)
 
     # Confirm poison stuck before reset
-    poisoned = info.device_info(port=port, timeout_s=8.0)
+    poisoned = legacy.device_info(port=port, timeout_s=8.0)
     assert poisoned.get("long_name") == "PoisonMarker"
 
     # Trigger non-full factory reset. The nRF52 native-USB CDC can drop to
@@ -63,7 +64,7 @@ def test_baked_prefs_survive_factory_reset(
     # transport hiccup) is harmless.
     for attempt in range(3):
         try:
-            admin.factory_reset(port=port, confirm=True, full=False)
+            legacy.factory_reset(port=port, confirm=True, full=False)
             break
         except serial.SerialException:
             if attempt == 2:
@@ -97,13 +98,13 @@ def test_baked_prefs_survive_factory_reset(
         nonlocal port
         try:
             port = resolve_port_by_role(role, timeout_s=15.0, require_openable=True)
-            return info.device_info(port=port, timeout_s=5.0).get("my_node_num") is not None
+            return legacy.device_info(port=port, timeout_s=5.0).get("my_node_num") is not None
         except Exception:
             return False
 
     wait_until(_ready, timeout=60, backoff_start=1.0)
 
-    post = info.device_info(port=port, timeout_s=8.0)
+    post = legacy.device_info(port=port, timeout_s=8.0)
     # The key assertion: channel + region are STILL the USERPREFS-baked values,
     # NOT Meshtastic stock defaults (which would be "LongFast" and the region
     # the device shipped with).
@@ -122,4 +123,4 @@ def test_baked_prefs_survive_factory_reset(
     # If we had an original_long_name, restore it so downstream tests see
     # the same baseline.
     if original_long_name and post.get("long_name") != original_long_name:
-        admin.set_owner(long_name=original_long_name, port=port)
+        legacy.set_owner(long_name=original_long_name, port=port)

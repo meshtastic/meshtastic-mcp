@@ -196,7 +196,7 @@ def test_device_tools_take_a_lease_and_other_port_tools_do_not(server) -> None:
 
 
 def test_a_device_call_on_another_sessions_lease_is_refused(server, monkeypatch) -> None:
-    monkeypatch.setattr("meshtastic_mcp.info.device_info", lambda **_: {"port": PORT})
+    monkeypatch.setattr("meshtastic_mcp.backends.legacy.device_info", lambda **_: {"port": PORT})
     held = leases.claim(PORT, holder="eval run")
     refused = _call(server, "device_info", {"port": PORT})
     assert refused.is_error and "leased to eval run" in refused.content[0].text
