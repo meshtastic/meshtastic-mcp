@@ -86,9 +86,9 @@ take `confirm`.
 - A refusal naming `confirm=True` means this client cannot ask (subagents, `claude -p`). Tell
   the user what will happen and pass `confirm=True` only after they agree. Never retry with it
   on your own.
-- With `MESHTASTIC_MCP_CONFIRM=human` on the server, irreversible tools (`admin` resets,
-  `install(erase=True)`, `nrf52_factory_erase`, `vanity_apply`, destructive vendor calls) ask even
-  with `confirm=True`; "cannot ask" then means the user must run it from a client that can.
+- Irreversible tools (`admin` resets, `install(erase=True)`, `nrf52_factory_erase`,
+  `vanity_apply`, destructive vendor calls) always ask a person, even with `confirm=True`. A
+  `Stopped:` refusal means this client cannot ask: report what it would destroy and stop.
 - `vendor(tool="esptool", args=["flash_id"])` and other harmless subcommands never ask.
 
 ## Vanity identity (chosen node id / app colour)

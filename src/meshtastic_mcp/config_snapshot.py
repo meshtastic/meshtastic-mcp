@@ -69,7 +69,7 @@ def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def capture(name: str, port: str | None = None) -> dict[str, Any]:
-    """Capture the device's full config to a named snapshot.
+    """Capture the device's config, owner and channels to a named snapshot.
 
     Overwrites an existing snapshot of the same name. Returns metadata about
     what was captured (counts, path).
@@ -95,7 +95,7 @@ def capture(name: str, port: str | None = None) -> dict[str, Any]:
 
 
 def save(name: str, port: str | None, config: dict[str, Any]) -> str:
-    """Write `config` (`{localConfig, moduleConfig}`) as snapshot `name`; returns its path."""
+    """Write `config` as snapshot `name` and return its path."""
     path = _snapshot_path(name)
     _write_private_json(
         path, {"name": name, "captured_at": time.time(), "port": port, "config": config}
@@ -104,7 +104,7 @@ def save(name: str, port: str | None, config: dict[str, Any]) -> str:
 
 
 def load_config(name: str) -> dict[str, Any]:
-    """The `{localConfig, moduleConfig}` a snapshot holds."""
+    """A snapshot's config, owner and channels (older snapshots hold config only)."""
     return dict(_load(name)["config"])
 
 
@@ -159,8 +159,9 @@ def _secret_paths() -> frozenset[str]:
 def _withhold(path: str, value: Any, secrets: frozenset[str]) -> Any:
     from .backends.protodict import REDACTED
 
+    secret = path in secrets or (path.startswith("channels.") and path.endswith(".psk"))
     # An empty value stays, so "no password set" is still visible.
-    return REDACTED if path in secrets and value not in ("", 0, [], None) else value
+    return REDACTED if secret and value not in ("", 0, [], None) else value
 
 
 def diff(

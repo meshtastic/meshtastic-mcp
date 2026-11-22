@@ -29,7 +29,7 @@ INFO_OLD = (
 @pytest.fixture(autouse=True)
 def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHTASTIC_MCP_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
 
 
 @pytest.fixture(scope="module")

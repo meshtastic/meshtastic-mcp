@@ -4,10 +4,10 @@
 """Ask the human before a destructive tool runs, when the client can ask.
 
 `confirm=True` is something an agent can pass for itself, so it is not a human gate. When a tool
-is called without it and the client declared elicitation, the human is asked instead. With
-`MESHTASTIC_MCP_CONFIRM=human`, irreversible tools ask even when `confirm=True` is passed. A client
-that cannot ask (a subagent, `claude -p`) keeps the `confirm=True` contract and gets the same
-refusal as before.
+is called without it and the client declared elicitation, the human is asked instead. An
+irreversible tool always asks the human, whatever `confirm` says, unless the server runs with
+`MESHTASTIC_MCP_CONFIRM=agent`. A client that cannot ask gets a refusal that tells the agent to stop
+and ask the user; for an irreversible tool it does not offer `confirm=True` as a way through.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ _SCHEMA: dict[str, Any] = {
 
 def policy(env: Mapping[str, str] | None = None) -> str:
     env = os.environ if env is None else env
-    value = env.get(POLICY_ENV, AGENT).strip().lower() or AGENT
+    value = env.get(POLICY_ENV, HUMAN).strip().lower() or HUMAN
     if value not in {AGENT, HUMAN}:
         raise ValueError(f"{POLICY_ENV} must be '{AGENT}' or '{HUMAN}', got {value!r}")
     return value
@@ -94,10 +94,12 @@ async def gate(
     if not needs_human:
         return None
     if not _can_ask(ctx):
-        if confirm:
+        if irreversible and policy() == HUMAN:
             raise ToolError(
-                f"{action} needs a human to confirm it ({POLICY_ENV}={HUMAN}), and this client "
-                "cannot ask. Run it from a client that supports elicitation."
+                f"Stopped: {action} cannot be undone, so it needs the user's own answer, and this "
+                "client cannot ask them. Do not retry it. Tell the user exactly what it would "
+                "destroy and let them run it from a client that can ask; an unattended bench can "
+                f"set {POLICY_ENV}={AGENT} on the server instead."
             )
         raise ToolError(
             f"{action} is destructive and requires confirm=True. This client cannot ask the "

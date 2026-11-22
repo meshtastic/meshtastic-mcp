@@ -1010,8 +1010,8 @@ async def factory_reset(
 ) -> FactoryResetResult:
     """Factory-reset the connected node.
 
-    Requires confirm=True, or the user's answer when the client can ask (always, with
-    `MESHTASTIC_MCP_CONFIRM=human`). An nRF52 in UF2 mode, with no app running to take this
+    Requires confirm=True, or the user's answer when the client can ask (always, unless
+    `MESHTASTIC_MCP_CONFIRM=agent`). An nRF52 in UF2 mode, with no app running to take this
     call, is wiped by `nrf52_factory_erase`.
 
     Returns `{ok, full}`.

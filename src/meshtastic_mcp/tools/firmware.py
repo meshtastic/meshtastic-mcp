@@ -317,7 +317,7 @@ async def erase_and_flash(
 
     Writes bootloader, app, OTA and LittleFS from the factory.bin, building it first if it
     is missing. Requires confirm=True, or the user's answer when the client can ask
-    (always, with `MESHTASTIC_MCP_CONFIRM=human`). Runs as a background task where
+    (always, unless `MESHTASTIC_MCP_CONFIRM=agent`). Runs as a background task where
     supported; the flash cannot be canceled mid-write, so after a cancel or timeout follow
     its `job_id` with `flash_poll`. See docs/firmware-builds.md.
 

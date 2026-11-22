@@ -11,7 +11,7 @@ reads them when it starts, so restart it after a change.
 | --- | --- |
 | `MESHTASTIC_MCP_TOOLSETS` | Comma-separated tool groups to expose. Unset exposes the default groups; `all` adds every group but `legacy`, which comes only when named; `-group` drops one. See [toolsets.md](toolsets.md). |
 | `MESHTASTIC_MCP_READ_ONLY` | `1` hides every tool that can change state. |
-| `MESHTASTIC_MCP_CONFIRM` | `human` makes irreversible tools ask the human even when the agent passes `confirm=True`. See [safety.md](safety.md). |
+| `MESHTASTIC_MCP_CONFIRM` | `human` (default): irreversible tools always ask a person, whatever `confirm` says. `agent` lets an agent's `confirm=True` run them, for an unattended bench. See [safety.md](safety.md). |
 | `MESHTASTIC_MCP_BACKEND` | `sdk` runs device tools through the Kotlin SDK CLI instead of meshtastic-python. `ble:` targets use meshtastic-python unless this is set. |
 | `MESHTASTIC_MCP_SDK_CLI` | Path to the SDK `cli` launcher the SDK backend runs. |
 | `MESHTASTIC_MCP_DATA_DIR` | Where leases, device names, snapshots and job state live. Defaults to the platform's user data dir. |

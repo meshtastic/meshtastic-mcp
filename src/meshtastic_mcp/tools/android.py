@@ -424,7 +424,7 @@ async def atak_fleet_down(
 
     `delete_clones=True` is irreversible (the next `atak_fleet_up` re-provisions from
     scratch), so it requires `confirm=True`, or the user's answer when the client can ask
-    (always, with `MESHTASTIC_MCP_CONFIRM=human`). Returns `{stopped, nodes,
+    (always, unless `MESHTASTIC_MCP_CONFIRM=agent`). Returns `{stopped, nodes,
     clones_deleted}`, or `{running: false}` when no fleet is up.
 
     Args:

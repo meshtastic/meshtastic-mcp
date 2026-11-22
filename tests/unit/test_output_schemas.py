@@ -252,7 +252,7 @@ def iface(monkeypatch) -> _Iface:
 
     monkeypatch.setattr(backends_python.PythonBackend, "configure", configure)
     monkeypatch.delenv(backends.BACKEND_ENV, raising=False)
-    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
     return fake
 
 
@@ -553,7 +553,7 @@ def test_pa_sweep_results_satisfy_their_schema(
     monkeypatch.setattr(power_meter, "PowerMeter", _Meter)
     monkeypatch.setattr(pa_sweep, "_BackgroundSampler", _Sampler)
     monkeypatch.setattr(pa_sweep.time, "sleep", lambda *_a: None)
-    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
 
     args = {"powers": [17, 20], "confirm": True, "settle_s": 0, "burst_repeat": 1}
     out = _ok(_run_tool(tools.rf.pa_sweep, {**args, "tx_linger_s": linger}))

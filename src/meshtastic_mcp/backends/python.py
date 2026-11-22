@@ -14,7 +14,7 @@ from typing import Any
 from meshtastic.protobuf import admin_pb2, localonly_pb2
 
 from .. import connection, display_mirror
-from . import BackendError, library_guard, protopath
+from . import BackendError, library_guard
 from .protodict import to_dict
 
 
@@ -313,9 +313,7 @@ class PythonBackend:
         return {"ok": True, "event_code": event_code, "kb_char": kb_char}
 
     def raw_config(self, target: str | None, timeout_s: float) -> dict[str, Any]:
+        from .python_configure import full_snapshot
+
         with library_guard(), connection.connect(port=target, timeout_s=timeout_s) as iface:
-            node = iface.localNode
-            return {
-                "localConfig": protopath.message_to_dict(node.localConfig),
-                "moduleConfig": protopath.message_to_dict(node.moduleConfig),
-            }
+            return full_snapshot(iface)

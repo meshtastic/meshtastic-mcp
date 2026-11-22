@@ -136,7 +136,7 @@ def _call(server, name, args, handler=None):
 
 
 def test_eject_asks_first_and_reports_a_polkit_refusal(server, monkeypatch, tmp_path) -> None:
-    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
     drive = {"mount": str(tmp_path), "label": "RAK4631", "device": "/dev/sdb"}
     monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
 
