@@ -54,8 +54,13 @@ class Task:
     check: dict[str, Any]
     verify: dict[str, Any] | None = None
     teardown: list[str] | None = None
+    setup: list[str] | None = None
     notes: str = ""
     scored: bool = True
+
+
+class _SetupFailed(Exception):
+    """The task's setup command failed, so the agent never ran."""
 
 
 @dataclass
@@ -181,6 +186,32 @@ def check_answer(task: Task, result_text: str) -> bool:
     return re.search(task.check["pattern"], result_text) is not None
 
 
+def forbidden_calls(task: Task, tool_calls: Counter[str] | dict[str, int]) -> list[str]:
+    """Tools the agent called that ``check.forbid_tools`` rules out, matched on the bare name."""
+    pattern = task.check.get("forbid_tools")
+    if not pattern:
+        return []
+    return sorted(
+        name for name in tool_calls if re.fullmatch(pattern, name.rsplit("__", 1)[-1]) is not None
+    )
+
+
+def run_setup(task: Task, values: dict[str, str]) -> str:
+    """Run the task's ``setup`` command; the error text when it fails, empty when it worked."""
+    if not task.setup:
+        return ""
+    proc = subprocess.run(
+        [render(a, values) for a in task.setup],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if proc.returncode == 0:
+        return ""
+    return f"setup failed ({proc.returncode}): {(proc.stderr or proc.stdout).strip()[:300]}"
+
+
 def verify_outcome(task: Task, values: dict[str, str]) -> tuple[bool, str]:
     """Run the out-of-band post-condition, when the task has one."""
     if not task.verify:
@@ -234,6 +265,9 @@ def run_task(
     workdir = Path(tempfile.mkdtemp(prefix=f"eval-{task.id}-"))
     saved = backup_configs(task_ports(task, values), workdir) if task.risk == "mutating" else {}
     try:
+        detail = run_setup(task, run_values)
+        if detail:
+            raise _SetupFailed
         proc = subprocess.run(
             build_command(prompt, mcp_config, server, max_turns),
             capture_output=True,
@@ -245,9 +279,14 @@ def run_task(
         stats = parse_stream(proc.stdout.splitlines())
         answered = not stats.is_error and check_answer(task, stats.result_text)
         verified, detail = verify_outcome(task, run_values)
-        passed = answered and verified
-        if not answered and not detail:
+        forbidden = forbidden_calls(task, stats.tool_calls)
+        passed = answered and verified and not forbidden
+        if forbidden:
+            detail = "called " + ", ".join(forbidden)
+        elif not answered and not detail:
             detail = "answer did not match" if not stats.is_error else "agent run errored"
+    except _SetupFailed:
+        pass
     except subprocess.TimeoutExpired:
         detail = "timed out"
     finally:
@@ -309,6 +348,27 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def per_task(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Pass rate and per-run cost for each task id, over however many runs it had."""
+    out: dict[str, dict[str, Any]] = {}
+    for r in results:
+        entry = out.setdefault(
+            r["id"], {"runs": 0, "passed": 0, "tool_calls": [], "input_tokens": []}
+        )
+        entry["runs"] += 1
+        entry["passed"] += 1 if r["passed"] else 0
+        entry["tool_calls"].append(r["tool_call_total"])
+        entry["input_tokens"].append(r["input_tokens"])
+    for entry in out.values():
+        entry["pass_rate"] = round(entry["passed"] / entry["runs"], 3)
+    return out
+
+
+def results_path(label: str, stamp: str, base: Path | None = None) -> Path:
+    """``evals/results/<label>-<UTC stamp>.json``; a later run never overwrites an earlier one."""
+    return (base or Path(__file__).with_name("results")) / f"{label}-{stamp}.json"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--list", action="store_true", help="print the tasks and exit")
@@ -323,8 +383,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--server", default="meshtastic", help="server name in the MCP config")
     ap.add_argument("--max-turns", type=int, default=25)
     ap.add_argument("--label", default="run")
-    ap.add_argument("--out", type=Path, help="results file (default evals/results/<label>.json)")
+    ap.add_argument(
+        "--repeat", type=int, default=1, help="run each task this many times (default 1)"
+    )
+    ap.add_argument(
+        "--out", type=Path, help="results file (default evals/results/<label>-<UTC stamp>.json)"
+    )
     args = ap.parse_args(argv)
+    if args.repeat < 1:
+        ap.error("--repeat must be at least 1")
 
     tasks = load_tasks()
     if args.list:
@@ -336,19 +403,25 @@ def main(argv: list[str] | None = None) -> int:
 
     values = json.loads(args.devices.read_text())
     chosen = select(tasks, args.split, args.only, args.allow_mutating, args.allow_destructive)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     results = []
-    for task in chosen:
-        try:
-            results.append(run_task(task, values, args.mcp_config, args.server, args.max_turns))
-        except KeyError as missing:
-            results.append({**_skipped(task), "detail": f"devices.json has no {missing}"})
+    for run in range(1, args.repeat + 1):
+        for task in chosen:
+            try:
+                result = run_task(task, values, args.mcp_config, args.server, args.max_turns)
+            except KeyError as missing:
+                result = {**_skipped(task), "detail": f"devices.json has no {missing}"}
+            results.append({**result, "run": run})
     report = {
         "label": args.label,
         "split": args.split,
+        "repeat": args.repeat,
+        "started_utc": stamp,
         "summary": summarize(results),
+        "per_task": per_task(results),
         "results": results,
     }
-    out = args.out or Path(__file__).with_name("results") / f"{args.label}.json"
+    out = args.out or results_path(args.label, stamp)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report["summary"]))
