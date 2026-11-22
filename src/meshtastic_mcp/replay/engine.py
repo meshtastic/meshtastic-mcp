@@ -1470,6 +1470,7 @@ def _status_dict(sess: ReplaySession) -> dict[str, Any]:
         "packets_total": st.packets_total,
         "packets_sent": st.packets_sent,
         "injected": st.injected,
+        "inject_queued": sess._inject_q.qsize() + sess._inject_fr_q.qsize(),
         "stats_sent": st.stats_sent,
         "duplicates_seen": st.stats_dupes,
         "connected": st.connected,

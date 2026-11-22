@@ -2434,6 +2434,19 @@ def test_injected_items_survive_a_dead_connection():
     assert sess._inject_q.qsize() == 1
 
 
+def test_status_counts_injections_waiting_for_a_client():
+    """With no app connected, accepted injections show as queued, not as zero."""
+    from meshtastic_mcp.replay.engine import _status_dict
+
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    sess = ReplaySession("no-client", cap, ReplayParams(host="127.0.0.1", port=0))
+    sess.inject([mesh_pb2.MeshPacket(), mesh_pb2.MeshPacket()])
+    sess.inject_fromradio([mesh_pb2.FromRadio()])
+    st = _status_dict(sess)
+    assert st["injected"] == 0
+    assert st["inject_queued"] == 3
+
+
 def test_local_telemetry_comes_from_the_sessions_own_node():
     """A session with its own observer_num must not send telemetry as the default node.
 
