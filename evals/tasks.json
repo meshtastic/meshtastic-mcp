@@ -191,8 +191,8 @@
     "split": "dev",
     "needs": [],
     "risk": "read-only",
-    "prompt": "Start a simulated radio on TCP port 4410. Inject a waypoint named eval-{nonce} at 37.7749,-122.4194 and a text message 'eval-{nonce}' into it, then use the session status to tell me how many packets were injected. Stop the session when you are done.",
-    "check": {"kind": "answer_regex", "pattern": "(?i)\\binjected\\D{0,30}\\b2\\b|\\b2\\b\\D{0,30}\\binject"},
+    "prompt": "Start a simulated radio on TCP port 4410. Inject a waypoint named eval-{nonce} at 37.7749,-122.4194 and a text message 'eval-{nonce}' into it, then use the session status to tell me how many injections it accepted, counting sent and still-queued ones. Stop the session when you are done.",
+    "check": {"kind": "answer_regex", "pattern": "(?i)\\b(inject\\w*|accepted|queued)\\D{0,40}\\b(2|two)\\b|\\b(2|two)\\b\\D{0,40}\\b(inject\\w*|accepted|queued)"},
     "notes": "Host only, no radio. The sim session lives in the server process, so it ends with the run even when the agent forgets to stop it."
   },
   {
