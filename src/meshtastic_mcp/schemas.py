@@ -510,7 +510,10 @@ class SimSession(TypedDict, total=False):
     channels: Any
     packets_total: int
     packets_sent: int
-    injected: int
+    injected: Annotated[int, Field(description="injected packets written to a connected client")]
+    inject_queued: NotRequired[
+        Annotated[int, Field(description="accepted injections waiting for a client to connect")]
+    ]
     stats_sent: int
     duplicates_seen: int
     connected: bool

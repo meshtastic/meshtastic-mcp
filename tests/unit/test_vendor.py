@@ -62,3 +62,27 @@ def test_a_write_asks_first_and_runs_once_agreed(calls, monkeypatch) -> None:
 def test_each_tool_goes_to_its_own_runner(calls) -> None:
     _run(tool="nrfutil", args=["version"])
     assert calls == [("nrfutil", ["version"], None, False)]
+
+
+@pytest.mark.parametrize(
+    ("read_only", "value_flags", "depth", "args"),
+    [
+        (hw_tools.ESPTOOL_READ_ONLY, set(), 1, [word])
+        for word in ("erase_flash", "erase-flash", "ERASE_FLASH", "Erase-Flash", "burn-efuse")
+    ]
+    + [
+        (hw_tools.NRFUTIL_READ_ONLY, set(), 2, ["device", word])
+        for word in ("erase", "ERASE", "recover", "Recover")
+    ]
+    + [
+        (hw_tools.PICOTOOL_READ_ONLY, set(), 1, [word])
+        for word in ("erase", "ERASE", "otp", "load")
+    ],
+)
+def test_every_spelling_of_a_write_asks(read_only, value_flags, depth, args):
+    assert hw_tools._unsafe_call(args, read_only, value_flags, depth) is not None
+
+
+@pytest.mark.parametrize("word", ["chip_id", "chip-id", "CHIP_ID", "Flash-Id"])
+def test_every_spelling_of_a_read_runs(word):
+    assert hw_tools._unsafe_call([word], hw_tools.ESPTOOL_READ_ONLY, set()) is None

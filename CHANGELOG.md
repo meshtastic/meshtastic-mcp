@@ -5,6 +5,10 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+- `vendor` matches subcommands regardless of case, so `CHIP_ID` runs as a read and `ERASE_FLASH` asks like `erase-flash`.
+- `sim_status` reports `inject_queued`, the accepted injections still waiting for an app to connect; `injected` counts only packets a client received.
+
 ### Added
 - **Text messages carry their text in the recorder** - the `packets` view has a `text` column
   with the decoded text of each `TEXT_MESSAGE_APP` packet, so `query` and `wait_for` match a

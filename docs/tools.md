@@ -1244,9 +1244,11 @@ Read-only, idempotent.
 Status of simulated radio sessions: connection state, packets sent and total, mode.
 
 Returns one session's `{id, capture, listen, connect, mode, target_rate,
-achieved_rate, packets_total, packets_sent, injected, connected, client, ended, error,
-fuzz, mdns, ...}`, `{sessions: [...]}` for all, or `{error}` for an unknown id. With
-`fuzz_presets`, also `presets` and `usage`: the names `sim(fuzz=...)` takes.
+achieved_rate, packets_total, packets_sent, injected, inject_queued, connected, client,
+ended, error, fuzz, mdns, ...}`, `{sessions: [...]}` for all, or `{error}` for an unknown
+id. `injected` counts packets written to a connected client; `inject_queued` counts
+accepted injections still waiting for one. With `fuzz_presets`, also `presets` and
+`usage`: the names `sim(fuzz=...)` takes.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
