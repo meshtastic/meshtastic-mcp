@@ -354,26 +354,6 @@ def reboot(port: str | None = None, confirm: bool = False, seconds: int = 10) ->
     return {"ok": True, "rebooting_in_s": seconds}
 
 
-def enter_uf2_mode(port: str | None = None, confirm: bool = False) -> dict[str, Any]:
-    """Ask an nRF52 node to reboot into its bootloader's UF2 drive (`enter_dfu_mode_request`).
-
-    The bootloader shows a USB drive with INFO_UF2.TXT and CURRENT.UF2 next to a serial port, and
-    boots the app again if no USB host enumerates it within about 3 s. Variants built with
-    `NRF_USE_SERIAL_DFU` land in serial-only DFU instead, with no drive.
-    """
-    _require_confirm(confirm, "enter_uf2_mode")
-    with connect(port=port, linger_s=1.0) as iface:
-        iface.localNode.enterDFUMode()
-    return {"ok": True, "requested": "uf2"}
-
-
-def shutdown(port: str | None = None, confirm: bool = False, seconds: int = 10) -> dict[str, Any]:
-    _require_confirm(confirm, "shutdown")
-    with connect(port=port) as iface:
-        iface.localNode.shutdown(secs=seconds)
-    return {"ok": True, "shutting_down_in_s": seconds}
-
-
 def send_input_event(
     event_code: int | str,
     kb_char: int = 0,
@@ -423,21 +403,8 @@ def factory_reset(
     key are PRESERVED. full=True → full device wipe: BLE bonds cleared and a new
     identity keypair generated (peers must re-exchange NodeInfo before DMs
     decrypt again).
-
-    The firmware dispatches on WHICH field is set, not its value, so we must set
-    the correct field — `factory_reset_device` (full) vs `factory_reset_config`
-    (config-only) — each with int 1. Building the AdminMessage directly (rather
-    than `Node.factoryReset`) keeps us independent of the SDK, including the
-    2.7.8 bool→int32 assignment bug.
     """
     _require_confirm(confirm, "factory_reset")
-    from meshtastic.protobuf import admin_pb2  # type: ignore[import-untyped]
-
     with connect(port=port) as iface:
-        msg = admin_pb2.AdminMessage()
-        if full:
-            msg.factory_reset_device = 1
-        else:
-            msg.factory_reset_config = 1
-        iface.localNode._sendAdmin(msg)
+        iface.localNode.factoryReset(full=full)
     return {"ok": True, "full": full}

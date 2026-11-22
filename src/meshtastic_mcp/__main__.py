@@ -396,10 +396,11 @@ def _cmd_boards(args) -> int:
 
 
 def _cmd_info(args) -> int:
-    from meshtastic_mcp import info as _info
+    from meshtastic_mcp import backends
 
     try:
-        result = _info.device_info(args.port)
+        read = backends.for_target(args.port).read(args.port, ["summary"], None, "brief", 8.0)
+        result = {"port": read.get("target"), **(read.get("summary") or {})}
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -411,7 +412,7 @@ def _cmd_info(args) -> int:
     print(f"  hw_model        {result.get('hw_model')}")
     print(f"  firmware        {result.get('firmware_version')}")
     print(f"  region          {result.get('region')}")
-    print(f"  node_num        {result.get('my_node_num')}")
+    print(f"  node_num        {result.get('node_num')}")
     print(f"  long_name       {result.get('long_name')}")
     print(f"  short_name      {result.get('short_name')}")
     print(f"  primary_channel {result.get('primary_channel')}")
@@ -420,10 +421,11 @@ def _cmd_info(args) -> int:
 
 
 def _cmd_nodes(args) -> int:
-    from meshtastic_mcp import info as _info
+    from meshtastic_mcp import backends
 
     try:
-        result = _info.list_nodes(args.port)
+        read = backends.for_target(args.port).read(args.port, ["nodes"], None, "brief", 8.0)
+        result = read.get("nodes") or []
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -435,7 +437,7 @@ def _cmd_nodes(args) -> int:
     )
     print("  " + "-" * 95)
     for n in result:
-        user = n.get("user") or {}
+        user = n
         ts = n.get("last_heard")
         heard = str(ts) if ts else "—"
         snr = n.get("snr") or "—"

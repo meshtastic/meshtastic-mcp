@@ -23,7 +23,7 @@ from fastmcp.server.transforms import GetToolNext, Transform
 from fastmcp.tools import Tool
 from fastmcp.utilities.versions import VersionSpec
 
-from . import capabilities, connection, info, leases, recorder_query, tool_meta, toolsets
+from . import backends, capabilities, connection, leases, recorder_query, tool_meta, toolsets
 from . import doctor as doctor_mod
 from .call_log import CallLogMiddleware
 from .recorder import get_recorder
@@ -264,7 +264,8 @@ def _resource_device_info() -> str:
     import json
 
     try:
-        return json.dumps(info.device_info(port=None), indent=2, default=str)
+        read = backends.for_target(None).read(None, ["summary"], None, "brief", 8.0)
+        return json.dumps(read.get("summary") or read, indent=2, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc)}, indent=2)
 
@@ -279,7 +280,8 @@ def _resource_device_nodes() -> str:
     import json
 
     try:
-        return json.dumps(info.list_nodes(port=None), indent=2, default=str)
+        read = backends.for_target(None).read(None, ["nodes"], None, "brief", 8.0)
+        return json.dumps(read.get("nodes") or read, indent=2, default=str)
     except Exception as exc:
         return json.dumps({"error": str(exc)}, indent=2)
 
