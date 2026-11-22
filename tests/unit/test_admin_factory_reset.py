@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: Meshtastic contributors
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""factory_reset must set the CORRECT AdminMessage field.
+"""factory_reset must set the AdminMessage field the firmware dispatches on.
 
-The firmware dispatches on *which* field is set, not its int value. A prior bug
-always set `factory_reset_config` (with 1 vs 2), so `full=True` silently did a
-config-only reset — BLE bonds + identity key survived a requested full wipe.
-These hardware-free tests assert the right field is selected for each mode.
+The firmware acts on *which* field is set: `factory_reset_device` wipes identity and BLE bonds,
+`factory_reset_config` keeps them. meshtastic-python's `Node.factoryReset` sets the right one
+from 2.7.9; these tests run that real method against a fake transport.
 """
 
 from __future__ import annotations
@@ -14,15 +13,28 @@ from __future__ import annotations
 import contextlib
 
 import pytest
+from meshtastic.node import Node
 
 from meshtastic_mcp import admin
 
 
 class _FakeNode:
+    """Borrows the library's real factoryReset; records what it sends."""
+
+    factoryReset = Node.factoryReset
+
     def __init__(self):
         self.sent = []
+        self.iface = self
 
-    def _sendAdmin(self, msg):
+    @property
+    def localNode(self):
+        return self
+
+    def ensureSessionKey(self):
+        pass
+
+    def _sendAdmin(self, msg, **kwargs):
         self.sent.append(msg)
 
 

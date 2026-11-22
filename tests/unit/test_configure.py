@@ -74,7 +74,7 @@ class _Radio:
                 )
                 radio.store(section, getattr(parent, section))
 
-            def setOwner(self, long_name=None, short_name=None):
+            def setOwner(self, long_name=None, short_name=None, **_flags):
                 radio.sent.append("owner")
                 if "owner" not in radio.drop:
                     radio.owner = {"longName": long_name, "shortName": short_name}

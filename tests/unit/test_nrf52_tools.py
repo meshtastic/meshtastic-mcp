@@ -12,7 +12,7 @@ import pytest
 from fastmcp import Client, FastMCP
 from mcp.types import ElicitResult
 
-from meshtastic_mcp import admin, confirm, nrf52_bootloader
+from meshtastic_mcp import confirm, nrf52_bootloader
 from meshtastic_mcp.tools import hardware as tools_hardware
 from tests.unit._tool_fns import tool_fn
 
@@ -212,7 +212,9 @@ def test_a_backup_copies_current_uf2_into_the_data_dir(server, monkeypatch, tmp_
 
 
 def test_enter_uf2_sends_nothing_without_a_confirmation(server, monkeypatch) -> None:
-    monkeypatch.setattr(admin, "enter_uf2_mode", lambda **k: pytest.fail("sent"))
+    monkeypatch.setattr(
+        "meshtastic_mcp.tools.hardware._enter_uf2", lambda port: pytest.fail("sent")
+    )
     app = _app(server, "nrf52_enter_uf2")
     result = _call(app, "nrf52_enter_uf2", {"port": "/dev/x"})
     assert result.is_error is True and "confirm=True" in result.content[0].text

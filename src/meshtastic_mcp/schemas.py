@@ -59,6 +59,7 @@ class InspectResult(TypedDict):
     config: NotRequired[dict[str, Any]]
     channels: NotRequired[list[dict[str, Any]]]
     url: NotRequired[dict[str, str]]
+    contact_url: NotRequired[str]
     nodes: NotRequired[list[dict[str, Any]]]
     network: NotRequired[dict[str, Any]]
     errors: NotRequired[dict[str, str]]
@@ -68,8 +69,10 @@ class AdminResult(TypedDict):
     target: Any
     action: str
     ok: bool
+    dest: NotRequired[str]
     node_id: NotRequired[Any]
-    back: NotRequired[bool]
+    time: NotRequired[int]
+    back: NotRequired[bool | None]
     restarted: NotRequired[bool]
     uptime_s: NotRequired[float]
     error: NotRequired[str]
@@ -87,6 +90,8 @@ class ConfigureResult(TypedDict):
     side_effects: NotRequired[dict[str, Any]]
     uptime_s: NotRequired[dict[str, Any]]
     errors: NotRequired[dict[str, str]]
+    dest: NotRequired[str]
+    unverified: NotRequired[list[str]]
 
 
 class SendResult(TypedDict):
@@ -243,7 +248,9 @@ class SetChannelUrlResult(TypedDict):
     """`set_channel_url` result."""
 
     ok: bool
+    target: NotRequired[Any]
     channels_imported: Annotated[int, Field(description="channels not DISABLED after the import")]
+    channels_added: NotRequired[Annotated[int, Field(description="new channels, with add_only")]]
 
 
 class SendTextResult(TypedDict):

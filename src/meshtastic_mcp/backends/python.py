@@ -145,7 +145,7 @@ def _network(iface: Any, timeout_s: float) -> dict[str, Any]:
 
 class PythonBackend:
     name = "python"
-    parts = frozenset({"summary", "config", "channels", "nodes", "network", "url"})
+    parts = frozenset({"summary", "config", "channels", "nodes", "network", "url", "contact_url"})
 
     def read(
         self,
@@ -169,6 +169,7 @@ class PythonBackend:
                     "primary": iface.localNode.getURL(includeAll=False),
                     "all": iface.localNode.getURL(includeAll=True),
                 },
+                "contact_url": lambda: iface.localNode.getContactURL(iface.myInfo.my_node_num),
             }
             for part in parts:
                 try:
@@ -187,11 +188,12 @@ class PythonBackend:
         dry_run: bool,
         timeout_s: float,
         save_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+        dest: str | int | None = None,
     ) -> dict[str, Any]:
         from .python_configure import configure
 
         with library_guard():
-            return configure(target, changes, restore, dry_run, timeout_s, save_snapshot)
+            return configure(target, changes, restore, dry_run, timeout_s, save_snapshot, dest)
 
     def admin(
         self,
@@ -201,11 +203,13 @@ class PythonBackend:
         seconds: int,
         wait_back: bool,
         timeout_s: float,
+        dest: str | int | None = None,
+        value: Any = None,
     ) -> dict[str, Any]:
         from .python_admin import admin
 
         with library_guard():
-            return admin(target, action, node_id, seconds, wait_back, timeout_s)
+            return admin(target, action, node_id, seconds, wait_back, timeout_s, dest, value)
 
     def send(
         self,
@@ -221,3 +225,36 @@ class PythonBackend:
 
         with library_guard():
             return send(target, to, payload, channel, want_ack, hop_limit, wait_s)
+
+    def import_channels(
+        self, target: str | None, url: str, add_only: bool, timeout_s: float
+    ) -> dict[str, Any]:
+        if "/#" not in url:
+            raise BackendError(f"{url!r} is not a channel URL (https://meshtastic.org/e/#...)")
+        if add_only and "?add=true#" not in url:
+            url = url.replace("/#", "/?add=true#", 1)  # setURL(addOnly) reads that form
+        with (
+            library_guard(),
+            connection.connect(port=target, timeout_s=timeout_s, linger_s=2.5) as iface,
+        ):
+            node = iface.localNode
+            before = sum(1 for c in node.channels or [] if getattr(c, "role", 0) != 0)
+            node.setURL(url, addOnly=add_only)
+            after = sum(1 for c in node.channels or [] if getattr(c, "role", 0) != 0)
+            port = getattr(iface, "devPath", None) or target
+        out: dict[str, Any] = {"ok": True, "target": port, "channels_imported": after}
+        if add_only:
+            out["channels_added"] = after - before
+        return out
+
+    def input_event(
+        self, target: str | None, event_code: int, kb_char: int, touch_x: int, touch_y: int
+    ) -> dict[str, Any]:
+        msg = admin_pb2.AdminMessage()
+        msg.send_input_event.event_code = event_code
+        msg.send_input_event.kb_char = kb_char
+        msg.send_input_event.touch_x = touch_x
+        msg.send_input_event.touch_y = touch_y
+        with library_guard(), connection.connect(port=target) as iface:
+            iface.localNode._sendAdmin(msg)  # meshtastic-python has no public wrapper
+        return {"ok": True, "event_code": event_code, "kb_char": kb_char}

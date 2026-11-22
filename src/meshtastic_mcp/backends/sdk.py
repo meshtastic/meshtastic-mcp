@@ -137,6 +137,7 @@ class SdkBackend:
         dry_run: bool,
         timeout_s: float,
         save_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+        dest: str | int | None = None,
     ) -> dict[str, Any]:
         raise BackendError("the SDK backend does not write config yet; use a serial or TCP target")
 
@@ -148,8 +149,22 @@ class SdkBackend:
         seconds: int,
         wait_back: bool,
         timeout_s: float,
+        dest: str | int | None = None,
+        value: Any = None,
     ) -> dict[str, Any]:
         raise BackendError("the SDK backend has no admin actions yet; use a serial or TCP target")
+
+    def import_channels(
+        self, target: str | None, url: str, add_only: bool, timeout_s: float
+    ) -> dict[str, Any]:
+        raise BackendError("the SDK backend cannot import channels yet; use a serial or TCP target")
+
+    def input_event(
+        self, target: str | None, event_code: int, kb_char: int, touch_x: int, touch_y: int
+    ) -> dict[str, Any]:
+        raise BackendError(
+            "the SDK backend cannot send input events yet; use a serial or TCP target"
+        )
 
     def send(
         self,

@@ -15,7 +15,7 @@ import pytest
 from fastmcp import Client, FastMCP
 from mcp.types import ElicitResult, InputRequiredResult
 
-from meshtastic_mcp import admin, confirm, flash, hw_tools, jobs, pio
+from meshtastic_mcp import confirm, flash, hw_tools, jobs, pio
 from meshtastic_mcp.tools import core as tools_core
 from meshtastic_mcp.tools import firmware as tools_firmware
 
@@ -48,13 +48,11 @@ def _answer():
 
 
 def test_a_slow_gated_tool_does_not_stall_other_calls(server, monkeypatch) -> None:
-    monkeypatch.setattr(
-        admin,
-        "reboot",
-        lambda port=None, confirm=False, seconds=10: (
-            time.sleep(1.5) or {"ok": True, "rebooting_in_s": seconds}
-        ),
-    )
+    from meshtastic_mcp import backends
+    from meshtastic_mcp.backends.python import PythonBackend
+
+    monkeypatch.setattr(PythonBackend, "admin", lambda self, *a, **k: time.sleep(1.5) or {})
+    monkeypatch.delenv(backends.BACKEND_ENV, raising=False)
     app = FastMCP("t")
     app.tool()(getattr(tools_core.reboot, "fn", tools_core.reboot))
 

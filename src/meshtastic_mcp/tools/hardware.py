@@ -17,7 +17,7 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from .. import (
-    admin,
+    backends,
     config,
     connection,
     flash,
@@ -565,6 +565,14 @@ def _uf2_drive(port: str | None) -> dict[str, Any]:
     return cast(dict[str, Any], match["drive"])
 
 
+def _enter_uf2(port: str | None) -> None:
+    """Ask the app to reboot into the bootloader's UF2 drive (`enter_dfu_mode_request`)."""
+    try:
+        backends.for_target(port).admin(port, "enter_uf2", None, 0, False, 10.0)
+    except (backends.BackendError, connection.ConnectionError) as exc:
+        raise ToolError(str(exc)) from exc
+
+
 def _wait_for_uf2_drive(port: str, timeout_s: float = 15.0) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_s
     while True:
@@ -624,8 +632,8 @@ async def nrf52_enter_uf2(
     resolved = connection.resolve_port(port)
 
     def _enter() -> dict[str, Any]:
-        sent = admin.enter_uf2_mode(port=resolved, confirm=True)
-        return {**sent, "drive": _wait_for_uf2_drive(resolved)}
+        _enter_uf2(resolved)
+        return {"ok": True, "requested": "uf2", "drive": _wait_for_uf2_drive(resolved)}
 
     return cast(dict[str, Any], await _off_loop(_enter))
 
@@ -934,7 +942,7 @@ def _install(
         if ext == ".uf2":
             method = "uf2"
             if not _uf2_drive_or_none(port):
-                admin.enter_uf2_mode(port=port, confirm=True)
+                _enter_uf2(port)
             drive = _await_uf2_drive(port)
             _check_softdevice(drive, path)
             res = _uf2_result(nrf52_bootloader.flash_uf2(drive, path, timeout_s=60))

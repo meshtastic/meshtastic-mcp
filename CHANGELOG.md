@@ -6,6 +6,17 @@ All notable changes are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **More requests from `send`** - `request` takes `position`, `neighbor_info` and `node_info`
+  besides `traceroute` and `telemetry`, and `telemetry` names the metrics it asks for (`device`,
+  `environment`, `air_quality`, `power`, `local_stats`, `health`, `host`). Every request goes with
+  want_ack and the radio's own `lora.hop_limit`, which firmware needs before it answers.
+- **Remote admin** - `admin` and `configure` take `dest` to act on another node over PKI admin.
+  A node that does not list this radio's key in `security.admin_key` is named as the reason.
+- **`configure` keys beyond the config sections** - `owner.is_licensed` and
+  `owner.is_unmessagable`, `channel.N.*` to edit or add a channel and `channel.N.delete`,
+  `fixed_position` (set, or null to clear), `canned_messages` and `ringtone`.
+- **`admin` actions `set_time` and `add_contact`**, `inspect(what="contact_url")` for this radio's
+  shareable contact, and `set_channel_url(add_only=True)` to add channels without replacing the set.
 - **`doctor` checks the server itself** - a running `serve` on other code than this install, a
   git or PyPI install next to a workspace checkout at another commit, and a binary that exists
   but is off the server's PATH (systemd's default PATH has no `sbin`) are `degraded`, each with
@@ -19,6 +30,11 @@ All notable changes are documented here. Format loosely follows
   `legacy` is hidden names `inspect` and the `all,legacy` opt-in instead of `Unknown tool`.
 
 ### Changed
+- **One device path** - `set_channel_url`, `send_input_event`, the `meshtastic://device/*`
+  resources, `nrf52_enter_uf2`, `install`'s UF2 entry, the `info` and `nodes` CLI commands and the
+  legacy `reboot`, `shutdown` and `factory_reset` all reach the radio through the backend the
+  intent tools use. `meshtastic>=2.7.10` is required, for its fixed `factoryReset` and its
+  contact URLs.
 - **The pre-1.0 tools are opt-in** - `device_info`, `get_config`, `set_config`, `send_text`,
   `reboot`, the `replay_*` tools and the rest form a `legacy` toolset that is hidden unless named:
   `MESHTASTIC_MCP_TOOLSETS=all,legacy`. `inspect`, `configure`, `send`, `admin`, `sim` and
