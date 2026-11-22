@@ -19,20 +19,24 @@ Restart, power off or reset a radio, or edit its node DB.
 `unfavorite`, `ignore`, `unignore` and `remove_node` act on `node_id` in the radio's node
 DB and need no confirmation. After a restart, `wait_back` waits until the radio answers
 again: `back` says it did, and `restarted` is read from its uptime. `factory_reset` keeps
-the identity and keys; `factory_reset_full` replaces them.
+the identity and keys; `factory_reset_full` replaces them. `set_time` sets the radio's
+clock; `add_contact` adds a node from its contact URL (`inspect(what="contact_url")`).
 
-Returns `{target, action, ok, node_id?, back?, restarted?, uptime_s?, error?}`.
+Returns `{target, action, ok, dest?, node_id?, time?, back?, restarted?, uptime_s?, error?}`.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
-| `action` | `reboot` \| `shutdown` \| `factory_reset` \| `factory_reset_full` \| `reset_nodedb` \| `favorite` \| `unfavorite` \| `ignore` \| `unignore` \| `remove_node` | required | What to do. |
+| `action` | `reboot` \| `shutdown` \| `factory_reset` \| `factory_reset_full` \| `reset_nodedb` \| `favorite` \| `unfavorite` \| `ignore` \| `unignore` \| `remove_node` \| `set_time` \| `add_contact` | required | What to do. |
 | `node` | string | `null` | The radio: a device name from `devices`, a serial port or `tcp://host[:port]`; omit for the one attached radio. |
 | `node_id` | string \| integer | `null` | The node in this radio's DB that a node-DB action names (`!c2c91376`). |
 | `seconds` | integer | `3` | Delay before a `reboot` or `shutdown`. |
 | `wait_back` | boolean | `true` | After a restart, wait until the radio answers again. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
 | `timeout_s` | number | `45.0` | Seconds the whole call may take, the wait included. |
+| `dest` | string | `null` | Another node's id (`!c2c91376`) to act on over the mesh; it must list this radio's public key in its `security.admin_key`. A remote restart is not watched. |
+| `time_s` | integer | `null` | For `set_time`, Unix seconds; omit for this host's clock. |
+| `contact_url` | string | `null` | For `add_contact`, the contact URL (`https://meshtastic.org/v/#...`). |
 
 ### `claim`
 
@@ -117,10 +121,11 @@ transaction?, verified, mismatches?, side_effects?, restarted, uptime_s?, errors
 | --- | --- | --- | --- |
 | `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
 | `node` | string | `null` | A device name from `devices`, a serial port or `tcp://host[:port]`; omit to use the one attached radio. |
-| `changes` | object | `null` | Dot-path to value, such as `{"lora.region": "EU_868", "device.role": "CLIENT_MUTE", "owner.long_name": "Base"}`. Enum fields take their name. `owner.long_name` and `owner.short_name` set the owner. |
+| `changes` | object | `null` | Dot-path to value, such as `{"lora.region": "EU_868", "device.role": "CLIENT_MUTE", "owner.long_name": "Base"}`. Enum fields take their name. Also: `owner.long_name`, `owner.short_name`, `owner.is_licensed` (ham mode, no encryption), `owner.is_unmessagable`; `channel.N.name`, `channel.N.psk` (`random`, `default`, `none` or base64), `channel.N.role`, any other `channel.N.<settings field>`, and `channel.N.delete: true`; `fixed_position` (`{latitude, longitude, altitude?}`, or null to clear it); `canned_messages` (a list or `a\|b\|c`); `ringtone` (RTTTL). |
 | `restore` | string | `null` | A snapshot name, from an earlier `configure` or `config_snapshot`, to put back; combined with `changes`, the changes apply on top. A radio's own keys are never restored from a snapshot. |
 | `dry_run` | boolean | `false` | Report the changes without writing anything. |
 | `timeout_s` | number | `45.0` | Seconds the whole call may take, the restart and read-back included. |
+| `dest` | string | `null` | Another node's id (`!c2c91376`) to configure over the mesh instead of the attached radio. That node must list this radio's public key in its `security.admin_key`; no snapshot is taken, and config sections are read back from it while owner, channel and other changes are reported as `unverified`. |
 
 ### `devices`
 
@@ -336,10 +341,11 @@ Give back a device taken with `claim`. Returns the lease that ended, without its
 
 Destructive, open world.
 
-Send a text, position or waypoint over the mesh, or ask a node for a traceroute or telemetry.
+Send a text, position or waypoint over the mesh, or ask a node for something.
 
 Pass exactly one of `text`, `position`, `waypoint` or `request`. A request waits up to
-`wait_s` and returns the node's answer as `reply` (null if none came). A direct text with
+`wait_s` and returns the node's answer as `reply` (null if none came); it goes with
+want_ack and the radio's own hop limit, which firmware needs to answer. A direct text with
 `want_ack=True` waits for the routing ACK: `delivery` is `delivered` (the destination
 acknowledged), `relayed` (only our radio heard a neighbor rebroadcast it), `nak:<reason>`
 or `no_ack`. A broadcast is never acknowledged; `wait_for_tx=True` looks for the
@@ -358,7 +364,8 @@ tx_confirmed?, tx_unconfirmed_reason?}`.
 | `text` | string | `null` | A text message. |
 | `position` | object | `null` | `{latitude, longitude, altitude?}` to send as a position. |
 | `waypoint` | object | `null` | `{name, latitude, longitude, description?, icon?, expire?}`. |
-| `request` | `traceroute` \| `telemetry` | `null` | `traceroute` or `telemetry` (device metrics), sent to `to`. |
+| `request` | `traceroute` \| `telemetry` \| `position` \| `neighbor_info` \| `node_info` | `null` | `traceroute`, `telemetry`, `position`, `neighbor_info` or `node_info` (sends ours, asks for theirs), sent to `to`. |
+| `telemetry` | `device` \| `environment` \| `air_quality` \| `power` \| `local_stats` \| `health` \| `host` | `"device"` | Which metrics a `telemetry` request asks for. |
 | `channel` | integer | `0` | The channel index to send on. |
 | `want_ack` | boolean | `false` | Ask the destination to acknowledge a direct text. |
 | `hop_limit` | integer | `null` | Hops the packet may take; omit for the radio's setting. |
@@ -371,16 +378,18 @@ Destructive, idempotent, open world.
 
 Import channels from a Meshtastic channel URL.
 
-Replaces the device's channel set with the channels encoded in `url`. Idempotent:
-applying the same URL twice leaves identical channel state.
+Replaces the device's channel set with the channels encoded in `url`, or with
+`add_only=True` adds the URL's channels whose names the radio lacks and leaves the rest.
+Idempotent: applying the same URL twice leaves identical channel state.
 
-Returns `{ok, channels_imported}`.
+Returns `{ok, target, channels_imported, channels_added?}`.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
 | `url` | string | required | A Meshtastic channel URL, such as `inspect(what="url")` returns. |
-| `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
+| `port` | string | `null` | A device name from `devices`, a serial port or `tcp://host[:port]`; omit for the one attached radio. |
+| `add_only` | boolean | `false` | Add new channels into free slots instead of replacing the set. |
 
 ### `wait_for`
 

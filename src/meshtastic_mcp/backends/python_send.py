@@ -88,6 +88,85 @@ def _ack(reply: _Reply, my_num: int, dest_num: int | None) -> dict[str, Any]:
     return out
 
 
+TELEMETRY = {
+    "device": "device_metrics",
+    "environment": "environment_metrics",
+    "air_quality": "air_quality_metrics",
+    "power": "power_metrics",
+    "local_stats": "local_stats",
+    "health": "health_metrics",
+    "host": "host_metrics",
+}
+REQUESTS = (
+    "traceroute",
+    "position",
+    "neighbor_info",
+    "node_info",
+    *(f"telemetry:{v}" for v in TELEMETRY),
+)
+_ANSWERS = ("traceroute", "telemetry", "position", "neighborinfo", "user")
+
+
+def _answer(decoded: dict[str, Any]) -> Any:
+    for key in _ANSWERS:
+        if key in decoded:
+            return decoded[key]
+    return None
+
+
+def _hops(iface: Any, hop_limit: int | None) -> int | None:
+    """The caller's hop limit, else the radio's own; firmware answers a request only within it."""
+    if hop_limit:
+        return hop_limit
+    node = getattr(iface, "localNode", None)
+    lora = getattr(getattr(node, "localConfig", None), "lora", None)
+    own = int(getattr(lora, "hop_limit", 0) or 0)
+    return own or None
+
+
+def _request(
+    iface: Any, dest: str | int, what: str, reply: _Reply, channel: int, hop_limit: int | None
+) -> Any:
+    """Ask `dest` for something. Firmware routes a request only with want_ack set and a hop limit,
+    and a position request without want_ack keeps a hop limit of zero."""
+    common: dict[str, Any] = {
+        "destinationId": dest,
+        "wantAck": True,
+        "wantResponse": True,
+        "onResponse": reply.on_response,
+        "channelIndex": channel,
+        "hopLimit": _hops(iface, hop_limit),
+    }
+    if what == "traceroute":
+        return iface.sendData(
+            mesh_pb2.RouteDiscovery(), portNum=portnums_pb2.PortNum.TRACEROUTE_APP, **common
+        )
+    if what == "telemetry" or what.startswith("telemetry:"):
+        variant = TELEMETRY.get(what.partition(":")[2] or "device")
+        if variant is None:
+            raise BackendError(f"telemetry variant {what!r}: choose from {sorted(TELEMETRY)}")
+        request = telemetry_pb2.Telemetry()
+        getattr(request, variant).SetInParent()  # firmware ignores a request naming no variant
+        return iface.sendData(request, portNum=portnums_pb2.PortNum.TELEMETRY_APP, **common)
+    if what == "position":
+        return iface.sendData(
+            mesh_pb2.Position(), portNum=portnums_pb2.PortNum.POSITION_APP, **common
+        )
+    if what == "neighbor_info":
+        return iface.sendData(
+            mesh_pb2.NeighborInfo(), portNum=portnums_pb2.PortNum.NEIGHBORINFO_APP, **common
+        )
+    if what == "node_info":
+        user = ((iface.nodesByNum or {}).get(iface.myInfo.my_node_num) or {}).get("user") or {}
+        ours = mesh_pb2.User(
+            id=str(user.get("id", "")),
+            long_name=str(user.get("longName", "")),
+            short_name=str(user.get("shortName", "")),
+        )
+        return iface.sendData(ours, portNum=portnums_pb2.PortNum.NODEINFO_APP, **common)
+    raise BackendError(f"request={what!r}: choose from {list(REQUESTS)}")
+
+
 def send(
     target: str | None,
     to: str | int | None,
@@ -144,35 +223,15 @@ def send(
                 wantAck=False,
                 **common,
             )
-        elif kind == "request" and value == "traceroute":
-            route = mesh_pb2.RouteDiscovery()
-            packet = iface.sendData(
-                route,
-                destinationId=dest,
-                portNum=portnums_pb2.PortNum.TRACEROUTE_APP,
-                wantResponse=True,
-                onResponse=reply.on_response,
-                channelIndex=channel,
-                hopLimit=hop_limit or 7,
-            )
-        elif kind == "request" and value == "telemetry":
-            request = telemetry_pb2.Telemetry()
-            request.device_metrics.SetInParent()
-            packet = iface.sendData(
-                request,
-                destinationId=dest,
-                portNum=portnums_pb2.PortNum.TELEMETRY_APP,
-                wantResponse=True,
-                onResponse=reply.on_response,
-                **common,
-            )
+        elif kind == "request":
+            packet = _request(iface, dest, str(value), reply, channel, hop_limit)
         else:
             raise BackendError(f"cannot send {kind}={value!r}")
         out: dict[str, Any] = {
             "target": getattr(iface, "devPath", None) or target,
             "packet_id": getattr(packet, "id", None),
             "destination": dest if isinstance(dest, str) else f"!{dest:08x}",
-            "kind": kind if kind != "request" else str(value),
+            "kind": kind if kind != "request" else str(value).partition(":")[0],
         }
         if waits:
             reply.done.wait(wait_s)
@@ -186,7 +245,7 @@ def send(
                 ):
                     out["reply"] = {"error": decoded["routing"]["errorReason"]}
                 else:
-                    out["reply"] = _clean(decoded.get("traceroute") or decoded.get("telemetry"))
+                    out["reply"] = _clean(_answer(decoded))
             else:
                 out.update(_ack(reply, my_num, dest_num))
         # A broadcast still needs the port held while it waits its turn on the air.

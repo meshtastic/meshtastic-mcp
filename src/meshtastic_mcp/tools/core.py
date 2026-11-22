@@ -273,6 +273,7 @@ def configure(
     restore: str | None = None,
     dry_run: bool = False,
     timeout_s: float = 45.0,
+    dest: str | None = None,
 ) -> ConfigureResult:
     """Change a radio's config or owner, or restore a snapshot, and read every change back.
 
@@ -292,13 +293,22 @@ def configure(
         node: A device name from `devices`, a serial port or `tcp://host[:port]`; omit to
             use the one attached radio.
         changes: Dot-path to value, such as `{"lora.region": "EU_868", "device.role":
-            "CLIENT_MUTE", "owner.long_name": "Base"}`. Enum fields take their name.
-            `owner.long_name` and `owner.short_name` set the owner.
+            "CLIENT_MUTE", "owner.long_name": "Base"}`. Enum fields take their name. Also:
+            `owner.long_name`, `owner.short_name`, `owner.is_licensed` (ham mode, no
+            encryption), `owner.is_unmessagable`; `channel.N.name`, `channel.N.psk`
+            (`random`, `default`, `none` or base64), `channel.N.role`, any other
+            `channel.N.<settings field>`, and `channel.N.delete: true`; `fixed_position`
+            (`{latitude, longitude, altitude?}`, or null to clear it); `canned_messages`
+            (a list or `a|b|c`); `ringtone` (RTTTL).
         restore: A snapshot name, from an earlier `configure` or `config_snapshot`, to put
             back; combined with `changes`, the changes apply on top. A radio's own keys are
             never restored from a snapshot.
         dry_run: Report the changes without writing anything.
         timeout_s: Seconds the whole call may take, the restart and read-back included.
+        dest: Another node's id (`!c2c91376`) to configure over the mesh instead of the
+            attached radio. That node must list this radio's public key in its
+            `security.admin_key`; no snapshot is taken, and config sections are read back
+            from it while owner, channel and other changes are reported as `unverified`.
     """
     if not changes and restore is None:
         raise ToolError("pass `changes`, `restore`, or both")
@@ -313,7 +323,7 @@ def configure(
             held = leases.claim(connection.resolve_port(node), ttl_s=120, holder="configure")
         backend = backends.for_target(node)
         result = backend.configure(
-            node, changes, saved, dry_run, min(timeout_s, 55.0), _save_configure_snapshot
+            node, changes, saved, dry_run, min(timeout_s, 55.0), _save_configure_snapshot, dest
         )
     except (backends.BackendError, connection.ConnectionError, leases.LeaseError) as exc:
         raise ToolError(str(exc)) from exc
@@ -406,20 +416,28 @@ def get_channel_url(include_all: bool = False, port: str | None = None) -> dict[
 
 @app.tool()
 @meta("destructive", open_world=True, idempotent=True)
-def set_channel_url(url: str, port: str | None = None) -> SetChannelUrlResult:
+def set_channel_url(
+    url: str, port: str | None = None, add_only: bool = False
+) -> SetChannelUrlResult:
     """Import channels from a Meshtastic channel URL.
 
-    Replaces the device's channel set with the channels encoded in `url`. Idempotent:
-    applying the same URL twice leaves identical channel state.
+    Replaces the device's channel set with the channels encoded in `url`, or with
+    `add_only=True` adds the URL's channels whose names the radio lacks and leaves the rest.
+    Idempotent: applying the same URL twice leaves identical channel state.
 
-    Returns `{ok, channels_imported}`.
+    Returns `{ok, target, channels_imported, channels_added?}`.
 
     Args:
         url: A Meshtastic channel URL, such as `inspect(what="url")` returns.
-        port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
-            Meshtastic device.
+        port: A device name from `devices`, a serial port or `tcp://host[:port]`; omit for
+            the one attached radio.
+        add_only: Add new channels into free slots instead of replacing the set.
     """
-    return cast(SetChannelUrlResult, admin_mod.set_channel_url(url=url, port=port))
+    try:
+        result = backends.for_target(port).import_channels(port, url, add_only, 10.0)
+    except (backends.BackendError, connection.ConnectionError) as exc:
+        raise ToolError(str(exc)) from exc
+    return cast(SetChannelUrlResult, result)
 
 
 @app.tool()
@@ -603,17 +621,22 @@ def send(
     text: str | None = None,
     position: dict[str, float] | None = None,
     waypoint: dict[str, Any] | None = None,
-    request: Literal["traceroute", "telemetry"] | None = None,
+    request: Literal["traceroute", "telemetry", "position", "neighbor_info", "node_info"]
+    | None = None,
+    telemetry: Literal[
+        "device", "environment", "air_quality", "power", "local_stats", "health", "host"
+    ] = "device",
     channel: int = 0,
     want_ack: bool = False,
     hop_limit: int | None = None,
     wait_s: float = 30.0,
     wait_for_tx: bool = False,
 ) -> SendResult:
-    """Send a text, position or waypoint over the mesh, or ask a node for a traceroute or telemetry.
+    """Send a text, position or waypoint over the mesh, or ask a node for something.
 
     Pass exactly one of `text`, `position`, `waypoint` or `request`. A request waits up to
-    `wait_s` and returns the node's answer as `reply` (null if none came). A direct text with
+    `wait_s` and returns the node's answer as `reply` (null if none came); it goes with
+    want_ack and the radio's own hop limit, which firmware needs to answer. A direct text with
     `want_ack=True` waits for the routing ACK: `delivery` is `delivered` (the destination
     acknowledged), `relayed` (only our radio heard a neighbor rebroadcast it), `nak:<reason>`
     or `no_ack`. A broadcast is never acknowledged; `wait_for_tx=True` looks for the
@@ -632,7 +655,9 @@ def send(
         text: A text message.
         position: `{latitude, longitude, altitude?}` to send as a position.
         waypoint: `{name, latitude, longitude, description?, icon?, expire?}`.
-        request: `traceroute` or `telemetry` (device metrics), sent to `to`.
+        request: `traceroute`, `telemetry`, `position`, `neighbor_info` or `node_info`
+            (sends ours, asks for theirs), sent to `to`.
+        telemetry: Which metrics a `telemetry` request asks for.
         channel: The channel index to send on.
         want_ack: Ask the destination to acknowledge a direct text.
         hop_limit: Hops the packet may take; omit for the radio's setting.
@@ -645,7 +670,7 @@ def send(
             ("text", text),
             ("position", position),
             ("waypoint", waypoint),
-            ("request", request),
+            ("request", f"telemetry:{telemetry}" if request == "telemetry" else request),
         )
         if v is not None
     }
@@ -847,6 +872,8 @@ async def admin(
         "ignore",
         "unignore",
         "remove_node",
+        "set_time",
+        "add_contact",
     ],
     node: str | None = None,
     node_id: str | int | None = None,
@@ -854,6 +881,9 @@ async def admin(
     wait_back: bool = True,
     confirm: bool = False,
     timeout_s: float = 45.0,
+    dest: str | None = None,
+    time_s: int | None = None,
+    contact_url: str | None = None,
 ) -> AdminResult:
     """Restart, power off or reset a radio, or edit its node DB.
 
@@ -862,9 +892,10 @@ async def admin(
     `unfavorite`, `ignore`, `unignore` and `remove_node` act on `node_id` in the radio's node
     DB and need no confirmation. After a restart, `wait_back` waits until the radio answers
     again: `back` says it did, and `restarted` is read from its uptime. `factory_reset` keeps
-    the identity and keys; `factory_reset_full` replaces them.
+    the identity and keys; `factory_reset_full` replaces them. `set_time` sets the radio's
+    clock; `add_contact` adds a node from its contact URL (`inspect(what="contact_url")`).
 
-    Returns `{target, action, ok, node_id?, back?, restarted?, uptime_s?, error?}`.
+    Returns `{target, action, ok, dest?, node_id?, time?, back?, restarted?, uptime_s?, error?}`.
 
     Args:
         action: What to do.
@@ -876,23 +907,47 @@ async def admin(
         confirm: `True` once the user agreed; omitted, a client that can ask prompts the
             human.
         timeout_s: Seconds the whole call may take, the wait included.
+        dest: Another node's id (`!c2c91376`) to act on over the mesh; it must list this
+            radio's public key in its `security.admin_key`. A remote restart is not watched.
+        time_s: For `set_time`, Unix seconds; omit for this host's clock.
+        contact_url: For `add_contact`, the contact URL (`https://meshtastic.org/v/#...`).
     """
     gated = _ADMIN_GATED.get(action)
     if gated is not None:
         what, irreversible = gated
         pending = await confirm_mod.gate(
-            ctx, what.format(node=node or "the default radio"), confirm, irreversible=irreversible
+            ctx,
+            what.format(node=dest or node or "the default radio"),
+            confirm,
+            irreversible=irreversible,
         )
         if pending is not None:
             return cast(AdminResult, pending)
     try:
         backend = backends.for_target(node)
         result = await _off_loop(
-            lambda: backend.admin(node, action, node_id, seconds, wait_back, min(timeout_s, 55.0))
+            lambda: backend.admin(
+                node,
+                action,
+                node_id,
+                seconds,
+                wait_back,
+                min(timeout_s, 55.0),
+                dest,
+                contact_url if action == "add_contact" else time_s,
+            )
         )
     except (backends.BackendError, connection.ConnectionError) as exc:
         raise ToolError(str(exc)) from exc
     return cast(AdminResult, result)
+
+
+async def _legacy_admin(port: str | None, action: str, seconds: int) -> None:
+    try:
+        backend = backends.for_target(port)
+        await _off_loop(lambda: backend.admin(port, action, None, seconds, False, 30.0))
+    except (backends.BackendError, connection.ConnectionError) as exc:
+        raise ToolError(str(exc)) from exc
 
 
 @app.tool()
@@ -918,10 +973,8 @@ async def reboot(
     )
     if pending is not None:
         return cast(RebootResult, pending)
-    return cast(
-        RebootResult,
-        await _off_loop(lambda: admin_mod.reboot(port=port, confirm=True, seconds=seconds)),
-    )
+    await _legacy_admin(port, "reboot", seconds)
+    return cast(RebootResult, {"ok": True, "rebooting_in_s": seconds})
 
 
 @app.tool()
@@ -947,10 +1000,8 @@ async def shutdown(
     )
     if pending is not None:
         return cast(ShutdownResult, pending)
-    return cast(
-        ShutdownResult,
-        await _off_loop(lambda: admin_mod.shutdown(port=port, confirm=True, seconds=seconds)),
-    )
+    await _legacy_admin(port, "shutdown", seconds)
+    return cast(ShutdownResult, {"ok": True, "shutting_down_in_s": seconds})
 
 
 @app.tool()
@@ -982,10 +1033,8 @@ async def factory_reset(
     )
     if pending is not None:
         return cast(FactoryResetResult, pending)
-    return cast(
-        FactoryResetResult,
-        await _off_loop(lambda: admin_mod.factory_reset(port=port, confirm=True, full=full)),
-    )
+    await _legacy_admin(port, "factory_reset_full" if full else "factory_reset", 0)
+    return cast(FactoryResetResult, {"ok": True, "full": full})
 
 
 @app.tool()
@@ -1013,16 +1062,24 @@ def send_input_event(
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
     """
-    return cast(
-        SendInputEventResult,
-        admin_mod.send_input_event(
-            event_code=event_code,
-            kb_char=kb_char,
-            touch_x=touch_x,
-            touch_y=touch_y,
-            port=port,
-        ),
-    )
+    from ..input_events import coerce_event_code
+
+    try:
+        code = coerce_event_code(event_code)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    for name, value, top in (
+        ("kb_char", kb_char, 255),
+        ("touch_x", touch_x, 65535),
+        ("touch_y", touch_y, 65535),
+    ):
+        if not 0 <= value <= top:
+            raise ToolError(f"{name}={value} is outside 0..{top}")
+    try:
+        result = backends.for_target(port).input_event(port, code, kb_char, touch_x, touch_y)
+    except (backends.BackendError, connection.ConnectionError) as exc:
+        raise ToolError(str(exc)) from exc
+    return cast(SendInputEventResult, result)
 
 
 def _capture_target(out_path: str) -> Path:

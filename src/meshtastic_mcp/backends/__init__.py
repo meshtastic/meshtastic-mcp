@@ -20,8 +20,8 @@ BACKEND_ENV = "MESHTASTIC_MCP_BACKEND"
 
 # The parts a read can ask for. Config sections are read through `config`. `url` carries the
 # channel keys, so only a read that names it gets it.
-PARTS = ("summary", "config", "channels", "nodes", "network", "url")
-UNSECRET_PARTS = tuple(p for p in PARTS if p != "url")
+PARTS = ("summary", "config", "channels", "nodes", "network", "url", "contact_url")
+UNSECRET_PARTS = tuple(p for p in PARTS if p not in ("url", "contact_url"))
 
 
 class BackendError(RuntimeError):
@@ -71,11 +71,12 @@ class Backend(Protocol):
         dry_run: bool,
         timeout_s: float,
         save_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+        dest: str | int | None = None,
     ) -> dict[str, Any]:
         """Apply `changes` (dot-paths) and/or `restore` (a snapshot's config), then read back.
 
         `save_snapshot(port, config)` stores the config as it was before any write and returns
-        what the result reports as `snapshot`.
+        what the result reports as `snapshot`. `dest` writes to another node over PKI admin.
         """
         ...
 
@@ -87,8 +88,26 @@ class Backend(Protocol):
         seconds: int,
         wait_back: bool,
         timeout_s: float,
+        dest: str | int | None = None,
+        value: Any = None,
     ) -> dict[str, Any]:
-        """Run a radio-level `action`; `wait_back` waits for a restarted radio to answer."""
+        """Run a radio-level `action`; `wait_back` waits for a restarted radio to answer.
+
+        `dest` sends it to another node over PKI admin; `value` is the action's argument
+        (`set_time` seconds, `add_contact` URL).
+        """
+        ...
+
+    def import_channels(
+        self, target: str | None, url: str, add_only: bool, timeout_s: float
+    ) -> dict[str, Any]:
+        """Import a channel URL: replace the channel set, or with `add_only` add new ones."""
+        ...
+
+    def input_event(
+        self, target: str | None, event_code: int, kb_char: int, touch_x: int, touch_y: int
+    ) -> dict[str, Any]:
+        """Inject an input event (button, key, touch) into the radio's UI."""
 
     def send(
         self,

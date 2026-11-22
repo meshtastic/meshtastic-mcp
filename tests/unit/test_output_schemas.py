@@ -73,8 +73,10 @@ def test_doctor_result_satisfies_its_schema(server) -> None:
 
 
 def test_device_info_result_satisfies_its_schema(server, monkeypatch) -> None:
+    from meshtastic_mcp import info
+
     monkeypatch.setattr(
-        server.info,
+        info,
         "device_info",
         lambda port=None, timeout_s=8.0: {
             "port": "/dev/ttyACM0",
@@ -110,7 +112,7 @@ def test_list_nodes_result_satisfies_its_schema(server, monkeypatch) -> None:
         }
     )
     bare = info._node_record({"num": 5})
-    monkeypatch.setattr(server.info, "list_nodes", lambda port=None, timeout_s=8.0: [node, bare])
+    monkeypatch.setattr(info, "list_nodes", lambda port=None, timeout_s=8.0: [node, bare])
     result = _call(server, "list_nodes")
     assert result.is_error is False
     rows = result.structured_content["result"]
@@ -198,8 +200,11 @@ class _Node:
     def writeConfig(self, section) -> None:
         pass
 
-    def setURL(self, url) -> None:
+    def setURL(self, url, addOnly=False) -> None:
         self.channels = [SimpleNamespace(role=1), SimpleNamespace(role=2), SimpleNamespace(role=0)]
+
+    def factoryReset(self, full=False) -> None:
+        pass
 
     def reboot(self, secs=10) -> None:
         pass
@@ -207,7 +212,7 @@ class _Node:
     def shutdown(self, secs=10) -> None:
         pass
 
-    def _sendAdmin(self, msg) -> None:
+    def _sendAdmin(self, msg, **_kwargs) -> None:
         self.sent.append(msg)
 
 
@@ -229,6 +234,13 @@ def iface(monkeypatch) -> _Iface:
         yield fake
 
     monkeypatch.setattr(admin, "connect", connect)
+    # The intent tools and their legacy adapters reach the radio through the backends.
+    from meshtastic_mcp import backends, connection
+    from meshtastic_mcp.backends import python_admin
+
+    monkeypatch.setattr(connection, "connect", connect)
+    monkeypatch.setattr(python_admin.time, "sleep", lambda _s: None)
+    monkeypatch.delenv(backends.BACKEND_ENV, raising=False)
     monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
     return fake
 
