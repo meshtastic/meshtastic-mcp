@@ -293,7 +293,7 @@ Returns `{dest_dir, paths, window}`; `paths` maps each stream to its file and
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `start` | string | required | Slice start, as in `logs_window`. |
+| `start` | string | required | Slice start, `-15m`, `-2h`, `now` or ISO 8601. |
 | `end` | string | required | Slice end, in the same forms. |
 | `dest_dir` | string | required | The directory to write into; created if missing. |
 | `streams` | list of string | `null` | Any of logs, telemetry, packets, events; omit for all four. |
@@ -327,7 +327,7 @@ Read-only, idempotent.
 Return recorder runtime info: running, paused, file sizes, last_ts per stream.
 
 Use this to sanity-check that capture is working before you trust a
-`logs_window` / `telemetry_timeline` result.
+`query` or `wait_for` result.
 
 ### `release`
 
@@ -350,7 +350,7 @@ want_ack and the radio's own hop limit, which firmware needs to answer. A direct
 acknowledged), `relayed` (only our radio heard a neighbor rebroadcast it), `nak:<reason>`
 or `no_ack`. A broadcast is never acknowledged; `wait_for_tx=True` looks for the
 firmware's `Started Tx` log line instead, which needs `security.debug_log_api_enabled`.
-A radio cannot see its own sends in `packets_window`; check a second radio with
+A radio cannot see its own sends in the recorder's packets; check a second radio with
 `wait_for`.
 
 Returns `{target, packet_id, destination, kind, delivery?, ack_from?, reply?, waited_s?,
@@ -503,7 +503,7 @@ it with reading untrusted mesh content in one task without a human review. Retur
 | `ms` | integer | `null` | Android `swipe` duration in milliseconds. |
 | `text` | string | `null` | The string for `type_text`, or the message for desktop `send_text`. |
 | `url` | string | `null` | iOS `open_url`: the URL to open; pass this or `port`. |
-| `port` | integer | `null` | iOS `open_url`: host TCP port of a node such as a `replay_start` session. |
+| `port` | integer | `null` | iOS `open_url`: host TCP port of a node such as a `sim` session. |
 | `name_contains` | string | `null` | iOS `boot`: boot the first available simulator whose name has this. |
 | `address` | string | `null` | Desktop `connect`: a BLE MAC, or an app address (`x<mac>`, `t<host>`, `s<port>`). |
 | `wait_seconds` | integer | `null` | Desktop `connect` and `send_text`: how long to wait for the result. |
@@ -585,7 +585,7 @@ Capture matching Android and iOS screenshots of the apps on one simulated mesh.
 
 Serves each app a replay node from one seed and connects both, then opens each of
 `screens` by deep link and screenshots it in each appearance. Returns `{job_id, status,
-log_path, out_dir}` at once; poll `screenshot_set_poll`. PNGs land in
+log_path, out_dir}` at once; follow it with `job`. PNGs land in
 `<out_dir>/<screen>/<platform>-<appearance>.png`. Needs a running emulator with
 Meshtastic-Android, a booted Simulator with Meshtastic-Apple 2.7.28+ past onboarding,
 and idb; a platform that cannot be driven is skipped. Connecting switches each app to
@@ -654,8 +654,8 @@ Destructive, open world.
 
 Drive the device UI with input steps and capture the mirrored screen after each.
 
-One connection covers the whole walkthrough. Returns a `job_id` at once; poll
-`drive_display_poll`. Each step reports `changed_px` against the previous snapshot; 0
+One connection covers the whole walkthrough. Returns a `job_id` at once; follow it
+with `job`. Each step reports `changed_px` against the previous snapshot; 0
 means the UI ignored the input or it was a no-op.
 
 These are real key presses: Enter (`SELECT`, `SELECT_LONG`) in a focused MUI text
@@ -699,11 +699,10 @@ Destructive.
 Build firmware for one env with `pio run -e <env>`.
 
 Runs as an MCP background task when the client supports them (`[tasks]` extra);
-otherwise the call blocks for the whole compile, so use `build_start` + `build_poll`
-there. Canceling the task stops the build; an abandoned call keeps building, and
-`build_poll(build_id=<job_id>)` reads it. A failed build is a tool error. A finished
-build is perishable: another session's build in the shared tree can delete it, so flash
-it at once. See docs/firmware-builds.md.
+otherwise the call blocks for the whole compile. Canceling the task stops the build; an
+abandoned call keeps building, and `job(job_id, wait_s=...)` follows it. A failed build
+is a tool error. A finished build is perishable: another session's build in the shared
+tree can delete it, so flash it at once. See docs/firmware-builds.md.
 
 Returns `{job_id, status, exit_code, artifacts, duration_s, log_tail, worker_error,
 build_flags}`, with artifacts under `.pio/build/<env>/` and the last 200 log lines.
@@ -843,9 +842,9 @@ disable GPS for bench-test conditions.
 
 For a multi-device test cluster, pass the same `psk_seed` to every call so every device
 shares the same PSK and lands on the same isolated mesh. The returned dict is ready to
-pass straight to `build`, `pio_flash`, `erase_and_flash`, or `update_flash` via their
-`userprefs` parameter, e.g. `userprefs_testing_profile(psk_seed="ci-run-2026-04-16")`
-then `erase_and_flash(env="tbeam", port=..., confirm=True, userprefs=profile)`.
+pass straight to `build` or `install` via their `userprefs` parameter, e.g.
+`userprefs_testing_profile(psk_seed="ci-run-2026-04-16")` then
+`install(port=..., source={"env": "tbeam"}, erase=True, confirm=True, userprefs=profile)`.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -895,7 +894,7 @@ Read-only, idempotent, open world.
 
 Copy CURRENT.UF2 (the installed application) off a board's UF2 drive into the data dir.
 
-The dump restores byte-for-byte with `nrf52_flash_uf2`; take one before flashing. Reads
+The dump restores byte-for-byte with `install`; take one before flashing. Reads
 only; the board stays in UF2 mode. Returns the backup's path.
 
 | Parameter | Type | Default | Description |
@@ -1008,8 +1007,8 @@ Open a `pio device monitor` session reading from `port`.
 
 Needs PlatformIO and `MESHTASTIC_FIRMWARE_ROOT`. The session holds the port until
 `serial_close`, so the admin tools cannot use it meanwhile. Returns `{session_id,
-resolved_baud, resolved_filters, env}`: the `session_id` for `serial_read` /
-`serial_close`, plus the baud and filters pio resolved.
+resolved_baud, resolved_filters, env}`: the `session_id` for `serial_close`, plus the
+baud and filters pio resolved. The output lands in the recorder for `query`.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -1261,7 +1260,7 @@ Destructive, open world.
 Capture the BLE air in the background: the phone-to-node link, from outside.
 
 The independent check when the app says "no devices found" and the node says
-"advertising". Returns a `job_id` at once; poll `ble_sniff_poll`. See
+"advertising". Returns a `job_id` at once; follow it with `job`. See
 docs/ble-sniffer.md.
 
 | Parameter | Type | Default | Description |
@@ -1296,7 +1295,7 @@ Stop a running capture. The pcap written so far is kept and summarized.
 
 The pcap has no trailer, so a terminated capture is a valid file; open `pcap_path` in
 Wireshark for the per-packet view this summary flattens. The summary carries the same
-untrusted device names as `ble_sniff_poll`.
+untrusted device names as `job` on the capture.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -1453,7 +1452,7 @@ UNSET. The board reboots (~7 s). See docs/vanity.md.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `lease` | string | `null` | The handle from `claim` while you hold this device; omit for a device nobody has claimed. |
-| `private_key` | string | required | The vanity private key, hex or base64, as `vanity_grind_poll` or `vanity_preview` shows it. |
+| `private_key` | string | required | The vanity private key, hex or base64, as `job` on a grind or `vanity_preview` shows it. |
 | `port` | string | `null` | Serial port or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device. |
 | `confirm` | boolean | `false` | `True` once the user agreed; omitted, a client that can ask prompts the human. |
 | `verify` | boolean | `true` | Reconnect after the reboot and check the new number. |
@@ -1465,7 +1464,7 @@ Destructive.
 
 Grind for a keypair whose node id / app color matches, in the background.
 
-Returns a `job_id` in under a second; poll `vanity_grind_poll`. Ask for an id, a color,
+Returns a `job_id` in under a second; follow it with `job`. Ask for an id, a color,
 or both; an impossible pair is rejected in the job log. Hits are private keys, written
 to a 0600 file and returned by the poll: treat them as secrets. See docs/vanity.md.
 
@@ -1965,7 +1964,7 @@ Returns `{events, total_matched, dropped, window}`.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `start` | string | `"-1h"` | Window start, as in `logs_window`. |
+| `start` | string | `"-1h"` | Window start, `-15m`, `-2h`, `now` or ISO 8601. |
 | `end` | string | `"now"` | Window end, in the same forms. |
 | `kind` | string | `null` | One of recorder_start, recorder_pause, recorder_resume, connection_established, connection_lost, node_updated, mark. Pipe-separated sets ("connection_lost\|connection_established") work. |
 | `max` | integer | `200` | Cap on the events returned. |
@@ -2253,7 +2252,7 @@ never appear.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `start` | string | `"-5m"` | Window start, as in `logs_window`. |
+| `start` | string | `"-5m"` | Window start, `-15m`, `-2h`, `now` or ISO 8601. |
 | `end` | string | `"now"` | Window end, in the same forms. |
 | `portnum` | string | `null` | One port name, or a pipe-separated set like "TEXT_MESSAGE_APP\|POSITION_APP". |
 | `from_node` | string | `null` | Only packets from this node. |

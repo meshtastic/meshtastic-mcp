@@ -133,7 +133,7 @@ def screenshot_set_start(
 
     Serves each app a replay node from one seed and connects both, then opens each of
     `screens` by deep link and screenshots it in each appearance. Returns `{job_id, status,
-    log_path, out_dir}` at once; poll `screenshot_set_poll`. PNGs land in
+    log_path, out_dir}` at once; follow it with `job`. PNGs land in
     `<out_dir>/<screen>/<platform>-<appearance>.png`. Needs a running emulator with
     Meshtastic-Android, a booted Simulator with Meshtastic-Apple 2.7.28+ past onboarding,
     and idb; a platform that cannot be driven is skipped. Connecting switches each app to

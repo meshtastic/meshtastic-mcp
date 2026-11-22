@@ -162,6 +162,28 @@ OPT_IN = frozenset({LEGACY, "firmware", "android", "apple", "rf", "sdk", "displa
 
 log = logging.getLogger(__name__)
 
+# What each group is for, in the generated table in docs/toolsets.md.
+SUMMARIES: dict[str, str] = {
+    CORE: "The device intents, leases, long work, the recorder and its queries, config"
+    " snapshots, frame injection and `doctor`. Needs only the base install and a radio.",
+    "app": "One entry point over the Android, iOS and desktop app drivers. Desktop actions"
+    " need `MESHTASTIC_MCP_DESKTOP_URL`.",
+    "hardware": "Flashing (`install`), vendor tools (`vendor`), the nRF52 UF2 bootloader,"
+    " raw serial sessions that feed the recorder, and hub power.",
+    "replay": "The simulated radio and frame injection into it.",
+    "firmware": "Builds, boards and userPrefs from a firmware tree. Registered only with"
+    " `MESHTASTIC_FIRMWARE_ROOT`; `install` builds without this group.",
+    "display": "The device's own screen, and the webcam (the `[ui]` extra).",
+    "android": "Android tools `app` does not cover.",
+    "apple": "iOS tools `app` does not cover, and matching Android and iOS screenshot sets.",
+    "tak": "The ATAK emulator fleet and the CoT relay.",
+    "rf": "The SDR oracle, the power meter, the BLE sniffer and vanity keys.",
+    "sdk": "Nothing of its own; the SDK backend runs under the device intents with"
+    " `MESHTASTIC_MCP_BACKEND=sdk`.",
+    LEGACY: "The pre-1.0 tools a newer tool replaces. A call to one by name while it is"
+    " hidden returns the call that replaces it.",
+}
+
 # Groups 0.x advertised that 1.0 no longer has: a config that names one still starts.
 RETIRED = {
     "discord": "the discord_* tools moved to the separate meshtastic-mcp-discord server",

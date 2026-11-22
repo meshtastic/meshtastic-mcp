@@ -144,7 +144,7 @@ PROFILE: dict = {
     "plugged_fraction": 0.12,
     # ATAK squad (opt-in): when team_nodes > 0, a squad emits TAKPacket PLI +
     # GeoChat + status (portnum 72). Off by default — no TAK traffic appeared
-    # in the real captures. See WS-A in docs/sim-realism-plan.md.
+    # in the real captures.
     # ``wire``: "v1" (default) emits the legacy uncompressed TAKPacket; "v2"
     # emits real zstd-dictionary-compressed TAKPacketV2 payloads and requires
     # the meshtastic-tak SDK (the `tak` dependency group) — see replay/tak.py.

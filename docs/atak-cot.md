@@ -203,13 +203,12 @@ Captured CoT is remote-authored TAK content, attacker-controllable. The full
 events (marker/GeoChat bodies included) are written to the capture files on disk;
 `cot_relay_status` itself returns only the per-peer **callsign** plus counts. Both
 the callsign it returns and the files it writes are untrusted (lethal-trifecta
-leg 2) — do not combine with `send_text` in one agentic task without human
+leg 2) — do not combine with `send` in one agentic task without human
 review. See `SECURITY.md`.
 
 ## `[android-fast]` extra (UI driving)
 
-With `meshtastic-mcp[android-fast]` installed, the existing `android_ui_dump` /
-`android_tap` / `android_type_text` MCP tools use a resident **uiautomator2**
+With `meshtastic-mcp[android-fast]` installed, the Android actions of `app` and `app_view` use a resident **uiautomator2**
 server under the hood: ~100× faster hierarchy dumps, dumps that work on animating
 screens, and Unicode-safe clipboard-paste input (no `input text` character
 mangling — the cause of stray keystrokes when the soft keyboard shifts the

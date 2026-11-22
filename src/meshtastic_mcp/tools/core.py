@@ -640,7 +640,7 @@ def send(
     acknowledged), `relayed` (only our radio heard a neighbor rebroadcast it), `nak:<reason>`
     or `no_ack`. A broadcast is never acknowledged; `wait_for_tx=True` looks for the
     firmware's `Started Tx` log line instead, which needs `security.debug_log_api_enabled`.
-    A radio cannot see its own sends in `packets_window`; check a second radio with
+    A radio cannot see its own sends in the recorder's packets; check a second radio with
     `wait_for`.
 
     Returns `{target, packet_id, destination, kind, delivery?, ack_from?, reply?, waited_s?,
@@ -1153,8 +1153,8 @@ def drive_display_start(
 ) -> dict[str, Any]:
     """Drive the device UI with input steps and capture the mirrored screen after each.
 
-    One connection covers the whole walkthrough. Returns a `job_id` at once; poll
-    `drive_display_poll`. Each step reports `changed_px` against the previous snapshot; 0
+    One connection covers the whole walkthrough. Returns a `job_id` at once; follow it
+    with `job`. Each step reports `changed_px` against the previous snapshot; 0
     means the UI ignored the input or it was a no-op.
 
     These are real key presses: Enter (`SELECT`, `SELECT_LONG`) in a focused MUI text
@@ -1511,7 +1511,7 @@ def packets_window(
     never appear.
 
     Args:
-        start: Window start, as in `logs_window`.
+        start: Window start, `-15m`, `-2h`, `now` or ISO 8601.
         end: Window end, in the same forms.
         portnum: One port name, or a pipe-separated set like
             "TEXT_MESSAGE_APP|POSITION_APP".
@@ -1545,7 +1545,7 @@ def events_window(
     Returns `{events, total_matched, dropped, window}`.
 
     Args:
-        start: Window start, as in `logs_window`.
+        start: Window start, `-15m`, `-2h`, `now` or ISO 8601.
         end: Window end, in the same forms.
         kind: One of recorder_start, recorder_pause, recorder_resume,
             connection_established, connection_lost, node_updated, mark. Pipe-separated
@@ -1585,7 +1585,7 @@ def recorder_status() -> dict[str, Any]:
     """Return recorder runtime info: running, paused, file sizes, last_ts per stream.
 
     Use this to sanity-check that capture is working before you trust a
-    `logs_window` / `telemetry_timeline` result.
+    `query` or `wait_for` result.
     """
     return get_recorder().status()
 
@@ -1633,7 +1633,7 @@ def recorder_export(
     `<stream>_count` to its row count.
 
     Args:
-        start: Slice start, as in `logs_window`.
+        start: Slice start, `-15m`, `-2h`, `now` or ISO 8601.
         end: Slice end, in the same forms.
         dest_dir: The directory to write into; created if missing.
         streams: Any of logs, telemetry, packets, events; omit for all four.

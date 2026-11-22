@@ -70,8 +70,8 @@ def serial_open(
 
     Needs PlatformIO and `MESHTASTIC_FIRMWARE_ROOT`. The session holds the port until
     `serial_close`, so the admin tools cannot use it meanwhile. Returns `{session_id,
-    resolved_baud, resolved_filters, env}`: the `session_id` for `serial_read` /
-    `serial_close`, plus the baud and filters pio resolved.
+    resolved_baud, resolved_filters, env}`: the `session_id` for `serial_close`, plus the
+    baud and filters pio resolved. The output lands in the recorder for `query`.
 
     Args:
         port: The serial port to read.
@@ -643,7 +643,7 @@ async def nrf52_enter_uf2(
 async def nrf52_backup_firmware(port: str | None = None) -> dict[str, Any]:
     """Copy CURRENT.UF2 (the installed application) off a board's UF2 drive into the data dir.
 
-    The dump restores byte-for-byte with `nrf52_flash_uf2`; take one before flashing. Reads
+    The dump restores byte-for-byte with `install`; take one before flashing. Reads
     only; the board stays in UF2 mode. Returns the backup's path.
 
     Args:

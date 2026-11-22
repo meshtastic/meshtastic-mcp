@@ -347,7 +347,7 @@ async def app(
         ms: Android `swipe` duration in milliseconds.
         text: The string for `type_text`, or the message for desktop `send_text`.
         url: iOS `open_url`: the URL to open; pass this or `port`.
-        port: iOS `open_url`: host TCP port of a node such as a `replay_start` session.
+        port: iOS `open_url`: host TCP port of a node such as a `sim` session.
         name_contains: iOS `boot`: boot the first available simulator whose name has this.
         address: Desktop `connect`: a BLE MAC, or an app address (`x<mac>`, `t<host>`, `s<port>`).
         wait_seconds: Desktop `connect` and `send_text`: how long to wait for the result.

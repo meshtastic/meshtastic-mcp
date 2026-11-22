@@ -141,9 +141,9 @@ indexed. 429s and index-warming 202s are honoured with Discord's `retry_after`, 
 ## Security
 
 Every message is untrusted, user-authored text from a public community server — the same
-posture as `packets_window` and `cot_relay_status`. The tools are `openWorldHint` so clients
+posture as `query` over mesh traffic and `cot_relay_status`. The tools are `openWorldHint` so clients
 can see untrusted content entering the session. Do not process Discord content and call
-`send_text` (or any other exfiltration path) in the same agentic task without human review.
+`send` (or any other exfiltration path) in the same agentic task without human review.
 The `trust` tier is a reading aid derived from public roles; it is not authentication and a
 hostile member cannot raise their own.
 

@@ -102,7 +102,8 @@ Beyond tools, the server exposes MCP resources (`meshtastic://doctor`,
 
 ## Configuration
 
-Set these in the environment of the server process, or in the client's `env` block.
+Set these in the environment of the server process, or in the client's `env` block. Every
+variable the server reads is in [docs/configuration.md](docs/configuration.md); these are the common ones.
 
 | Variable | Effect |
 | --- | --- |
@@ -141,6 +142,8 @@ Start here:
 - [docs/toolsets.md](docs/toolsets.md): toolsets, capabilities and trimming the tool list
 - [docs/safety.md](docs/safety.md): confirmations, leases, read-only mode, jobs, prompt injection
 - [docs/troubleshooting.md](docs/troubleshooting.md): symptom, cause, fix
+- [docs/configuration.md](docs/configuration.md): every environment variable
+- [docs/bench.md](docs/bench.md): a shared bench, leases, `doctor` checks and the call log
 - [docs/serve.md](docs/serve.md): one shared server for a bench
 
 Firmware and hardware:
@@ -152,6 +155,7 @@ Firmware and hardware:
 
 End-to-end testing:
 
+- [docs/e2e.md](docs/e2e.md): the app test loop against a simulated or real radio, and frame injection
 - [docs/replay.md](docs/replay.md): a simulated radio, the synthetic mesh, the fuzzer and live injection
 - [docs/atak-cot.md](docs/atak-cot.md), [docs/atak-cot-emission.md](docs/atak-cot-emission.md)
 - [docs/sdk-cli-bridge.md](docs/sdk-cli-bridge.md), [docs/nightly.md](docs/nightly.md)
