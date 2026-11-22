@@ -47,8 +47,9 @@ ENV_VARS: tuple[EnvVar, ...] = (
     EnvVar(
         "MESHTASTIC_MCP_CONFIRM",
         "Server",
-        "`human` makes irreversible tools ask the human even when the agent passes"
-        " `confirm=True`. See [safety.md](safety.md).",
+        "`human` (default): irreversible tools always ask a person, whatever `confirm` says."
+        " `agent` lets an agent's `confirm=True` run them, for an unattended bench."
+        " See [safety.md](safety.md).",
     ),
     EnvVar(
         "MESHTASTIC_MCP_BACKEND",

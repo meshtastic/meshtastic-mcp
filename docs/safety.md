@@ -4,24 +4,24 @@ An agent with this server can reboot, erase and reflash real radios, and it read
 
 ## The confirmation gate
 
-Every tool that can reboot, erase, reflash or rewrite a board takes a `confirm` argument. An agent can pass `confirm=True` for itself, so on its own it is not a human gate. The server asks the human instead whenever the client can show a prompt.
+Every tool that can reboot, erase, reflash or rewrite a board takes a `confirm` argument. An agent can pass `confirm=True` for itself, so on its own it is not a human gate. The server asks the human instead whenever the client can show a prompt, and an irreversible tool never takes the agent's `confirm=True` as an answer.
 
 | Call | Client declared elicitation | Client cannot ask |
 | --- | --- | --- |
 | `confirm` omitted or `False` | The human sees `Allow: <action>?`. Accept runs the tool; decline fails it and nothing runs. | Fails with `<action> is destructive and requires confirm=True`. |
-| `confirm=True` | Runs. | Runs. |
-| `confirm=True` on an irreversible tool with `MESHTASTIC_MCP_CONFIRM=human` | The human is asked anyway. | Fails with `<action> needs a human to confirm it`. |
+| `confirm=True` on a reversible tool | Runs. | Runs. |
+| Any call to an irreversible tool | The human is asked, whatever `confirm` says. | Fails with `Stopped: <action> cannot be undone`. The agent stops and tells the user. |
 
-`MESHTASTIC_MCP_CONFIRM` takes `agent` (the default) or `human`; any other value fails the gated call. A subagent or `claude -p` session cannot ask, so it keeps the `confirm=True` contract.
+`MESHTASTIC_MCP_CONFIRM` takes `human` (the default) or `agent`; any other value fails the gated call. `agent` lets an agent's `confirm=True` run an irreversible tool too, for an unattended bench whose boards are disposable.
 
 The gate runs before the tool takes a port lock or starts a job. An answer counts only for the prompt it was given for: a reply sent unasked, or a call retried with different arguments, is asked again.
 
 ### Which actions are gated
 
 - Asks for: `admin` restarts and resets, `install`, `inject_frame`, `pa_sweep`, `uhubctl_power` (`off` only), `uhubctl_cycle`, `push_fake_nodedb` (`target="hardware"` only), `nrf52_enter_uf2`, `nrf52_eject_uf2`.
-- Irreversible, so `human` policy asks even with `confirm=True`: the `admin` factory resets, `install` with `erase=True` or a bootloader update, `vanity_apply`, `atak_fleet_down` with `delete_clones=True`, `nrf52_factory_erase`, and every `vendor` call outside the read-only list.
+- Irreversible, so the human is asked even with `confirm=True`: the `admin` factory resets, `install` with `erase=True` or a bootloader update, `vanity_apply`, `atak_fleet_down` with `delete_clones=True`, `nrf52_factory_erase`, and every `vendor` call outside the read-only list.
 
-`vendor` looks at its subcommand first. `vendor(tool="esptool", args=["flash_id"])` never asks; `vendor(tool="esptool", args=["erase_flash"])` does. Only a short list of read-only subcommands runs without asking (esptool `chip_id`, `flash_id`, `read_mac` and the like, nrfutil `version` and `device list`, picotool `info`); any subcommand the list does not name asks, and counts as irreversible under `human` policy.
+`vendor` looks at its subcommand first. `vendor(tool="esptool", args=["flash_id"])` never asks; `vendor(tool="esptool", args=["erase_flash"])` does. Only a short list of read-only subcommands runs without asking (esptool `chip_id`, `flash_id`, `read_mac` and the like, nrfutil `version` and `device list`, picotool `info`); any subcommand the list does not name asks, and counts as irreversible.
 
 ### Over HTTP
 
@@ -29,7 +29,7 @@ With `meshtastic-mcp serve`, each client declares its own capabilities. A client
 
 ### For agents
 
-A refusal means the client could not ask. Tell the user what the tool would do and pass `confirm=True` only after they agree. Do not retry with `confirm=True` on your own.
+A refusal means the client could not ask. For a reversible tool, tell the user what it would do and pass `confirm=True` only after they agree. A `Stopped:` refusal is final for this client: report what the tool would destroy and stop. Never retry with `confirm=True` on your own.
 
 ## Leases
 

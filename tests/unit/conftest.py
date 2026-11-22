@@ -20,6 +20,8 @@ import pytest
 os.environ.setdefault("MESHTASTIC_MCP_DATA_DIR", tempfile.mkdtemp(prefix="mtmcp-unit-"))
 # The unit tier still covers the opt-in `legacy` tools, so its server lists them.
 os.environ.setdefault("MESHTASTIC_MCP_TOOLSETS", "all,legacy")
+# Tool tests pass `confirm=True` with no client to ask; the confirm tests set the policy themselves.
+os.environ.setdefault("MESHTASTIC_MCP_CONFIRM", "agent")
 
 
 @pytest.fixture(scope="session", autouse=True)

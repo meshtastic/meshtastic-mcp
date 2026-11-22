@@ -122,7 +122,7 @@ def resets(monkeypatch):
 
     calls: list[dict] = []
     _record_admin(monkeypatch, calls, ("confirm", "full"))
-    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
     return calls, server
 
 
@@ -170,9 +170,25 @@ def test_human_policy_refuses_a_client_that_cannot_ask(resets, monkeypatch) -> N
     assert calls == []
 
 
+def test_an_agent_cannot_confirm_an_irreversible_tool_by_default(resets, monkeypatch) -> None:
+    calls, server = resets
+    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    text = _reset(server, {"confirm": True}).content[0].text
+    assert calls == []
+    assert "Stopped" in text and "cannot be undone" in text
+    assert "confirm=True" not in text
+
+
+def test_agent_policy_lets_an_unattended_bench_confirm(resets, monkeypatch) -> None:
+    calls, server = resets
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
+    assert _reset(server, {"confirm": True}).is_error is False
+    assert len(calls) == 1
+
+
 def test_human_policy_does_not_ask_for_a_reversible_tool(reboots, monkeypatch) -> None:
     calls, server = reboots
-    assert confirm.policy({}) == "agent"
+    assert confirm.policy({}) == "human"
     assert confirm.policy({confirm.POLICY_ENV: "HUMAN"}) == "human"
     with pytest.raises(ValueError, match=confirm.POLICY_ENV):
         confirm.policy({confirm.POLICY_ENV: "sometimes"})

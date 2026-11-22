@@ -341,7 +341,7 @@ async def esptool_erase_flash(ctx: Context, port: str, confirm: bool = False) ->
 
     Prefer `erase_and_flash` which also writes firmware. Use this only for recovery when a
     device is in a weird state. Requires confirm=True, or the user's answer when the client
-    can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
+    can ask (always, unless `MESHTASTIC_MCP_CONFIRM=agent`).
 
     Args:
         port: The ESP32's serial port.
@@ -395,7 +395,7 @@ async def nrfutil_dfu(
     `-t 1200`. For a board already sitting in serial DFU, use `vendor(tool="nrfutil")` with no touch
     instead. On the Meshtastic bootloader `nrf52_flash_uf2` is several times faster; for
     firmware built from the tree prefer `pio_flash`. Requires confirm=True, or the user's
-    answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
+    answer when the client can ask (always, unless `MESHTASTIC_MCP_CONFIRM=agent`).
 
     Args:
         port: The app's serial port; a `/dev/serial/by-id` link works.
@@ -778,8 +778,8 @@ async def nrf52_flash_uf2(
     Several times faster than serial DFU, and no touch or DFU window is involved. The board
     must be in UF2 mode (`nrf52_enter_uf2`). Refuses a file that is not a UF2 and an image built
     for the other SoftDevice than the one INFO_UF2.TXT reports; a bootloader self-update image
-    (`update-*.uf2`) skips that check, says `bootloader_update: true`, and asks even with
-    confirm=True under `MESHTASTIC_MCP_CONFIRM=human`. Requires confirm=True, or the user's
+    (`update-*.uf2`) skips that check, says `bootloader_update: true`, and asks a person even with
+    confirm=True unless `MESHTASTIC_MCP_CONFIRM=agent`. Requires confirm=True, or the user's
     answer when the client can ask. Runs as a `flashes` job whose `job_id` is in the
     result and logged before the wait; follow it with `flash_poll` if the call is canceled. A
     copy the bootloader did not take is a tool error.
@@ -832,7 +832,7 @@ async def nrf52_factory_erase(
     Needs a bootloader whose INFO_UF2.TXT has a `Factory-Erase:` line (Meshtastic bootloader
     0.9.2-OTAFIX2.4 and later); older ones silently ignore the file, so this refuses them. The
     board must be in UF2 mode and returns to it after the erase. Requires confirm=True, or the
-    user's answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`).
+    user's answer when the client can ask (always, unless `MESHTASTIC_MCP_CONFIRM=agent`).
 
     Args:
         port: The board's app port, ideally its `/dev/serial/by-id` path; omit when only one

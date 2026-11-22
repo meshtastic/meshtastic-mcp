@@ -450,7 +450,7 @@ async def vanity_apply(
     Destructive: it replaces the node's identity. Peers keep the old public key until
     they see the new NodeInfo, and anything naming the old node (admin keys, DM history)
     must be re-pointed; keep the old key for a way back. Requires confirm=True, or the
-    user's answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`), a
+    user's answer when the client can ask (always, unless `MESHTASTIC_MCP_CONFIRM=agent`), a
     clamped key, and `lora.region` set, since firmware will not derive keys while it is
     UNSET. The board reboots (~7 s). See docs/vanity.md.
 

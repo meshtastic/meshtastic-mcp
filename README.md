@@ -109,7 +109,7 @@ variable the server reads is in [docs/configuration.md](docs/configuration.md); 
 | --- | --- |
 | `MESHTASTIC_MCP_TOOLSETS` | Comma-separated toolsets to expose. Unset is the default groups (`core`, `app`, `hardware`, `replay`); `all` adds the specialist groups; `legacy` comes only when named; `-group` drops one. |
 | `MESHTASTIC_MCP_READ_ONLY` | `1` hides every tool that can change state. |
-| `MESHTASTIC_MCP_CONFIRM` | `agent` (default) or `human`. `human` makes irreversible tools ask a person even when the agent passes `confirm=True`. |
+| `MESHTASTIC_MCP_CONFIRM` | `human` (default) or `agent`. By default irreversible tools always ask a person; `agent` lets an agent's `confirm=True` run them on an unattended bench. |
 | `MESHTASTIC_FIRMWARE_ROOT` | A firmware checkout. Registers the `firmware` toolset (build, flash, boards, userPrefs). |
 | `MESHTASTIC_MCP_DATA_DIR` | Where the server keeps leases, device names, jobs, logs and snapshots. Defaults to the platform user-data directory. |
 | `MESHTASTIC_MCP_BACKEND` | `python` or `sdk`. A `ble:` node always uses the SDK backend. |
@@ -123,8 +123,8 @@ command to fix each missing one.
 
 - Tools that reboot, erase, reflash or rewrite a board take `confirm`. A client that can show a
   prompt asks the human; one that cannot gets a refusal naming `confirm=True`.
-- `MESHTASTIC_MCP_CONFIRM=human` makes the irreversible tools ask a person even with
-  `confirm=True`. Over HTTP the prompt is not a human gate, so the bearer token is the boundary.
+- Irreversible tools (resets, erases, `vanity_apply`) always ask a person, whatever `confirm`
+  says; `MESHTASTIC_MCP_CONFIRM=agent` lifts that for an unattended bench. Over HTTP the prompt is not a human gate, so the bearer token is the boundary.
 - `claim` leases a radio so other sessions cannot use it, and `MESHTASTIC_MCP_READ_ONLY=1` removes
   every write tool.
 - Mesh text, app UI, logcat and Discord messages are untrusted input that can carry

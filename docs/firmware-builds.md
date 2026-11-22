@@ -76,7 +76,7 @@ nrf52_mount_uf2(port=P)                         # mount the drive where the host
 nrf52_eject_uf2(port=P)                         # unmount and eject it (asks first)
 ```
 
-Pass the board's app port, preferably its `/dev/serial/by-id/` path. The drive is matched by USB serial, and the by-id name still carries that serial after the link disappears in UF2 mode. The tools read the drive where the OS mounts it, so on a host that does not automount, mount it first. `nrf52_factory_erase` needs a bootloader whose `INFO_UF2.TXT` has a `Factory-Erase:` line. A bootloader self-update (`update-*.uf2`) installs the same way; it asks even with `confirm=True` under `MESHTASTIC_MCP_CONFIRM=human`.
+Pass the board's app port, preferably its `/dev/serial/by-id/` path. The drive is matched by USB serial, and the by-id name still carries that serial after the link disappears in UF2 mode. The tools read the drive where the OS mounts it, so on a host that does not automount, mount it first. `nrf52_factory_erase` needs a bootloader whose `INFO_UF2.TXT` has a `Factory-Erase:` line. A bootloader self-update (`update-*.uf2`) installs the same way; it asks even with `confirm=True` unless `MESHTASTIC_MCP_CONFIRM=agent`.
 
 Serial DFU still works: `install(port, source={"file": "fw.zip"})` does the 1200 baud touch itself, dropping DTR as the nRF52 core needs, and fails unless adafruit-nrfutil printed `Device programmed.`. A board left sitting in serial DFU takes the package with no touch:
 
