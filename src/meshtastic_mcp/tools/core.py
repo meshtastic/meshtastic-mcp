@@ -1425,15 +1425,16 @@ def release(lease: str) -> LeaseInfo:
 def wait_for(
     stream: Literal["packets", "logs", "telemetry", "events"],
     where: str = "true",
-    port: str | None = None,
+    node: str | None = None,
     since: str = "now",
     timeout_s: float = 30.0,
     max_rows: int = 20,
+    port: str | None = None,
 ) -> WaitForResult:
     """Hold a radio's connection and wait until it records a matching packet or log line.
 
     The recorder only captures a radio while something is connected to it, so this connects
-    to `port` for the whole wait, which is how to see a message arrive on a second radio.
+    to `node` for the whole wait, which is how to see a message arrive on a second radio.
     A text message that reached the radio before the wait is handed over when this connects,
     so send first, then wait. Returns `{matched, rows, columns, waited_s, port}` as soon as
     a row matches, or with `matched: false` after `timeout_s`.
@@ -1442,17 +1443,20 @@ def wait_for(
     Args:
         stream: The recorder view to watch, as in `query`.
         where: A SQL condition on that view's columns, such as
-            `portnum = 'TEXT_MESSAGE_APP' AND from_node = '!3a14aa13'`.
-        port: The radio to listen on: serial port or `tcp://host[:port]`; omit to
-            auto-select the one likely Meshtastic device.
+            `portnum = 'TEXT_MESSAGE_APP' AND text = 'hello'` or `id = 3120262355`.
+        node: The radio to listen on, as in `inspect`: a name from `devices`, a serial port
+            or `tcp://host[:port]`; omit to auto-select the one likely Meshtastic device.
         since: Match rows from this time on: "now" (the call's start), "-2m", or ISO 8601.
             Use a past time when the event may already have arrived.
         timeout_s: Seconds to wait, up to 55.
         max_rows: Cap on the matching rows returned.
+        port: The same as `node`.
     """
+    if node and port and node != port:
+        raise ToolError("pass the radio as `node` or `port`, not both")
     start = log_query._parse_time(since)
     try:
-        resolved = connection.resolve_port(port)
+        resolved = connection.resolve_port(node or port)
         with connection.connect(port=resolved):
             out = recorder_query.wait_for(
                 stream,
@@ -1475,7 +1479,8 @@ def query(sql: str, max_rows: int = recorder_query.DEFAULT_MAX_ROWS) -> QueryRes
 
     Returns `{columns, rows, row_count, truncated}`. Views: `logs` (firmware log lines),
     `telemetry` (one row per telemetry packet, `from_node` is the sender, `fields` is JSON),
-    `packets` (every received packet), `events` (connections, node updates, marks). Every view
+    `packets` (every received packet; `id` is the packet id and `text` the decoded text of a
+    text message), `events` (connections, node updates, marks). Every view
     has `ts` (epoch seconds), `time` (timestamp), `port` (the radio that recorded it) and
     `role`; the full column list is the `meshtastic://recorder/schema` resource. Read a JSON
     field with `fields->>'battery_level'`. Filter on `ts` for speed, such as

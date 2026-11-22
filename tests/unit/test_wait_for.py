@@ -134,3 +134,53 @@ def test_tool_holds_the_connection_for_the_whole_wait(base: Path, monkeypatch) -
     out = core.wait_for("packets")
     assert events == [f"open {RAK}", "wait", "close"]
     assert out["port"] == RAK and out["matched"] is True
+
+
+def test_text_column_matches_and_old_rows_without_it_read_as_null(base: Path) -> None:
+    now = time.time()
+    _append(base / "packets.jsonl", _text(now - 5))
+    _append(base / "packets.jsonl", {**_text(now - 4), "text": "eval-3f3ae579", "id": 7})
+    out = recorder_query.wait_for(
+        "packets", "text = 'eval-3f3ae579'", base=base, since=now - 60, port=RAK, timeout_s=1
+    )
+    assert out["matched"] is True and len(out["rows"]) == 1
+    assert out["rows"][0][out["columns"].index("id")] == 7
+
+
+def test_tool_takes_the_radio_as_node_like_the_other_intent_tools(base: Path, monkeypatch) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from fastmcp import Client
+
+    import meshtastic_mcp.server  # noqa: F401  registers every tool
+    from meshtastic_mcp.tools import core
+    from meshtastic_mcp.tools._app import app
+
+    opened: list[str] = []
+
+    @contextlib.contextmanager
+    def fake_connect(port=None, **_):
+        opened.append(port)
+        yield object()
+
+    monkeypatch.setattr(core.connection, "resolve_port", lambda p: f"resolved:{p}")
+    monkeypatch.setattr(core.connection, "connect", fake_connect)
+    monkeypatch.setattr(
+        core.recorder_query,
+        "wait_for",
+        lambda *a, **k: {"matched": False, "rows": [], "columns": [], "waited_s": 0.0},
+    )
+    monkeypatch.setattr(core, "get_recorder", lambda: SimpleNamespace(base_dir=base))
+
+    async def call(args: dict) -> tuple[bool, str]:
+        async with Client(app) as c:
+            r = await c.call_tool("wait_for", args, raise_on_error=False)
+            return r.is_error, r.content[0].text
+
+    err, _ = asyncio.run(call({"stream": "packets", "node": "james-pc/rak4631-1376"}))
+    assert not err and opened[-1] == "resolved:james-pc/rak4631-1376"
+    err, _ = asyncio.run(call({"stream": "packets", "port": "/dev/ttyACM1"}))
+    assert not err and opened[-1] == "resolved:/dev/ttyACM1"
+    err, text = asyncio.run(call({"stream": "packets", "node": "a", "port": "b"}))
+    assert err and "not both" in text
