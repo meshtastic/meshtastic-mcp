@@ -13,6 +13,7 @@ from fastmcp import Client, FastMCP
 from mcp.types import ElicitResult
 
 from meshtastic_mcp import confirm, uf2_host
+from tests.unit._tool_fns import tool_fn
 
 DRIVE_PATH = "/org/freedesktop/UDisks2/drives/Mesh_Meshtastic_UF2_7885014CB2C5B186"
 
@@ -124,7 +125,7 @@ def server():
 
 def _call(server, name, args, handler=None):
     app = FastMCP("t")
-    tool = getattr(server, name)
+    tool = tool_fn(name)
     app.tool()(getattr(tool, "fn", tool))
 
     async def run():

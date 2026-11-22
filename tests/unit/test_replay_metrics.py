@@ -24,6 +24,7 @@ from google.protobuf import text_format
 from meshtastic.protobuf import mesh_pb2
 
 from meshtastic_mcp.replay import capture, metrics, sim
+from meshtastic_mcp.tools import replay as tools_replay
 
 REPO = Path(__file__).resolve().parents[2]
 PROFILES = REPO / "src" / "meshtastic_mcp" / "replay" / "profiles"
@@ -558,7 +559,6 @@ def test_preset_profile_helper():
 
 
 def test_replay_start_sim_profile_override_dict_and_json():
-    from meshtastic_mcp import server
 
     common = {
         "kind": "auto",
@@ -569,24 +569,24 @@ def test_replay_start_sim_profile_override_dict_and_json():
         "sim_start": 1_700_000_000,
     }
     # dict override enables a TAK squad the presets leave off
-    cap = server._load_replay_capture("defcon", sim_profile={"tak": {"team_nodes": 4}}, **common)
+    cap = tools_replay._load_replay_capture(
+        "defcon", sim_profile={"tak": {"team_nodes": 4}}, **common
+    )
     assert metrics.capture_stats(cap)["tak_packets"] > 0
     # JSON-string override (as an MCP client passes it)
-    cap2 = server._load_replay_capture(
+    cap2 = tools_replay._load_replay_capture(
         "burningman",
         sim_profile='{"spikes": [{"start_h": 5, "hours": 1, "text_x": 12}]}',
         **common,
     )
     assert cap2.packets
     # no override still works
-    cap3 = server._load_replay_capture("defcon", **common)
+    cap3 = tools_replay._load_replay_capture("defcon", **common)
     assert metrics.capture_stats(cap3)["tak_packets"] == 0
 
 
 def test_replay_start_sim_profile_rejects_non_object_and_paths():
     import pytest
-
-    from meshtastic_mcp import server
 
     common = {
         "kind": "auto",
@@ -598,7 +598,7 @@ def test_replay_start_sim_profile_rejects_non_object_and_paths():
     }
     # a JSON array is not a profile dict
     with pytest.raises(ValueError, match="must be a JSON object"):
-        server._load_replay_capture("defcon", sim_profile="[1,2,3]", **common)
+        tools_replay._load_replay_capture("defcon", sim_profile="[1,2,3]", **common)
     # a file path is not valid JSON -> rejected before any open() (no traversal)
     with pytest.raises(json.JSONDecodeError):
-        server._load_replay_capture("defcon", sim_profile="/etc/passwd", **common)
+        tools_replay._load_replay_capture("defcon", sim_profile="/etc/passwd", **common)

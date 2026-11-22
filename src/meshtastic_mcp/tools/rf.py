@@ -13,6 +13,7 @@ from .. import ble_sniffer, rf_oracle, vanity
 from .. import confirm as confirm_mod
 from .. import pa_sweep as pa_sweep_mod
 from ..schemas import BleSniffStatus, PaMeasureResult, PaMeterStatus, PaSweepResult
+from ..tool_meta import meta
 from ._app import app, ble_sniffer_tool, sdr_tool, vanity_tool
 from ._shared import _off_loop
 
@@ -20,6 +21,7 @@ from ._shared import _off_loop
 
 
 @sdr_tool()
+@meta("read")
 def rf_scan(
     center_freq_hz: float,
     span_khz: float = 1000.0,
@@ -54,6 +56,7 @@ def rf_scan(
 
 
 @sdr_tool()
+@meta("destructive")
 def rf_confirm_tx(
     text: str,
     channel_index: int = 0,
@@ -108,6 +111,7 @@ def rf_confirm_tx(
 
 
 @app.tool()
+@meta("read", open_world=True, title="PA Meter Status")
 def pa_meter_status(meter_port: str | None = None) -> PaMeterStatus:
     """Detect the ImmersionRC RF Power Meter and report a live reading.
 
@@ -126,6 +130,7 @@ def pa_meter_status(meter_port: str | None = None) -> PaMeterStatus:
 
 
 @app.tool()
+@meta("destructive", open_world=True, idempotent=True, title="PA Meter Measure")
 def pa_measure(
     band: str,
     samples: int = 20,
@@ -167,6 +172,7 @@ def pa_measure(
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="PA Power Sweep (Closed-Loop)")
 async def pa_sweep(
     ctx: Context,
     powers: list[int],
@@ -253,6 +259,7 @@ async def pa_sweep(
 
 
 @app.tool()
+@meta("read", open_world=True, title="BLE Sniffer Status")
 def ble_sniff_status() -> BleSniffStatus:
     """Report whether an off-device BLE capture is possible right now.
 
@@ -268,6 +275,7 @@ def ble_sniff_status() -> BleSniffStatus:
 
 
 @ble_sniffer_tool()
+@meta("destructive", open_world=True, title="BLE Capture (Async Start)")
 def ble_sniff_start(
     port: str | None = None,
     duration_s: float = ble_sniffer.DEFAULT_DURATION_S,
@@ -304,6 +312,7 @@ def ble_sniff_start(
 
 
 @ble_sniffer_tool()
+@meta("read", open_world=True, title="BLE Capture (Poll Status)")
 def ble_sniff_poll(job_id: str, tail_lines: int = 12, max_advertisers: int = 40) -> dict[str, Any]:
     """Check a capture and get everything seen so far, per advertiser; works mid-capture.
 
@@ -327,6 +336,7 @@ def ble_sniff_poll(job_id: str, tail_lines: int = 12, max_advertisers: int = 40)
 
 
 @ble_sniffer_tool()
+@meta("destructive", open_world=True, title="BLE Capture (Stop)")
 def ble_sniff_stop(job_id: str) -> dict[str, Any]:
     """Stop a running capture. The pcap written so far is kept and summarized.
 
@@ -348,6 +358,7 @@ def ble_sniff_stop(job_id: str) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("read", title="Vanity Identity Preview")
 def vanity_preview(private_key: str) -> dict[str, Any]:
     """What node id and color a private key produces. No device, no grinder.
 
@@ -362,6 +373,7 @@ def vanity_preview(private_key: str) -> dict[str, Any]:
 
 
 @vanity_tool()
+@meta("destructive", title="Vanity Grind (Async Start)")
 def vanity_grind_start(
     pattern: str | None = None,
     color: str | None = None,
@@ -397,6 +409,7 @@ def vanity_grind_start(
 
 
 @vanity_tool()
+@meta("read", title="Vanity Grind (Poll Status)")
 def vanity_grind_poll(job_id: str, tail_lines: int = 12) -> dict[str, Any]:
     """Check a background grind: status, progress tail, and any hits so far.
 
@@ -412,6 +425,7 @@ def vanity_grind_poll(job_id: str, tail_lines: int = 12) -> dict[str, Any]:
 
 
 @vanity_tool()
+@meta("destructive", title="Vanity Grind (Stop)")
 def vanity_grind_stop(job_id: str) -> dict[str, Any]:
     """Stop a running grind. Anything already found is kept and returned.
 
@@ -422,6 +436,7 @@ def vanity_grind_stop(job_id: str) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="Adopt Vanity Identity")
 async def vanity_apply(
     ctx: Context,
     private_key: str,

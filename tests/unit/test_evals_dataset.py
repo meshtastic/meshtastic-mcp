@@ -25,7 +25,7 @@ def known_tools():
     # Union of registered tools + all capability-gated tools so the guard is
     # valid regardless of this host's active capabilities.
     registered = {tool.name for tool in asyncio.run(server.app.list_tools())}
-    return registered | set(server._FIRMWARE_TOOLS) | set(server._ANDROID_TOOLS)
+    return registered | set(server.GATED["firmware"]) | set(server.GATED["android"])
 
 
 def test_dataset_exists_and_has_rows() -> None:

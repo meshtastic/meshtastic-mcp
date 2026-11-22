@@ -13,6 +13,7 @@ from fastmcp import Client, FastMCP
 from mcp.types import ElicitResult
 
 from meshtastic_mcp import confirm, flash, hw_tools, jobs
+from tests.unit._tool_fns import tool_fn
 
 
 @pytest.fixture(autouse=True)
@@ -43,7 +44,7 @@ def _answer(action: str = "accept"):
 def _app_with(server, *names: str) -> FastMCP:
     app = FastMCP("t")
     for name in names:
-        tool = getattr(server, name)
+        tool = tool_fn(name)
         app.tool()(getattr(tool, "fn", tool))
     return app
 

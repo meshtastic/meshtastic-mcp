@@ -29,9 +29,12 @@ the enqueue line would reintroduce a false positive.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pytest
+
+from meshtastic_mcp import log_query
 
 PID = 2268636889  # 0x8738a6d9 — a real id observed on hardware
 
@@ -50,12 +53,13 @@ def stub_query(monkeypatch):
     reject the latter with a ListenerMismatchError. Same pattern as
     `test_mcp_surface.py`.
     """
-    from meshtastic_mcp import server
+    from meshtastic_mcp import server  # noqa: F401  (registers the recorder first)
+    from meshtastic_mcp.tools import core
 
     state: dict[str, Any] = {
         "log_lines": [],
         "packets": [],
-        "server": server,
+        "core": core,
         "ports_queried": [],
     }
 
@@ -99,9 +103,9 @@ def stub_query(monkeypatch):
             "dropped": state.get("packets_dropped", 0),
         }
 
-    monkeypatch.setattr(server.log_query, "logs_window", fake_logs_window)
-    monkeypatch.setattr(server.log_query, "packets_window", fake_packets_window)
-    monkeypatch.setattr(server.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(log_query, "logs_window", fake_logs_window)
+    monkeypatch.setattr(log_query, "packets_window", fake_packets_window)
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
     return state
 
 
@@ -111,7 +115,7 @@ def test_confirms_on_started_tx_log(stub_query):
         _log_line("enqueue for send (id=0x8738a6d9 fr=0xf8f277b5 to=0xffffffff)"),
         _log_line("Started Tx (id=0x8738a6d9 fr=0xf8f277b5 to=0xffffffff len=102)"),
     ]
-    confirmed, _latency, reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 5.0)
+    confirmed, _latency, reason = stub_query["core"]._confirm_tx(PID, "/dev/ttyACM1", 5.0)
     assert confirmed is True, f"expected confirmation from Started Tx, got {reason}"
 
 
@@ -121,14 +125,14 @@ def test_enqueue_alone_is_not_confirmation(stub_query):
     stub_query["log_lines"] = [
         _log_line("enqueue for send (id=0x8738a6d9 fr=0xf8f277b5 to=0xffffffff)"),
     ]
-    confirmed, _latency, _reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
+    confirmed, _latency, _reason = stub_query["core"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
     assert confirmed is False, "enqueue alone must not count as transmitted"
 
 
 def test_other_packet_id_does_not_confirm(stub_query):
     """A `Started Tx` for a different packet must not confirm ours."""
     stub_query["log_lines"] = [_log_line("Started Tx (id=0xdeadbeef fr=0x1 to=0xffffffff)")]
-    confirmed, _latency, _reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
+    confirmed, _latency, _reason = stub_query["core"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
     assert confirmed is False
 
 
@@ -136,7 +140,7 @@ def test_rebroadcast_in_packet_stream_confirms(stub_query):
     """A neighbour's rebroadcast carries our packet id back to us — also proof
     it reached the air, even with no log capture."""
     stub_query["packets"] = [{"id": PID, "portnum": "TEXT_MESSAGE_APP"}]
-    confirmed, _latency, _reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 5.0)
+    confirmed, _latency, _reason = stub_query["core"]._confirm_tx(PID, "/dev/ttyACM1", 5.0)
     assert confirmed is True
 
 
@@ -146,7 +150,7 @@ def test_no_log_capture_reports_unknown_not_failure(stub_query):
     This is the regression that made a working mesh look broken."""
     stub_query["log_lines"] = []
     stub_query["packets"] = []
-    confirmed, _latency, reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
+    confirmed, _latency, reason = stub_query["core"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
     assert confirmed is None, "no observability must be reported as unknown, not failure"
     assert reason and "debug_log_api" in reason, f"reason should point at the fix: {reason}"
 
@@ -154,7 +158,7 @@ def test_no_log_capture_reports_unknown_not_failure(stub_query):
 def test_evidence_channel_present_but_no_tx_is_false(stub_query):
     """When logs ARE flowing and no TX line appears, `False` is a real signal."""
     stub_query["log_lines"] = [_log_line("Node status update: 0 online, 20 total")]
-    confirmed, _latency, _reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
+    confirmed, _latency, _reason = stub_query["core"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
     assert confirmed is False
 
 
@@ -169,7 +173,7 @@ def test_tx_line_survives_a_chatty_log(stub_query):
     stub_query["log_lines"] = [_log_line(f"Node status update: {i} online") for i in range(500)]
     stub_query["log_lines"].append(_log_line("Started Tx (id=0x8738a6d9 fr=0x1 to=0xffffffff)"))
     stub_query["log_lines"] += [_log_line(f"Router: sniffing {i}") for i in range(500)]
-    confirmed, _latency, reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 5.0)
+    confirmed, _latency, reason = stub_query["core"]._confirm_tx(PID, "/dev/ttyACM1", 5.0)
     assert confirmed is True, f"grep-filtered lookup should survive log volume: {reason}"
 
 
@@ -181,7 +185,7 @@ def test_tx_on_another_port_does_not_confirm(stub_query):
     stub_query["log_lines"] = [
         _log_line("Started Tx (id=0x8738a6d9 fr=0x1 to=0xffffffff)", port="/dev/ttyUSB0"),
     ]
-    confirmed, _latency, _reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
+    confirmed, _latency, _reason = stub_query["core"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
     assert confirmed is not True, "must not confirm from another port's logs"
     assert "/dev/ttyACM1" in stub_query["ports_queried"], (
         f"queries must be scoped to the target port, saw {stub_query['ports_queried']}"
@@ -194,7 +198,7 @@ def test_truncated_packet_window_is_flagged_when_unobservable(stub_query):
     stub_query["log_lines"] = []
     stub_query["packets"] = []
     stub_query["packets_dropped"] = 4200
-    confirmed, _latency, reason = stub_query["server"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
+    confirmed, _latency, reason = stub_query["core"]._confirm_tx(PID, "/dev/ttyACM1", 0.5)
     assert confirmed is None
     assert "truncated" in reason, f"truncation should be surfaced: {reason}"
 
@@ -203,6 +207,6 @@ def test_missing_packet_id_reports_unknown(stub_query):
     """Without a packet id there is nothing to match on — don't guess by
     matching 'any recent TEXT packet', which the old code did."""
     stub_query["log_lines"] = [_log_line("Started Tx (id=0x8738a6d9 fr=0x1 to=0xffffffff)")]
-    confirmed, _latency, reason = stub_query["server"]._confirm_tx(None, "/dev/ttyACM1", 0.5)
+    confirmed, _latency, reason = stub_query["core"]._confirm_tx(None, "/dev/ttyACM1", 0.5)
     assert confirmed is None
     assert reason and "packet id" in reason

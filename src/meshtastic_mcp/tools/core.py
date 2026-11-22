@@ -47,6 +47,7 @@ from ..schemas import (
     EventsWindow,
     FactoryResetResult,
     InspectResult,
+    JobResult,
     LeaseInfo,
     LogsWindow,
     NodeEntry,
@@ -62,6 +63,7 @@ from ..schemas import (
     ShutdownResult,
     WaitForResult,
 )
+from ..tool_meta import meta
 from ._app import app
 from ._shared import _capture_dir, _off_loop, _to_markdown_table
 
@@ -69,6 +71,7 @@ from ._shared import _capture_dir, _off_loop, _to_markdown_table
 
 
 @app.tool()
+@meta("read")
 def doctor() -> DoctorReport:
     """Probe external dependencies and report how to acquire any that are missing.
 
@@ -84,6 +87,7 @@ _DISPLAY_CAPTURE_DIR = Path(tempfile.mkdtemp(prefix="meshtastic-mcp-display-"))
 
 
 @app.tool()
+@meta("read")
 def triage_bundle(start: str = "-2m", end: str = "now") -> dict[str, Any]:
     """Collect the device-plane artifacts for an e2e-failure window in one call.
 
@@ -105,6 +109,7 @@ def triage_bundle(start: str = "-2m", end: str = "now") -> dict[str, Any]:
 
 
 @app.tool()
+@meta("read", open_world=True)
 def list_devices(
     include_unknown: bool = False,
     format: str = "json",
@@ -128,6 +133,7 @@ def list_devices(
 
 
 @app.tool()
+@meta("read", open_world=True)
 def device_info(port: str | None = None, timeout_s: float = 8.0) -> DeviceInfo:
     """Connect via meshtastic.SerialInterface and return a summary of the node.
 
@@ -146,6 +152,7 @@ def device_info(port: str | None = None, timeout_s: float = 8.0) -> DeviceInfo:
 
 
 @app.tool()
+@meta("read", open_world=True)
 def list_nodes(
     port: str | None = None,
     timeout_s: float = 8.0,
@@ -186,6 +193,7 @@ _INSPECT_SECTIONS = frozenset(backends_python.SECTIONS)
 
 
 @app.tool()
+@meta("read", open_world=True)
 def inspect(
     node: str | None = None,
     what: list[str] | str = "summary",
@@ -258,6 +266,7 @@ def _save_configure_snapshot(port: str, config: dict[str, Any]) -> dict[str, Any
 
 
 @app.tool()
+@meta("destructive", idempotent=True)
 def configure(
     node: str | None = None,
     changes: dict[str, Any] | None = None,
@@ -315,6 +324,7 @@ def configure(
 
 
 @app.tool()
+@meta("destructive", open_world=True, idempotent=True)
 def set_owner(
     long_name: str, short_name: str | None = None, port: str | None = None
 ) -> SetOwnerResult:
@@ -335,6 +345,7 @@ def set_owner(
 
 
 @app.tool()
+@meta("read", open_world=True)
 def get_config(section: str | None = None, port: str | None = None) -> dict[str, Any]:
     """Read one or all config sections.
 
@@ -354,6 +365,7 @@ def get_config(section: str | None = None, port: str | None = None) -> dict[str,
 
 
 @app.tool()
+@meta("destructive", open_world=True, idempotent=True)
 def set_config(path: str, value: Any, port: str | None = None) -> SetConfigResult:
     """Set one config field via dot-path and write it to the device.
 
@@ -377,6 +389,7 @@ def set_config(path: str, value: Any, port: str | None = None) -> SetConfigResul
 
 
 @app.tool()
+@meta("read", open_world=True)
 def get_channel_url(include_all: bool = False, port: str | None = None) -> dict[str, Any]:
     """Get the shareable channel URL (QR-code content).
 
@@ -392,6 +405,7 @@ def get_channel_url(include_all: bool = False, port: str | None = None) -> dict[
 
 
 @app.tool()
+@meta("destructive", open_world=True, idempotent=True)
 def set_channel_url(url: str, port: str | None = None) -> SetChannelUrlResult:
     """Import channels from a Meshtastic channel URL.
 
@@ -409,6 +423,7 @@ def set_channel_url(url: str, port: str | None = None) -> SetChannelUrlResult:
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 def set_debug_log_api(enabled: bool, port: str | None = None) -> dict[str, Any]:
     """Toggle `security.debug_log_api_enabled` on the local node.
 
@@ -432,6 +447,7 @@ def set_debug_log_api(enabled: bool, port: str | None = None) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 def config_snapshot(name: str, port: str | None = None) -> ConfigSnapshotResult:
     """Capture the device's full config (localConfig + moduleConfig) to a named snapshot.
 
@@ -450,6 +466,7 @@ def config_snapshot(name: str, port: str | None = None) -> ConfigSnapshotResult:
 
 
 @app.tool()
+@meta("read")
 def config_snapshots_list() -> list[dict[str, Any]]:
     """List saved config snapshots with capture time and source port.
 
@@ -459,6 +476,7 @@ def config_snapshots_list() -> list[dict[str, Any]]:
 
 
 @app.tool()
+@meta("read", open_world=True)
 def config_diff(
     name_a: str,
     name_b: str | None = None,
@@ -578,6 +596,7 @@ def _confirm_tx(
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 def send(
     node: str | None = None,
     to: str | int | None = None,
@@ -648,6 +667,7 @@ def send(
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 def send_text(
     text: str,
     to: str | int | None = None,
@@ -705,6 +725,7 @@ def send_text(
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 async def inject_frame(
     ctx: Context,
     mode: str = "text",
@@ -812,6 +833,7 @@ _ADMIN_GATED = {
 
 
 @app.tool()
+@meta("destructive", idempotent=True)
 async def admin(
     ctx: Context,
     action: Literal[
@@ -874,6 +896,7 @@ async def admin(
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 async def reboot(
     ctx: Context, port: str | None = None, confirm: bool = False, seconds: int = 10
 ) -> RebootResult:
@@ -902,6 +925,7 @@ async def reboot(
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 async def shutdown(
     ctx: Context, port: str | None = None, confirm: bool = False, seconds: int = 10
 ) -> ShutdownResult:
@@ -930,6 +954,7 @@ async def shutdown(
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 async def factory_reset(
     ctx: Context, port: str | None = None, confirm: bool = False, full: bool = False
 ) -> FactoryResetResult:
@@ -964,6 +989,7 @@ async def factory_reset(
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 def send_input_event(
     event_code: int | str,
     kb_char: int = 0,
@@ -1018,6 +1044,7 @@ def _capture_target(out_path: str) -> Path:
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 def capture_display(
     port: str | None = None,
     out_path: str | None = None,
@@ -1060,6 +1087,7 @@ def capture_display(
 
 
 @app.tool()
+@meta("destructive", open_world=True)
 def drive_display_start(
     steps: list[dict[str, Any]],
     port: str | None = None,
@@ -1122,6 +1150,7 @@ def drive_display_start(
 
 
 @app.tool()
+@meta("read", open_world=True)
 def drive_display_poll(job_id: str) -> dict[str, Any]:
     """Status of a `drive_display_start` job, with each finished step's PNG and `changed_px`.
 
@@ -1147,9 +1176,8 @@ jobs.register_poller("display-drives", _drive_poll)
 
 
 @app.tool()
-async def job(
-    job_id: str | None = None, wait_s: float = 0.0, tail_lines: int = 50
-) -> dict[str, Any]:
+@meta("read", open_world=True)
+async def job(job_id: str | None = None, wait_s: float = 0.0, tail_lines: int = 50) -> JobResult:
     """Status of a background job by id, any kind, or every job this server knows.
 
     Takes the `job_id` any start or flash tool returned (builds, flashes, grinds, BLE
@@ -1167,7 +1195,7 @@ async def job(
         tail_lines: How many trailing log lines to return.
     """
     if job_id is None:
-        return {"jobs": jobs.listing()}
+        return cast(JobResult, {"jobs": jobs.listing()})
     if not 0 <= wait_s <= _JOB_WAIT_MAX_S:
         raise ToolError(f"wait_s must be between 0 and {_JOB_WAIT_MAX_S:g}")
     if jobs.state_of(job_id) is None:
@@ -1178,7 +1206,7 @@ async def job(
     deadline = time.monotonic() + wait_s
     while not jobs.settled(job_id) and time.monotonic() < deadline:
         await asyncio.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
-    return cast(dict[str, Any], await _off_loop(lambda: jobs.view(job_id, tail_lines)))
+    return cast(JobResult, await _off_loop(lambda: jobs.view(job_id, tail_lines)))
 
 
 _JOB_WAIT_MAX_S = 55.0
@@ -1192,6 +1220,7 @@ _JOB_WAIT_MAX_S = 55.0
 
 
 @app.tool()
+@meta("read", open_world=True, port="not_device")
 def logs_window(
     start: str = "-15m",
     end: str = "now",
@@ -1233,6 +1262,7 @@ def logs_window(
 
 
 @app.tool()
+@meta("read", port="not_device")
 def telemetry_timeline(
     window: str = "1h",
     variant: str = "local",
@@ -1265,6 +1295,7 @@ def telemetry_timeline(
 
 
 @app.tool()
+@meta("read")
 def devices(include_unknown: bool = False) -> DevicesResult:
     """The radios on this host by name, attached now or seen before, without opening any.
 
@@ -1289,6 +1320,7 @@ def devices(include_unknown: bool = False) -> DevicesResult:
 
 
 @app.tool()
+@meta("write", port="not_device")
 def claim(
     port: str | None = None,
     ttl_s: int = leases.DEFAULT_TTL_S,
@@ -1319,6 +1351,7 @@ def claim(
 
 
 @app.tool()
+@meta("write")
 def release(lease: str) -> LeaseInfo:
     """Give back a device taken with `claim`. Returns the lease that ended, without its handle.
 
@@ -1332,6 +1365,7 @@ def release(lease: str) -> LeaseInfo:
 
 
 @app.tool()
+@meta("read", open_world=True)
 def wait_for(
     stream: Literal["packets", "logs", "telemetry", "events"],
     where: str = "true",
@@ -1379,6 +1413,7 @@ def wait_for(
 
 
 @app.tool()
+@meta("read", open_world=True)
 def query(sql: str, max_rows: int = recorder_query.DEFAULT_MAX_ROWS) -> QueryResult:
     """Read-only DuckDB SQL over everything the recorder has captured, across rotations.
 
@@ -1403,6 +1438,7 @@ def query(sql: str, max_rows: int = recorder_query.DEFAULT_MAX_ROWS) -> QueryRes
 
 
 @app.tool()
+@meta("read", open_world=True)
 def packets_window(
     start: str = "-5m",
     end: str = "now",
@@ -1441,6 +1477,7 @@ def packets_window(
 
 
 @app.tool()
+@meta("read")
 def events_window(
     start: str = "-1h",
     end: str = "now",
@@ -1463,6 +1500,7 @@ def events_window(
 
 
 @app.tool()
+@meta("destructive")
 def mark_event(
     label: str,
     note: str | None = None,
@@ -1486,6 +1524,7 @@ def mark_event(
 
 
 @app.tool()
+@meta("read")
 def recorder_status() -> dict[str, Any]:
     """Return recorder runtime info: running, paused, file sizes, last_ts per stream.
 
@@ -1496,6 +1535,7 @@ def recorder_status() -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive")
 def recorder_pause(reason: str | None = None) -> dict[str, Any]:
     """Pause writes to all four streams; resume with `recorder_resume`.
 
@@ -1513,6 +1553,7 @@ def recorder_pause(reason: str | None = None) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive")
 def recorder_resume() -> dict[str, Any]:
     """Resume writes after `recorder_pause`. No-op if already running."""
     get_recorder().resume()
@@ -1520,6 +1561,7 @@ def recorder_resume() -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive")
 def recorder_export(
     start: str,
     end: str,

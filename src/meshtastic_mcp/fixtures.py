@@ -66,7 +66,7 @@ def _safe_progress(progress_cb: Callable[[str], None] | None, msg: str) -> None:
 # seed fixtures + generated v25 protos) lives in the Meshtastic firmware tree, so
 # push_fake_nodedb is a firmware-capability tool. Resolve those paths from the firmware
 # root; callers without a firmware checkout get a clear ConfigError (and the MCP tool is
-# gated off entirely — see server._FIRMWARE_TOOLS).
+# gated off entirely by `firmware_tool`).
 def _firmware_root() -> pathlib.Path:
     return config.firmware_root()
 

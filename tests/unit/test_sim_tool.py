@@ -12,6 +12,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from meshtastic_mcp import toolsets
+from meshtastic_mcp.tools import replay as tools_replay
 
 
 @pytest.fixture(scope="module")
@@ -48,36 +49,36 @@ def calls(monkeypatch):
 
 
 def test_start_passes_only_what_was_given(server, calls) -> None:
-    result = server.sim(action="start", source="defcon", port=0, loop=False, fuzz="parser")
+    result = tools_replay.sim(action="start", source="defcon", port=0, loop=False, fuzz="parser")
     assert result == {"id": "replay-9", "listen": "0.0.0.0:0"}
     assert calls == [("start", {"source": "defcon", "port": 0, "loop": False, "fuzz": "parser"})]
 
 
 def test_start_with_no_options_leaves_every_default_to_replay_start(server, calls) -> None:
-    server.sim(action="start")
+    tools_replay.sim(action="start")
     assert calls == [("start", {})]
 
 
 def test_stop_reaches_replay_stop(server, calls) -> None:
-    assert server.sim(action="stop", session_id="replay-3") == {"stopped": ["replay-9"]}
-    assert server.sim(action="stop") == {"stopped": ["replay-9"]}
+    assert tools_replay.sim(action="stop", session_id="replay-3") == {"stopped": ["replay-9"]}
+    assert tools_replay.sim(action="stop") == {"stopped": ["replay-9"]}
     assert calls == [("stop", {"session_id": "replay-3"}), ("stop", {"session_id": None})]
 
 
 def test_stop_refuses_start_parameters(server, calls) -> None:
     with pytest.raises(ToolError, match=r"session_id.*\['port', 'source'\]"):
-        server.sim(action="stop", source="defcon", port=4403)
+        tools_replay.sim(action="stop", source="defcon", port=4403)
     assert calls == []
 
 
 def test_start_refuses_session_id(server, calls) -> None:
     with pytest.raises(ToolError, match="session_id"):
-        server.sim(action="start", session_id="replay-1")
+        tools_replay.sim(action="start", session_id="replay-1")
     assert calls == []
 
 
 def test_sim_status_reaches_replay_status(server, calls) -> None:
-    assert server.sim_status("replay-2") == {"sessions": []}
+    assert tools_replay.sim_status("replay-2") == {"sessions": []}
     assert calls == [("status", {"session_id": "replay-2"})]
 
 
@@ -94,11 +95,12 @@ def test_annotations(server) -> None:
     assert tools["sim"].annotations.read_only_hint is False
     assert tools["sim"].annotations.destructive_hint is True
     assert tools["sim_status"].annotations.read_only_hint is True
-    assert "sim" in server._DESTRUCTIVE and "sim_status" in server._READ_ONLY
+    assert server.tool_meta.of("sim").kind == "destructive"
+    assert server.tool_meta.of("sim_status").kind == "read"
 
 
 def test_a_localhost_session_starts_reads_and_stops(server) -> None:
-    started = server.sim(
+    started = tools_replay.sim(
         action="start",
         source="meshcon",
         host="127.0.0.1",
@@ -110,14 +112,14 @@ def test_a_localhost_session_starts_reads_and_stops(server) -> None:
     sid = started["id"]
     try:
         assert started["listen"].startswith("127.0.0.1:")
-        one = server.sim_status(sid)
+        one = tools_replay.sim_status(sid)
         assert one["id"] == sid and one["ended"] is False
-        assert sid in [s["id"] for s in server.sim_status()["sessions"]]
-        assert server.sim_status("no-such")["error"]
+        assert sid in [s["id"] for s in tools_replay.sim_status()["sessions"]]
+        assert tools_replay.sim_status("no-such")["error"]
     finally:
-        stopped = server.sim(action="stop", session_id=sid)
+        stopped = tools_replay.sim(action="stop", session_id=sid)
     assert stopped == {"stopped": [sid]}
-    assert server.sim_status(sid)["error"]
+    assert tools_replay.sim_status(sid)["error"]
 
 
 def test_results_satisfy_the_output_schemas(server) -> None:

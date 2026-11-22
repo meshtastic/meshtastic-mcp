@@ -148,32 +148,32 @@ def test_classification_of_known_tools() -> None:
 
 
 def test_firmware_group_matches_the_servers_firmware_gate(server) -> None:
-    firmware = {n for n in server._FIRMWARE_TOOLS if toolsets.toolset_of(n) == "firmware"}
+    firmware = {n for n in server.GATED["firmware"] if toolsets.toolset_of(n) == "firmware"}
     assert firmware == toolsets._GROUPS["firmware"]
-    assert {toolsets.toolset_of(n) for n in server._FIRMWARE_TOOLS} == {"firmware", "legacy"}
+    assert {toolsets.toolset_of(n) for n in server.GATED["firmware"]} == {"firmware", "legacy"}
 
 
 def test_android_group_covers_the_servers_android_gate(server) -> None:
     assert {
         n
-        for n in server._ANDROID_TOOLS
+        for n in server.GATED["android"]
         if toolsets.toolset_of(n) not in {"android", "tak", "legacy"}
     } == set()
 
 
 def test_apple_group_covers_the_servers_apple_gate(server) -> None:
     assert {
-        n for n in server._APPLE_TOOLS if toolsets.toolset_of(n) not in {"apple", "legacy"}
+        n for n in server.GATED["apple"] if toolsets.toolset_of(n) not in {"apple", "legacy"}
     } == set()
 
 
 def test_rf_group_covers_the_servers_sdr_and_sniffer_gates(server) -> None:
-    gated = {*server._SDR_TOOLS, *server._BLE_SNIFFER_TOOLS, *server._VANITY_TOOLS}
+    gated = {*server.GATED["sdr"], *server.GATED["ble_sniffer"], *server.GATED["mvgrind"]}
     assert {n for n in gated if toolsets.toolset_of(n) not in {"rf", "legacy"}} == set()
 
 
 def _listed(server, env: dict[str, str]) -> set[str]:
-    transform = toolsets.ToolsetTransform(env, lambda: server._READ_ONLY)
+    transform = toolsets.ToolsetTransform(env, server.tool_meta.read_only_names)
     tools = asyncio.run(server.app.list_tools())
     return {t.name for t in asyncio.run(transform.list_tools(tools))}
 
@@ -206,12 +206,14 @@ def test_the_nrf52_bootloader_tools_come_with_hardware_not_core(server) -> None:
 
 def test_read_only_hides_every_mutating_tool(server) -> None:
     names = _listed(server, {toolsets.READ_ONLY_ENV: "1"})
-    assert names and names <= set(server._READ_ONLY)
+    assert names and names <= server.tool_meta.read_only_names()
     assert "admin" not in names and "devices" in names
 
 
 def test_hidden_tool_cannot_be_resolved(server) -> None:
-    transform = toolsets.ToolsetTransform({toolsets.READ_ONLY_ENV: "1"}, lambda: server._READ_ONLY)
+    transform = toolsets.ToolsetTransform(
+        {toolsets.READ_ONLY_ENV: "1"}, server.tool_meta.read_only_names
+    )
 
     async def call_next(name, *, version=None):
         return object()

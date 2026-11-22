@@ -32,6 +32,12 @@ All notable changes are documented here. Format loosely follows
   Unset `MESHTASTIC_MCP_TOOLSETS` now exposes `core`, `app`, `hardware` and `replay`; `all`
   adds the specialist groups `firmware`, `display`, `android`, `apple`, `tak`, `rf` and `sdk`.
   Calling a tool from a group left out says which setting adds it.
+- **`job`, `install` and `vendor` return typed results** - their `outputSchema` names the
+  fields, like the other 1.0 tools.
+- **Each tool declares its own hints** - `@meta(...)` above a tool's `def` sets its
+  read-only, destructive, idempotent and open-world hints, its title and what its `port`
+  means for leases, replacing the name lists in `server.py`. `server` no longer re-exports
+  the tools and helpers; import them from the module that defines them.
 - **Discord moved to its own server** - the `discord_*` tools are served by
   `meshtastic-mcp-discord`, not this server.
 - **A stdio client on the bench host bridges to a running `serve`** - so one server owns the

@@ -8,10 +8,12 @@ from __future__ import annotations
 from typing import Any
 
 from .. import sdk_cli as sdk_cli_mod
+from ..tool_meta import meta
 from ._app import sdk_tool
 
 
 @sdk_tool()
+@meta("read")
 def sdk_status() -> dict[str, Any]:
     """Report the Kotlin-SDK device-IO bridge: whether the CLI launcher resolves.
 
@@ -25,6 +27,7 @@ def sdk_status() -> dict[str, Any]:
 
 
 @sdk_tool()
+@meta("read")
 def sdk_device_info(transport: str, timeout_ms: int = 15000) -> dict[str, Any]:
     """One-shot device snapshot via the Kotlin SDK CLI (own node + node count).
 
@@ -43,6 +46,7 @@ def sdk_device_info(transport: str, timeout_ms: int = 15000) -> dict[str, Any]:
 
 
 @sdk_tool()
+@meta("read")
 def sdk_list_nodes(transport: str, timeout_ms: int = 15000) -> dict[str, Any]:
     """Snapshot the device node DB via the Kotlin SDK CLI (read-only).
 
@@ -57,6 +61,7 @@ def sdk_list_nodes(transport: str, timeout_ms: int = 15000) -> dict[str, Any]:
 
 
 @sdk_tool()
+@meta("destructive")
 def sdk_send_text(
     transport: str,
     message: str,

@@ -12,6 +12,7 @@ import pytest
 from meshtastic.protobuf import mesh_pb2, module_config_pb2
 
 from meshtastic_mcp.replay import ReplayParams, ReplaySession, build, sim
+from meshtastic_mcp.tools import replay as tools_replay
 
 _LISTEN = module_config_pb2.ModuleConfig.MeshBeaconConfig.FLAG_LISTEN_ENABLED
 
@@ -36,7 +37,6 @@ def test_beacon_listen_config_is_the_generated_mesh_beacon_message():
 
 
 def test_replay_start_forwards_beacon_listen(monkeypatch):
-    from meshtastic_mcp import server
 
     cap = sim.generate(nodes=2, days=1, seed=1, start=1_700_000_000)
     started: list[ReplayParams] = []
@@ -49,8 +49,8 @@ def test_replay_start_forwards_beacon_listen(monkeypatch):
     monkeypatch.setattr("meshtastic_mcp.tools.replay._load_replay_capture", lambda *_a, **_k: cap)
     monkeypatch.setattr("meshtastic_mcp.tools.replay.get_replay_manager", lambda: Manager())
 
-    server.replay_start(beacon_listen=True, mdns=False)
-    server.replay_start(mdns=False)
+    tools_replay.replay_start(beacon_listen=True, mdns=False)
+    tools_replay.replay_start(mdns=False)
     assert [p.beacon_listen for p in started] == [True, False]
 
 
