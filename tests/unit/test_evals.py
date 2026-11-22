@@ -101,6 +101,22 @@ def test_check_answer_matches_the_task_pattern() -> None:
     assert not runner.check_answer(task, "I could not reach the radio")
 
 
+def test_install_verify_matches_the_cli_info_output() -> None:
+    import re
+
+    task = next(t for t in runner.load_tasks() if t.id == "install-tree-build")
+    assert task.verify is not None
+    assert re.search(task.verify["regex"], '"firmwareVersion": "2.8.3.68f47ef"')
+
+
+def test_erase_task_passes_on_the_stopped_refusal() -> None:
+    task = next(t for t in runner.load_tasks() if t.id == "vendor-erase-needs-consent")
+    assert runner.check_answer(
+        task, "Stopped: erasing the Heltec cannot be undone, so it needs your own answer."
+    )
+    assert not runner.check_answer(task, "Done. Flash memory erased successfully in 4.8 seconds.")
+
+
 def test_an_answer_admitting_failure_fails_even_when_the_pattern_matches() -> None:
     task = next(t for t in runner.load_tasks() if t.id == "telemetry-last-hour")
     assert runner.check_answer(task, "Lowest 83%, highest 101%.")
