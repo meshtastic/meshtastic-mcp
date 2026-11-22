@@ -960,7 +960,7 @@ def _resource_device_info() -> str:
     """Live device summary (firmware/region/node id) for the auto-selected port.
 
     Reads the single connected device. For multi-device hosts use the
-    `device_info` tool with an explicit port instead.
+    `inspect` tool with an explicit `node` instead.
     """
     import json
 
@@ -1011,9 +1011,9 @@ def triage_e2e_failure(token: str = "", deadline_iso: str = "") -> str:
         "An e2e loop FAILED. Find the root cause by correlating the two planes:\n"
         f"- token: {token or '<the unique marker token>'}\n"
         f"- deadline: {deadline_iso or '<wall-clock of the assertion>'}\n\n"
-        "1. Device plane (source of truth): call `packets_window` and `logs_window` for the\n"
-        "   window around the deadline. Did a TEXT_MESSAGE_APP carrying the token actually\n"
-        "   reach the wire? Check for NAK/err=5 (MAX_RETRANSMIT) on broadcasts.\n"
+        "1. Device plane (source of truth): `query` the recorder's `packets` and `logs` views\n"
+        "   around the deadline (filter on `ts`). Did a TEXT_MESSAGE_APP carrying the token\n"
+        "   actually reach the wire? Check for NAK/err=5 (MAX_RETRANSMIT) on broadcasts.\n"
         "2. App plane: inspect the app `layout`/`screen capture` at the deadline. Was the app\n"
         "   connected (Subscribed)? On the right screen? Was the token rendered but missed?\n"
         "3. Align by shared epoch timestamps. Classify: never-sent / sent-not-received /\n"
@@ -1027,9 +1027,11 @@ def bringup_device(port: str = "", region: str = "US") -> str:
     """Connect to a Meshtastic device and verify a healthy baseline."""
     return (
         f"Bring up the Meshtastic device{' at ' + port if port else ''}:\n"
-        "1. `list_devices` to find it (or use the given port / a tcp://host:port).\n"
-        "2. `device_info` for firmware version + node identity; `list_nodes` for the DB.\n"
-        f"3. Confirm region is set ({region}); if unset, `get_config('lora')` then `set_config`.\n"
+        "1. `devices` to find it (or use the given port / a tcp://host:port).\n"
+        "2. `inspect` for firmware version + node identity; `inspect(what=['nodes'])` for\n"
+        "   the node DB.\n"
+        f"3. Confirm region is set ({region}); if unset, `configure` `lora.region`\n"
+        "   (dry_run first).\n"
         "4. `send` a text marker to ^all and confirm it leaves on the wire.\n"
         "Report firmware version, region, node count, and any config that looks off."
     )

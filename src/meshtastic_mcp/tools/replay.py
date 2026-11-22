@@ -935,17 +935,22 @@ def sim(
 
 
 @app.tool()
-def sim_status(session_id: str | None = None) -> SimStatusResult:
+def sim_status(session_id: str | None = None, fuzz_presets: bool = False) -> SimStatusResult:
     """Status of simulated radio sessions: connection state, packets sent and total, mode.
 
     Returns one session's `{id, capture, listen, connect, mode, target_rate,
     achieved_rate, packets_total, packets_sent, injected, connected, client, ended, error,
-    fuzz, mdns, ...}`, `{sessions: [...]}` for all, or `{error}` for an unknown id.
+    fuzz, mdns, ...}`, `{sessions: [...]}` for all, or `{error}` for an unknown id. With
+    `fuzz_presets`, also `presets` and `usage`: the names `sim(fuzz=...)` takes.
 
     Args:
         session_id: One session's id; omit for every running session.
+        fuzz_presets: Add the built-in fuzz presets and the fault rates each sets.
     """
-    return cast(SimStatusResult, replay_status(session_id))
+    out = dict(replay_status(session_id))
+    if fuzz_presets:
+        out.update(replay_fuzz_presets())
+    return cast(SimStatusResult, out)
 
 
 # ---------- ATAK / CoT capture + fleet ------------------------------------

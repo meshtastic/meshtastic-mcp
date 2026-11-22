@@ -4,8 +4,9 @@
 """Trim the advertised tool list to the groups a session needs.
 
 Every tool schema a client loads costs context. `MESHTASTIC_MCP_TOOLSETS` names the groups to
-expose. Unset or `all` exposes every group but the opt-in `legacy`, which a client gets by
-naming it; a `-group` entry drops one.
+expose. Unset exposes the device, app, hardware and replay groups; `all` adds the specialist
+groups (firmware, android, apple, rf, sdk, display, tak), and `legacy`, the pre-1.0 names,
+comes only when named. A `-group` entry drops one.
 `MESHTASTIC_MCP_READ_ONLY=1` hides every tool that can change state. A hidden tool is not
 listed and cannot be called.
 """
@@ -30,17 +31,10 @@ _GROUPS: dict[str, frozenset[str]] = {
     "firmware": frozenset(
         {
             "build",
-            "build_poll",
-            "build_start",
             "clean",
-            "erase_and_flash",
-            "flash_poll",
-            "flash_start",
             "get_board",
             "list_boards",
-            "pio_flash",
             "push_fake_nodedb",
-            "update_flash",
             "userprefs_get",
             "userprefs_manifest",
             "userprefs_reset",
@@ -53,13 +47,7 @@ _GROUPS: dict[str, frozenset[str]] = {
     "app": frozenset({"app", "app_view"}),
     "hardware": frozenset(
         {
-            "capture_screen",
-            "esptool_chip_info",
-            "esptool_erase_flash",
             "install",
-            "nrfutil_dfu",
-            "picotool_info",
-            "picotool_load",
             "touch_1200bps",
             "uhubctl_cycle",
             "uhubctl_list",
@@ -80,6 +68,51 @@ _GROUPS: dict[str, frozenset[str]] = {
     # The pre-1.0 names a `next` tool replaces. Opt-in: only a client that names it gets them.
     "legacy": frozenset(
         {
+            "list_devices",
+            "events_window",
+            "logs_window",
+            "packets_window",
+            "telemetry_timeline",
+            "triage_bundle",
+            "drive_display_poll",
+            "android_tap",
+            "android_swipe",
+            "android_type_text",
+            "android_clear_logcat",
+            "android_screenshot",
+            "android_ui_dump",
+            "android_find_text",
+            "android_poll_for_text",
+            "android_read_logcat",
+            "android_resolve",
+            "ios_boot",
+            "ios_open_url",
+            "ios_tap",
+            "ios_type_text",
+            "ios_ui_dump",
+            "screenshot_set_poll",
+            "build_start",
+            "build_poll",
+            "flash_start",
+            "flash_poll",
+            "pio_flash",
+            "erase_and_flash",
+            "update_flash",
+            "esptool_chip_info",
+            "esptool_erase_flash",
+            "nrfutil_dfu",
+            "picotool_info",
+            "picotool_load",
+            "nrf52_flash_uf2",
+            "serial_list",
+            "serial_read",
+            "ble_sniff_poll",
+            "vanity_grind_poll",
+            "sdk_device_info",
+            "sdk_list_nodes",
+            "sdk_send_text",
+            "sdk_status",
+            "replay_fuzz_presets",
             "replay_start",
             "replay_status",
             "replay_stop",
@@ -105,20 +138,26 @@ _GROUPS: dict[str, frozenset[str]] = {
             "send_text",
         }
     ),
+    # The device's own screen: mirror, input and the webcam.
+    "display": frozenset(
+        {"capture_display", "capture_screen", "drive_display_start", "send_input_event"}
+    ),
     # `sim` and `sim_status` match no `replay_` prefix.
     "replay": frozenset({"inject", "sim", "sim_status"}),
 }
 _PREFIXES: dict[str, tuple[str, ...]] = {
-    "android": ("android_", "atak_"),
+    "android": ("android_",),
+    "tak": ("atak_", "cot_relay_"),
     "apple": ("ios_", "screenshot_set_"),
     "hardware": ("nrf52_", "serial_"),
-    "replay": ("replay_", "cot_relay_"),
+    "replay": ("replay_",),
     "rf": ("ble_sniff_", "vanity_", "pa_", "rf_"),
     "sdk": ("sdk_",),
 }
 
-# Groups the default leaves out.
-OPT_IN = frozenset({"legacy"})
+# Groups the default leaves out. `all` adds every one but `legacy`, which only naming it adds.
+LEGACY = "legacy"
+OPT_IN = frozenset({LEGACY, "firmware", "android", "apple", "rf", "sdk", "display", "tak"})
 
 
 log = logging.getLogger(__name__)
@@ -157,7 +196,7 @@ def parse_toolsets(value: str | None) -> frozenset[str]:
 
     A `-group` entry removes that group; with no group named, it removes it from the default.
     """
-    if value is None or not value.strip() or value.strip().lower() == "all":
+    if value is None or not value.strip():
         return default_toolsets()
     names = [part.strip().lower() for part in value.split(",") if part.strip()]
     for name in sorted({n.lstrip("-") for n in names} & RETIRED.keys()):
@@ -170,10 +209,12 @@ def parse_toolsets(value: str | None) -> frozenset[str]:
         raise ToolsetError(
             f"unknown toolset(s) {sorted(unknown)}; choose from {sorted(known_toolsets())} or 'all'"
         )
-    if asked and "all" not in asked:
+    if "all" in asked:
+        base = (known_toolsets() - {LEGACY}) | (named - {"all"})
+    elif asked:
         base = named
     else:
-        base = default_toolsets() | (named - {"all"})
+        base = default_toolsets()
     return base - dropped
 
 

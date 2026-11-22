@@ -58,3 +58,14 @@ def test_an_unknown_name_stays_unknown() -> None:
 
 def test_every_legacy_tool_has_a_replacement() -> None:
     assert set(retired_tools.REPLACED_BY) == set(toolsets._GROUPS["legacy"])
+
+
+def test_a_tool_in_a_specialist_group_names_the_setting_that_adds_it() -> None:
+    hint = retired_tools.pointer("rf_scan")
+    assert hint is not None and "'rf'" in hint and "MESHTASTIC_MCP_TOOLSETS=all" in hint
+
+
+def test_the_replaced_window_and_flasher_tools_point_at_query_and_install() -> None:
+    assert "query(" in (retired_tools.pointer("logs_window") or "")
+    assert "install(" in (retired_tools.pointer("pio_flash") or "")
+    assert "job(" in (retired_tools.pointer("build_poll") or "")

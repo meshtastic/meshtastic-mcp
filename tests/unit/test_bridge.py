@@ -120,7 +120,11 @@ def test_client_filter_applies_this_clients_read_only_and_toolsets() -> None:
     assert [t.name for t in asyncio.run(read_only.list_tools(tools))] == ["inspect"]
     core = bridge.ClientFilter({"MESHTASTIC_MCP_TOOLSETS": "core"})
     assert [t.name for t in asyncio.run(core.list_tools(tools))] == ["inspect", "admin"]
-    assert len(asyncio.run(bridge.ClientFilter({}).list_tools(tools))) == 3
+    assert len(asyncio.run(bridge.ClientFilter({}).list_tools(tools))) == 2
+    assert (
+        len(asyncio.run(bridge.ClientFilter({"MESHTASTIC_MCP_TOOLSETS": "all"}).list_tools(tools)))
+        == 3
+    )
 
 
 # -- end to end: a real `serve` on loopback, reached through the default stdio entry ---------

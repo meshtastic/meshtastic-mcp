@@ -157,6 +157,12 @@ class NamedDevice(TypedDict):
 
 class DevicesResult(TypedDict):
     devices: list[NamedDevice]
+    other_ports: NotRequired[
+        Annotated[
+            list[DeviceEntry],
+            Field(description="with include_unknown: serial ports not seen as a radio"),
+        ]
+    ]
 
 
 class LeaseInfo(TypedDict):
@@ -523,6 +529,10 @@ class SimStatusResult(SimSession):
     """`sim_status` result: one session's fields, `sessions` for all, or `error` for a bad id."""
 
     sessions: NotRequired[list[SimSession]]
+    presets: NotRequired[
+        Annotated[dict[str, Any], Field(description="with fuzz_presets: {name: {category: rate}}")]
+    ]
+    usage: NotRequired[str]
 
 
 # ---------- App driving -----------------------------------------------------

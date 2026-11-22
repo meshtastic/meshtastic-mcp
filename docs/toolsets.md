@@ -4,31 +4,31 @@ Every tool a client loads costs context. Two environment variables shrink what t
 
 | Variable | Effect |
 | --- | --- |
-| `MESHTASTIC_MCP_TOOLSETS` | Comma-separated groups to expose. Unset or `all` exposes every group but `legacy`, which comes only when named (`all,legacy`); a `-group` entry drops one. |
+| `MESHTASTIC_MCP_TOOLSETS` | Comma-separated groups to expose. Unset exposes the default groups (`core`, `app`, `hardware`, `replay`, about 40 tools). `all` adds every specialist group; `legacy` comes only when named (`all,legacy`). A `-group` entry drops one. |
 | `MESHTASTIC_MCP_READ_ONLY` | `1` hides every tool that is not read-only. |
 
-| Group | Tools |
-| --- | --- |
-| `core` | The portable device set: `devices`, `list_devices`, `inspect`, owner, config and channel writes, config snapshots, `send`, `reboot`, `shutdown`, `factory_reset`, the recorder tools, the display mirror (`capture_display`, `drive_display_*`, `send_input_event`), `inject_frame`, `triage_bundle` and `doctor`. |
-| `legacy` | The pre-1.0 tools that `next` tools replace, listed in [tools.md](tools.md#legacy). Off unless named; removed in 1.1. |
-| `firmware` | Build, flash, boards and userPrefs. Registered only with `MESHTASTIC_FIRMWARE_ROOT`. |
-| `hardware` | esptool, nrfutil, picotool, uhubctl, `touch_1200bps`, the `nrf52_*` UF2 bootloader tools, the `serial_*` monitor sessions (they run `pio device monitor` in the firmware tree) and `capture_screen` (a webcam and the `[ui]` extra). |
-| `android` | Android emulator and app driving (`android_*`), the ATAK fleet (`atak_*`). |
-| `apple` | iOS Simulator driving (`ios_*`) and `screenshot_set_*`. |
-| `app` | `app_view` and `app`: one entry point over the Android, iOS and desktop app drivers. Always registered; desktop actions need `MESHTASTIC_MCP_DESKTOP_URL`. |
-| `replay` | The simulated device (`replay_*`, `inject`) and the CoT relay (`cot_relay_*`). |
-| `rf` | The SDR oracle (`rf_*`), the power meter (`pa_*`), the BLE sniffer (`ble_sniff_*`) and vanity keys (`vanity_*`). |
-| `sdk` | The experimental Kotlin SDK bridge (`sdk_*`). |
+| Group | Default | Tools |
+| --- | --- | --- |
+| `core` | yes | The device intents (`devices`, `inspect`, `configure`, `send`, `admin`, `set_channel_url`), leases (`claim`, `release`), long work (`job`), the recorder (`query`, `wait_for`, `mark_event`, `recorder_*`), config snapshots, `inject_frame` and `doctor`. |
+| `app` | yes | `app` and `app_view`: one entry point over the Android, iOS and desktop app drivers. Desktop actions need `MESHTASTIC_MCP_DESKTOP_URL`. |
+| `hardware` | yes | `install` and `vendor`, the `nrf52_*` UF2 bootloader tools, `serial_open`/`serial_close` (their output lands in the recorder for `query`), `touch_1200bps` and uhubctl. |
+| `replay` | yes | The simulated radio: `sim`, `sim_status` and `inject`. |
+| `firmware` | with `all` | `build`, `clean`, boards, userPrefs and `push_fake_nodedb`. Registered only with `MESHTASTIC_FIRMWARE_ROOT`; `install` builds without this group. |
+| `display` | with `all` | The device's own screen: `capture_display`, `drive_display_start`, `send_input_event`, and the webcam `capture_screen` (the `[ui]` extra). |
+| `android` | with `all` | Android tools `app` does not cover: docs search, Compose preview rendering, version lookup. |
+| `apple` | with `all` | iOS tools `app` does not cover: `ios_screenshot` (appearance and status bar), `ios_list_simulators`, `screenshot_set_start`. |
+| `tak` | with `all` | The ATAK emulator fleet (`atak_*`) and the CoT relay (`cot_relay_*`). |
+| `rf` | with `all` | The SDR oracle (`rf_*`), the power meter (`pa_*`), the BLE sniffer (`ble_sniff_*`) and vanity keys (`vanity_*`). |
+| `sdk` | with `all` | Nothing of its own now; the SDK backend runs under `inspect`, `send` and `admin` with `MESHTASTIC_MCP_BACKEND=sdk`. |
+| `legacy` | when named | The pre-1.0 tools a `next` tool replaces, listed in [tools.md](tools.md#legacy). A call to one by name while it is hidden returns the call that replaces it. |
 
-`core` holds only tools that need the base install and a radio over serial or TCP. A test pins it to an allowlist, so a new tool must name its group. `screenshot_set_*` registers with the android or the apple capability and lives in `apple`, so an Android-only session adds `apple` to get it. An unknown name stops the server at startup and lists the valid ones. The `discord_*` tools are not a group here; the separate `meshtastic-mcp-discord` server serves them ([docs/discord.md](discord.md)).
-
-`core` alone is about a quarter of the full list's size, `READ_ONLY` a little under half, and both together about an eighth. The capabilities active on the host decide the full list; your client's tool list shows what a setting leaves.
+`core` holds only tools that need the base install and a radio over serial or TCP. A test pins it to an allowlist, so a new tool must name its group. Calling a tool from a group the server leaves out returns which setting adds it. An unknown name stops the server at startup and lists the valid ones. The `discord_*` tools are not a group here; the separate `meshtastic-mcp-discord` server serves them ([docs/discord.md](discord.md)).
 
 ```bash
-claude mcp add meshtastic -e MESHTASTIC_MCP_TOOLSETS=core,firmware -e MESHTASTIC_MCP_READ_ONLY=1 -- meshtastic-mcp
+claude mcp add meshtastic -e MESHTASTIC_MCP_TOOLSETS=core -e MESHTASTIC_MCP_READ_ONLY=1 -- meshtastic-mcp
 ```
 
-To flash and recover boards, add `hardware`: `MESHTASTIC_MCP_TOOLSETS=core,firmware,hardware`.
+For firmware work in the tree, add the specialist groups: `MESHTASTIC_MCP_TOOLSETS=all`, or `core,hardware,firmware`.
 
 ## Capabilities
 

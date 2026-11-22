@@ -19,7 +19,6 @@ from meshtastic_mcp import toolsets
 _CORE = frozenset(
     {
         "admin",
-        "capture_display",
         "claim",
         "config_diff",
         "config_snapshot",
@@ -27,27 +26,18 @@ _CORE = frozenset(
         "configure",
         "devices",
         "doctor",
-        "drive_display_poll",
-        "drive_display_start",
-        "events_window",
         "inject_frame",
         "inspect",
         "job",
-        "list_devices",
-        "logs_window",
         "mark_event",
-        "packets_window",
         "query",
         "recorder_export",
         "release",
         "recorder_pause",
         "recorder_resume",
         "recorder_status",
-        "send_input_event",
         "send",
         "set_channel_url",
-        "telemetry_timeline",
-        "triage_bundle",
         "wait_for",
     }
 )
@@ -97,11 +87,10 @@ def test_core_is_exactly_the_portable_device_set() -> None:
     assert _CORE - core == set(), "allowlisted core tools that are gone or grouped"
 
 
-def test_unset_and_all_mean_every_group_but_legacy() -> None:
-    every = toolsets.known_toolsets() - {"legacy"}
-    assert toolsets.parse_toolsets(None) == every
-    assert toolsets.parse_toolsets("") == every
-    assert toolsets.parse_toolsets("ALL") == every
+def test_unset_is_the_focused_default_and_all_adds_the_specialist_groups() -> None:
+    assert toolsets.parse_toolsets(None) == {"core", "app", "hardware", "replay"}
+    assert toolsets.parse_toolsets("") == toolsets.parse_toolsets(None)
+    assert toolsets.parse_toolsets("ALL") == toolsets.known_toolsets() - {"legacy"}
 
 
 def test_named_groups_parse_and_unknown_names_are_rejected() -> None:
@@ -116,7 +105,11 @@ def test_legacy_comes_only_when_named() -> None:
 
 
 def test_a_minus_entry_drops_a_group() -> None:
-    assert toolsets.parse_toolsets("-android") == toolsets.known_toolsets() - {"legacy", "android"}
+    assert toolsets.parse_toolsets("-hardware") == toolsets.default_toolsets() - {"hardware"}
+    assert toolsets.parse_toolsets("all,-android") == toolsets.known_toolsets() - {
+        "legacy",
+        "android",
+    }
     assert toolsets.parse_toolsets("core,legacy,-legacy") == {"core"}
     with pytest.raises(toolsets.ToolsetError, match="nope"):
         toolsets.parse_toolsets("-nope")
@@ -131,39 +124,52 @@ def test_the_old_device_reads_are_hidden_unless_legacy_is_named(server) -> None:
 def test_classification_of_known_tools() -> None:
     assert toolsets.toolset_of("inspect") == "core"
     assert toolsets.toolset_of("device_info") == "legacy"
-    assert toolsets.toolset_of("build_start") == "firmware"
+    assert toolsets.toolset_of("build") == "firmware"
+    assert toolsets.toolset_of("build_start") == "legacy"
     assert toolsets.toolset_of("vendor") == "hardware"
     assert toolsets.toolset_of("esptool_raw") == "legacy"
-    assert toolsets.toolset_of("nrf52_flash_uf2") == "hardware"
-    assert toolsets.toolset_of("android_tap") == "android"
-    assert toolsets.toolset_of("atak_fleet_up") == "android"
+    assert toolsets.toolset_of("nrf52_flash_uf2") == "legacy"
+    assert toolsets.toolset_of("nrf52_backup_firmware") == "hardware"
+    assert toolsets.toolset_of("android_tap") == "legacy"
+    assert toolsets.toolset_of("android_docs_search") == "android"
+    assert toolsets.toolset_of("atak_fleet_up") == "tak"
     assert toolsets.toolset_of("app") == "app"
     assert toolsets.toolset_of("app_view") == "app"
-    assert toolsets.toolset_of("cot_relay_start") == "replay"
+    assert toolsets.toolset_of("cot_relay_start") == "tak"
     assert toolsets.toolset_of("vanity_preview") == "rf"
     assert toolsets.toolset_of("rf_confirm_tx") == "rf"
-    assert toolsets.toolset_of("ios_boot") == "apple"
+    assert toolsets.toolset_of("ios_boot") == "legacy"
+    assert toolsets.toolset_of("ios_screenshot") == "apple"
     assert toolsets.toolset_of("screenshot_set_start") == "apple"
-    assert toolsets.toolset_of("sdk_send_text") == "sdk"
+    assert toolsets.toolset_of("sdk_send_text") == "legacy"
+    assert toolsets.toolset_of("logs_window") == "legacy"
     assert toolsets.toolset_of("serial_open") == "hardware"
-    assert toolsets.toolset_of("capture_screen") == "hardware"
+    assert toolsets.toolset_of("capture_screen") == "display"
 
 
 def test_firmware_group_matches_the_servers_firmware_gate(server) -> None:
-    assert toolsets._GROUPS["firmware"] == frozenset(server._FIRMWARE_TOOLS)
+    firmware = {n for n in server._FIRMWARE_TOOLS if toolsets.toolset_of(n) == "firmware"}
+    assert firmware == toolsets._GROUPS["firmware"]
+    assert {toolsets.toolset_of(n) for n in server._FIRMWARE_TOOLS} == {"firmware", "legacy"}
 
 
 def test_android_group_covers_the_servers_android_gate(server) -> None:
-    assert {n for n in server._ANDROID_TOOLS if toolsets.toolset_of(n) != "android"} == set()
+    assert {
+        n
+        for n in server._ANDROID_TOOLS
+        if toolsets.toolset_of(n) not in {"android", "tak", "legacy"}
+    } == set()
 
 
 def test_apple_group_covers_the_servers_apple_gate(server) -> None:
-    assert {n for n in server._APPLE_TOOLS if toolsets.toolset_of(n) != "apple"} == set()
+    assert {
+        n for n in server._APPLE_TOOLS if toolsets.toolset_of(n) not in {"apple", "legacy"}
+    } == set()
 
 
 def test_rf_group_covers_the_servers_sdr_and_sniffer_gates(server) -> None:
     gated = {*server._SDR_TOOLS, *server._BLE_SNIFFER_TOOLS, *server._VANITY_TOOLS}
-    assert {n for n in gated if toolsets.toolset_of(n) != "rf"} == set()
+    assert {n for n in gated if toolsets.toolset_of(n) not in {"rf", "legacy"}} == set()
 
 
 def _listed(server, env: dict[str, str]) -> set[str]:
@@ -172,10 +178,12 @@ def _listed(server, env: dict[str, str]) -> set[str]:
     return {t.name for t in asyncio.run(transform.list_tools(tools))}
 
 
-def test_default_lists_everything_but_legacy(server) -> None:
+def test_default_lists_the_focused_groups_and_all_adds_every_group_but_legacy(server) -> None:
     everything = {t.name for t in asyncio.run(server.app.list_tools())}
     legacy = {n for n in everything if toolsets.toolset_of(n) == "legacy"}
-    assert legacy and _listed(server, {}) == everything - legacy
+    default = {n for n in everything if toolsets.toolset_of(n) in toolsets.default_toolsets()}
+    assert legacy and _listed(server, {}) == default
+    assert _listed(server, {toolsets.TOOLSETS_ENV: "all"}) == everything - legacy
 
 
 def test_toolsets_filter_to_the_named_groups(server) -> None:
@@ -186,7 +194,11 @@ def test_toolsets_filter_to_the_named_groups(server) -> None:
 
 
 def test_the_nrf52_bootloader_tools_come_with_hardware_not_core(server) -> None:
-    nrf52 = {t.name for t in asyncio.run(server.app.list_tools()) if t.name.startswith("nrf52_")}
+    nrf52 = {
+        t.name
+        for t in asyncio.run(server.app.list_tools())
+        if t.name.startswith("nrf52_") and toolsets.toolset_of(t.name) != "legacy"
+    }
     assert nrf52
     assert not nrf52 & _listed(server, {toolsets.TOOLSETS_ENV: "core"})
     assert nrf52 <= _listed(server, {toolsets.TOOLSETS_ENV: "hardware"})
@@ -195,7 +207,7 @@ def test_the_nrf52_bootloader_tools_come_with_hardware_not_core(server) -> None:
 def test_read_only_hides_every_mutating_tool(server) -> None:
     names = _listed(server, {toolsets.READ_ONLY_ENV: "1"})
     assert names and names <= set(server._READ_ONLY)
-    assert "factory_reset" not in names and "list_devices" in names
+    assert "admin" not in names and "devices" in names
 
 
 def test_hidden_tool_cannot_be_resolved(server) -> None:
@@ -205,7 +217,7 @@ def test_hidden_tool_cannot_be_resolved(server) -> None:
         return object()
 
     assert asyncio.run(transform.get_tool("factory_reset", call_next)) is None
-    assert asyncio.run(transform.get_tool("list_devices", call_next)) is not None
+    assert asyncio.run(transform.get_tool("devices", call_next)) is not None
 
 
 @pytest.mark.parametrize("name", ["discord", "local-model", "-discord"])

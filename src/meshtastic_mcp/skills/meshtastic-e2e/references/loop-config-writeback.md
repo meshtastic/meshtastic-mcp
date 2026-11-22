@@ -45,5 +45,5 @@ If the phone is connected to the DUT over **serial**, the MCP `inspect` call and
 ## Failure triage
 
 - New value in app but old on device → write never reached the radio (admin auth, session
-  passkey, `is_managed` scope) — check device logs (`logs_window`).
+  passkey, `is_managed` scope) — check device logs (`query` over `logs`).
 - Value correct after set but reverts after reboot → it stuck in RAM only, NVS write failed.

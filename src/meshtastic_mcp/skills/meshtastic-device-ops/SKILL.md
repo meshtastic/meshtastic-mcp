@@ -25,7 +25,7 @@ skill maps common operator intents to the right tools and the safe order to use 
 ## Connect
 
 Two transports, same admin surface:
-- **Serial:** a USB port from `list_devices` (e.g. `/dev/cu.usbmodem101`).
+- **Serial:** a USB port from `devices` (e.g. `/dev/cu.usbmodem101`).
 - **TCP:** `tcp://host:port` (a networked node, or a virtual `meshtasticd` at `127.0.0.1:4403`).
 
 **Prefer the CLI subcommands for read-only discovery** — they cost no MCP schema tokens
@@ -42,14 +42,14 @@ meshtastic-mcp boards get heltec-v3     # full metadata for one board
 ```
 
 Fall back to MCP tools when already in an MCP session or when you need board metadata
-for a follow-on `build_start`:
+for a follow-on `install`:
 ```
 devices()                        # attached radios by name; opens no port
 inspect(node=N)                  # firmware version, node identity, region, channel summary
 inspect(node=N, what="nodes")    # the node DB (long/short name, SNR, hops, last-heard)
 ```
 
-Pass `node` as a name `devices` reports (`heltec-v3-aa13`), the path `list_devices` reports (on Linux prefer the stable
+Pass `node` as a name `devices` reports (`heltec-v3-aa13`), the port `devices` reports (on Linux prefer the stable
 `/dev/serial/by-id/...` link) or `tcp://host:port`. Omit it only when exactly one radio is
 attached.
 
@@ -87,7 +87,7 @@ take `confirm`.
   the user what will happen and pass `confirm=True` only after they agree. Never retry with it
   on your own.
 - With `MESHTASTIC_MCP_CONFIRM=human` on the server, irreversible tools (`admin` resets,
-  `erase_and_flash`, `nrf52_factory_erase`, `vanity_apply`, destructive vendor calls) ask even
+  `install(erase=True)`, `nrf52_factory_erase`, `vanity_apply`, destructive vendor calls) ask even
   with `confirm=True`; "cannot ask" then means the user must run it from a client that can.
 - `vendor(tool="esptool", args=["flash_id"])` and other harmless subcommands never ask.
 
@@ -136,20 +136,19 @@ delivered) see `meshtastic-e2e` `references/loop-outbound.md`.
 meshtastic-mcp boards --query <slug>                     # find the env name
 meshtastic-mcp boards get <env>                          # confirm arch + upload_speed
 ```
-Build and flash from the firmware tree (firmware capability). The start/poll pair works with
-any client:
+Build and flash from the firmware tree (firmware capability) with `install`, which picks the
+flasher from the board:
 ```
-build_start(env=E)                         # returns build_id immediately
-build_poll(build_id=ID)                    # poll until status=done/failed
-flash_start(env=E, port=P)                 # asks (or confirm=True), returns job_id
-flash_poll(job_id=ID)                      # poll until status=done/failed
+install(port=P, source={"env": E})              # build + flash; ESP32 OTA-updates the app
+install(port=P, source={"env": E}, erase=True)  # ESP32 full erase and factory flash
+install(port=P, source={"file": F})             # .uf2 (nRF52), .zip (nrfutil DFU), factory .bin
+job(job_id=ID, wait_s=50)                       # follow a flash past a client timeout
 ```
-`build`, `pio_flash`, `erase_and_flash` (ESP32 full erase) and `update_flash` (ESP32 OTA) do
-the same in one call. With the server's `[tasks]` extra a task-capable client runs them as
-background tasks; otherwise the call blocks until the job ends. Each returns a `job_id`, and the
-flash tools log it before they wait. A flash cannot be canceled: if the call is canceled or
-times out, `flash_poll` that id to the end before touching the board. A failed build or flash
-is a tool error carrying the output tail.
+With the server's `[tasks]` extra a task-capable client runs `install` as a background task;
+otherwise the call blocks until the job ends. It returns a `job_id` and logs it before it waits.
+A flash cannot be canceled: if the call is canceled or times out, follow that id with `job` to
+the end before touching the board. A failed flash is a tool error carrying the output tail. A
+build alone is `build(env=E)` in the opt-in `firmware` toolset.
 
 **nRF52 by UF2** (Meshtastic bootloader; core, no firmware tree needed). Faster than serial DFU
 and no touch:
@@ -157,7 +156,7 @@ and no touch:
 nrf52_enter_uf2(port=P)                    # reboots into the UF2 drive (asks)
 nrf52_bootloader_info(port=P)              # bootloader version, SoftDevice, Last-Fault
 nrf52_backup_firmware(port=P)              # CURRENT.UF2 into the data dir; do this first
-nrf52_flash_uf2(uf2_path=F, port=P)        # asks; refuses a wrong-SoftDevice image
+install(port=P, source={"file": F})      # asks; refuses a wrong-SoftDevice image
 nrf52_factory_erase(port=P)                # wipes config/node DB/keys, keeps firmware
 ```
 Keep passing the board's app port (its by-id path): the drive is matched by USB serial even
@@ -165,14 +164,15 @@ after that link disappears in UF2 mode. The drive must be mounted; a headless ho
 automount needs it mounted by hand. The board stays in UF2 mode until a UF2 lands or it is
 power-cycled.
 
-**nRF52 by serial DFU**: `nrfutil_dfu(port=P, package_path=ZIP)` touches the board into DFU
+**nRF52 by serial DFU**: `install(port=P, source={"file": ZIP})` touches the board into DFU
 itself and fails unless adafruit-nrfutil printed `Device programmed.`. A board left sitting in
 serial DFU takes the package with no touch:
 `vendor(tool="nrfutil", args=["dfu", "serial", "--package", ZIP, "--port", "/dev/ttyACM0", "-b", "115200", "--singlebank"], confirm=True)`.
 
 `touch_1200bps(port=P)` bounces nRF52, ESP32-S3 and RP2040 boards into their bootloader and
-reports the bootloader's port. Chip-specific escape hatches when pio can't help:
-`esptool_*`, `nrfutil_*`, `picotool_*` (raw passthroughs; destructive subcommands ask). For a
+reports the bootloader's port. Chip-specific escape hatch when `install` can't help:
+`vendor(tool="esptool" | "nrfutil" | "picotool", args=[...])` (read-only subcommands run at
+once; anything else asks). For a
 wedged USB device, power-cycle the hub port with `uhubctl_list` / `uhubctl_power` /
 `uhubctl_cycle`.
 > **Linux:** `uhubctl` requires udev rules to work without root. Run
@@ -181,7 +181,7 @@ wedged USB device, power-cycle the hub port with `uhubctl_list` / `uhubctl_power
 
 ### BLE OTA DFU (manual — no MCP tool covers this yet)
 
-Every `pio_flash`/`nrfutil_dfu`/`nrf52_flash_uf2` path above is USB (serial or UF2). There is
+Every `install` path above is USB (serial or UF2). There is
 no MCP tool for the *wireless* leg — the Nordic legacy BLE DFU that the Meshtastic
 Android app uses for its in-app bootloader/firmware upgrade, and that the
 Meshtastic nRF52 Bootloader (`meshtastic/nRF52_Bootloader`)
@@ -274,7 +274,7 @@ speaks natively. To validate that path from a dev machine instead of a phone:
   (System Settings → Privacy & Security → Bluetooth) — without it, scanning
   either errors or (confusingly) just finds nothing.
 - A newly-enumerated USB device can trigger a silent macOS "accessory" permission
-  popup that hides the port from `list_devices`/`ls /dev/cu.*` until approved —
+  popup that hides the port from `devices`/`ls /dev/cu.*` until approved —
   if a device that was just flashed or reset seems to vanish from USB entirely,
   check for that popup before assuming a bad flash.
 
@@ -317,7 +317,7 @@ drive_display_start(port=P, out_dir="docs/img", scale=2, wake="BACK", steps=[
     {"event": "DOWN", "label": "nodes"},
     {"event": "USER_PRESS", "touch_x": 20, "touch_y": 140, "label": "chats"},
 ])
-drive_display_poll(job_id)          # until status=done; steps[] holds each PNG and changed_px
+job(job_id, wait_s=50)              # until status=done; steps[] holds each PNG and changed_px
 ```
 
 `changed_px` is the diff against the previous shot; 0 means the press changed nothing on screen.
@@ -370,6 +370,6 @@ Two things that bite in practice:
    the user has not agreed to.
 4. `admin(action="factory_reset_full")` wipes BLE bonds + the identity key; `action="factory_reset"` keeps them.
 5. Prefer the recorder windows over ad-hoc reads: they're timestamped and align with app snapshots.
-6. A canceled flash keeps writing; follow its `job_id` with `flash_poll` before touching the board.
+6. A canceled flash keeps writing; follow its `job_id` with `job` before touching the board.
 7. Never apply a ground key whose `verified` is false, and never apply one without telling the
    operator the old node id first — the change is not reversible without the previous key.
