@@ -24,6 +24,7 @@ XModem wire details (mirrors firmware impl at src/xmodem.cpp:115-260):
   * SOH/seq=0 carries the destination filename in `buffer.bytes`. ACK if
     `FSCom.open(filename, FILE_O_WRITE)` succeeds; NAK otherwise.
   * SOH/seq≥1 carries a 128-byte chunk. ACK = advance; NAK = retransmit.
+    seq is the firmware's uint16 block counter: it does not wrap at 256.
   * EOT after the last chunk flushes + closes the file on-device.
 
 Hardware push requires `confirm=True` (mirrors factory_reset / erase_and_flash
@@ -82,6 +83,9 @@ def _compile_script() -> pathlib.Path:
 _DEFAULT_NODES_FILENAME = "/prefs/nodes.proto"
 _XMODEM_CHUNK = 128
 _XMODEM_SUB = 0x1A
+# The firmware counts blocks in a uint16 (`XModemAdapter::packetno`): block 256
+# follows 255, and a `seq == 0` mid-transfer reads as the start of a new one.
+_XMODEM_SEQ_MASK = 0xFFFF
 _ACK_TIMEOUT_INIT_S = 5.0
 _ACK_TIMEOUT_CHUNK_S = 2.0
 _MAX_CHUNK_RETRIES = 5
@@ -97,6 +101,12 @@ class FixtureError(RuntimeError):
 # CRC16-CCITT (poly 0x1021, init 0x0000). Matches the firmware's `crc16_ccitt`.
 # Hand-rolled to avoid the optional `crcmod` dep.
 # ---------------------------------------------------------------------------
+def _xmodem_seq(offset: int) -> int:
+    """Block number for the chunk at byte `offset`; block 1 is the first data
+    chunk (block 0 carries the filename). Wraps like the firmware's uint16."""
+    return ((offset // _XMODEM_CHUNK) + 1) & _XMODEM_SEQ_MASK
+
+
 def _crc16_ccitt(data: bytes, *, init: int = 0x0000) -> int:
     crc = init
     for b in data:
@@ -286,7 +296,7 @@ def _push_hardware(
                     # become part of the file on-device, but nanopb ignores
                     # bytes past the end of the top-level message.
                     chunk = chunk + bytes([_XMODEM_SUB] * (_XMODEM_CHUNK - len(chunk)))
-                seq = ((offset // _XMODEM_CHUNK) + 1) % 256
+                seq = _xmodem_seq(offset)
                 # Retry loop on NAK / timeout.
                 attempts = 0
                 while True:
@@ -380,6 +390,10 @@ def push_fake_nodedb(
       backup_existing: portduino only. Move nodes.proto -> nodes.proto.bak.<ts>
                         if present, so you can roll back.
       confirm: required True for target="hardware" (writes flash + reboots).
+               The firmware deletes the existing /prefs/nodes.proto when it
+               accepts the upload, and again on an aborted one, so a failed
+               push leaves the device with no NodeDB (favorites included)
+               after its next reboot.
       reboot_after: hardware only. If True, send a 1-second reboot after the
                     final ACK so loadFromDisk picks up the new file at next boot.
       custom_seed_jsonl: override the committed JSONL. Use to push a hand-edited
