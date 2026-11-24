@@ -18,11 +18,13 @@ from .. import confirm as confirm_mod
 from .. import tasks as tasks_mod
 from .. import userprefs as userprefs_mod
 from ..schemas import FlashStartResult
+from ..tool_meta import meta
 from ._app import firmware_tool
 from ._shared import _off_loop, _output_tail, _run_job, _to_markdown_table
 
 
 @firmware_tool()
+@meta("read")
 def list_boards(
     architecture: str | None = None,
     actively_supported_only: bool = False,
@@ -64,6 +66,7 @@ def list_boards(
 
 
 @firmware_tool()
+@meta("read")
 def get_board(env: str) -> dict[str, Any]:
     """Full metadata for one PlatformIO env, including raw pio config fields.
 
@@ -77,6 +80,7 @@ def get_board(env: str) -> dict[str, Any]:
 
 
 @firmware_tool()
+@meta("destructive", title="Build Firmware (Async Start)")
 def build_start(
     env: str,
     with_manifest: bool = True,
@@ -105,6 +109,7 @@ def build_start(
 
 
 @firmware_tool()
+@meta("read", title="Build Firmware (Poll Status)")
 def build_poll(build_id: str, tail_lines: int = 50) -> dict[str, Any]:
     """Poll the status of a background build.
 
@@ -121,6 +126,7 @@ def build_poll(build_id: str, tail_lines: int = 50) -> dict[str, Any]:
 
 
 @firmware_tool(**tasks_mod.task_kwargs())
+@meta("destructive")
 async def build(
     ctx: Context,
     env: str,
@@ -131,11 +137,10 @@ async def build(
     """Build firmware for one env with `pio run -e <env>`.
 
     Runs as an MCP background task when the client supports them (`[tasks]` extra);
-    otherwise the call blocks for the whole compile, so use `build_start` + `build_poll`
-    there. Canceling the task stops the build; an abandoned call keeps building, and
-    `build_poll(build_id=<job_id>)` reads it. A failed build is a tool error. A finished
-    build is perishable: another session's build in the shared tree can delete it, so flash
-    it at once. See docs/firmware-builds.md.
+    otherwise the call blocks for the whole compile. Canceling the task stops the build; an
+    abandoned call keeps building, and `job(job_id, wait_s=...)` follows it. A failed build
+    is a tool error. A finished build is perishable: another session's build in the shared
+    tree can delete it, so flash it at once. See docs/firmware-builds.md.
 
     Returns `{job_id, status, exit_code, artifacts, duration_s, log_tail, worker_error,
     build_flags}`, with artifacts under `.pio/build/<env>/` and the last 200 log lines.
@@ -179,6 +184,7 @@ async def build(
 
 
 @firmware_tool()
+@meta("destructive")
 def clean(env: str) -> dict[str, Any]:
     """Clean one env's build output via `pio run -e <env> -t clean`, for a branch switch or
     a stale-cache build failure.
@@ -192,6 +198,7 @@ def clean(env: str) -> dict[str, Any]:
 
 
 @firmware_tool(**tasks_mod.task_kwargs())
+@meta("destructive", open_world=True, title="PlatformIO Flash")
 async def pio_flash(
     ctx: Context,
     env: str,
@@ -238,6 +245,7 @@ async def pio_flash(
 
 
 @firmware_tool()
+@meta("destructive", open_world=True, title="Flash Firmware (Async Start)")
 async def flash_start(
     ctx: Context,
     env: str,
@@ -277,6 +285,7 @@ async def flash_start(
 
 
 @firmware_tool()
+@meta("read", title="Flash Firmware (Poll Status)")
 def flash_poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
     """Poll the status of a flash job.
 
@@ -295,6 +304,7 @@ def flash_poll(job_id: str, tail_lines: int = 50) -> dict[str, Any]:
 
 
 @firmware_tool(**tasks_mod.task_kwargs())
+@meta("destructive", open_world=True, title="Erase and Factory Flash (ESP32)")
 async def erase_and_flash(
     ctx: Context,
     env: str,
@@ -307,7 +317,7 @@ async def erase_and_flash(
 
     Writes bootloader, app, OTA and LittleFS from the factory.bin, building it first if it
     is missing. Requires confirm=True, or the user's answer when the client can ask
-    (always, with `MESHTASTIC_MCP_CONFIRM=human`). Runs as a background task where
+    (always, unless `MESHTASTIC_MCP_CONFIRM=agent`). Runs as a background task where
     supported; the flash cannot be canceled mid-write, so after a cancel or timeout follow
     its `job_id` with `flash_poll`. See docs/firmware-builds.md.
 
@@ -338,6 +348,7 @@ async def erase_and_flash(
 
 
 @firmware_tool(**tasks_mod.task_kwargs())
+@meta("destructive", open_world=True, title="OTA App-Partition Flash (ESP32)")
 async def update_flash(
     ctx: Context,
     env: str,
@@ -383,6 +394,7 @@ async def update_flash(
 
 
 @firmware_tool()
+@meta("read")
 def userprefs_manifest() -> dict[str, Any]:
     """Full manifest of the `USERPREFS_*` keys the firmware knows.
 
@@ -397,6 +409,7 @@ def userprefs_manifest() -> dict[str, Any]:
 
 
 @firmware_tool()
+@meta("read")
 def userprefs_get() -> dict[str, Any]:
     """Return the current userPrefs.jsonc state.
 
@@ -414,6 +427,7 @@ def userprefs_get() -> dict[str, Any]:
 
 
 @firmware_tool()
+@meta("destructive", idempotent=True)
 def userprefs_set(prefs: dict[str, Any]) -> dict[str, Any]:
     """Merge `prefs` into userPrefs.jsonc persistently (uncommenting keys).
 
@@ -430,6 +444,7 @@ def userprefs_set(prefs: dict[str, Any]) -> dict[str, Any]:
 
 
 @firmware_tool()
+@meta("destructive")
 def userprefs_reset() -> dict[str, Any]:
     """Restore userPrefs.jsonc from the most recent MCP backup (if any).
 
@@ -442,6 +457,7 @@ def userprefs_reset() -> dict[str, Any]:
 
 
 @firmware_tool()
+@meta("destructive")
 def userprefs_testing_profile(
     psk_seed: str | None = None,
     channel_name: str = "McpTest",
@@ -464,9 +480,9 @@ def userprefs_testing_profile(
 
     For a multi-device test cluster, pass the same `psk_seed` to every call so every device
     shares the same PSK and lands on the same isolated mesh. The returned dict is ready to
-    pass straight to `build`, `pio_flash`, `erase_and_flash`, or `update_flash` via their
-    `userprefs` parameter, e.g. `userprefs_testing_profile(psk_seed="ci-run-2026-04-16")`
-    then `erase_and_flash(env="tbeam", port=..., confirm=True, userprefs=profile)`.
+    pass straight to `build` or `install` via their `userprefs` parameter, e.g.
+    `userprefs_testing_profile(psk_seed="ci-run-2026-04-16")` then
+    `install(port=..., source={"env": "tbeam"}, erase=True, confirm=True, userprefs=profile)`.
 
     Args:
         psk_seed: Seed for a deterministic 32-byte PSK via SHA-256. None = random (fine
@@ -500,6 +516,7 @@ def userprefs_testing_profile(
 
 
 @firmware_tool()
+@meta("destructive", open_world=True)
 async def push_fake_nodedb(
     ctx: Context,
     size: int,

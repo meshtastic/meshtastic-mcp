@@ -28,10 +28,12 @@ def test_capture_replaces_permissive_snapshot_with_owner_only_file(monkeypatch):
     path = config_snapshot._snapshot_path("private")
     path.write_text("stale", encoding="utf-8")
     path.chmod(0o644)
+    from meshtastic_mcp.backends import python as backends_python
+
     monkeypatch.setattr(
-        config_snapshot.admin,
-        "get_config",
-        lambda section, port: {"config": {"localConfig": {"security": {"private_key": "secret"}}}},
+        backends_python.PythonBackend,
+        "raw_config",
+        lambda self, port, timeout_s: {"localConfig": {"security": {"private_key": "secret"}}},
     )
 
     config_snapshot.capture("private")
@@ -91,3 +93,23 @@ def test_list_snapshots_returns_metadata():
     out = config_snapshot.list_snapshots()
     names = {s["name"] for s in out}
     assert "snap1" in names
+
+
+def test_diff_withholds_a_changed_secret_unless_asked():
+    _write_snapshot(
+        "before", {"moduleConfig": {"mqtt": {"password": "old"}}, "localConfig": {"lora": {}}}
+    )
+    _write_snapshot(
+        "after",
+        {
+            "moduleConfig": {"mqtt": {"password": "new"}},
+            "localConfig": {"lora": {}, "security": {"private_key": "c2VjcmV0"}},
+        },
+    )
+    result = config_snapshot.diff("before", "after")
+    assert result["changed"] == {
+        "moduleConfig.mqtt.password": {"from": "<redacted>", "to": "<redacted>"}
+    }
+    assert result["added"] == {"localConfig.security.private_key": "<redacted>"}
+    shown = config_snapshot.diff("before", "after", reveal_secrets=True)
+    assert shown["changed"]["moduleConfig.mqtt.password"] == {"from": "old", "to": "new"}

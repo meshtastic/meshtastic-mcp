@@ -648,13 +648,22 @@ TOOLS = {
 }
 
 
-def test_server_registers_discord_tools_when_token_present() -> None:
-    from meshtastic_mcp import server
+def _load_discord_server(monkeypatch: pytest.MonkeyPatch, tmp_path, token: str | None):
+    import importlib
 
-    tools = {tool.name: tool for tool in asyncio.run(server.app.list_tools())}
-    if not server.CAPS.discord:
-        assert not (TOOLS & set(tools))
-        pytest.skip("discord capability inactive — tools not registered")
+    from meshtastic_mcp import discord_server
+
+    monkeypatch.setattr(discord, "token_path", lambda: tmp_path / "missing")
+    monkeypatch.delenv(discord.TOKEN_ENV, raising=False)
+    if token is not None:
+        monkeypatch.setenv(discord.TOKEN_ENV, token)
+    return importlib.reload(discord_server)
+
+
+def test_discord_server_registers_the_tools_when_a_token_resolves(monkeypatch, tmp_path) -> None:
+    mod = _load_discord_server(monkeypatch, tmp_path, "dummy-token")
+    tools = {tool.name: tool for tool in asyncio.run(mod.app.list_tools())}
+    assert set(tools) == TOOLS
     for n in TOOLS:
         ann = tools[n].annotations
         assert (
@@ -664,6 +673,32 @@ def test_server_registers_discord_tools_when_token_present() -> None:
             and not ann.destructive_hint
         )
     assert "trust" in (tools["discord_search"].description or "")
+
+
+def test_discord_server_lists_no_tool_without_a_token(monkeypatch, tmp_path) -> None:
+    mod = _load_discord_server(monkeypatch, tmp_path, None)
+    assert not asyncio.run(mod.app.list_tools())
+
+
+def test_discord_server_imports_no_device_module() -> None:
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; import meshtastic_mcp.discord_server; "
+        "bad = [m for m in ('meshtastic_mcp.recorder', 'meshtastic_mcp.server', "
+        "'meshtastic_mcp.backends.legacy', 'meshtastic_mcp.connection') if m in sys.modules]; "
+        "assert not bad, bad"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_device_server_lists_no_discord_tool() -> None:
+    from meshtastic_mcp import server, tool_meta
+
+    names = {tool.name for tool in asyncio.run(server.app.list_tools())}
+    assert not {n for n in names if n.startswith("discord_")}
+    assert not (TOOLS & set(tool_meta.META))
 
 
 # -- channel readability -----------------------------------------------------

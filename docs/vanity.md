@@ -28,7 +28,7 @@ in both apps, and picking a colour is just a pattern over the id.
 |---|---|---|
 | `vanity_preview` | — | What node id + colour a private key produces. No device, no GPU. |
 | `vanity_grind_start` | `mvgrind` | Launch a grind in the background, get a `job_id`. |
-| `vanity_grind_poll` | `mvgrind` | Status, progress, and any verified hits so far. |
+| `job(job_id)` | `mvgrind` | Status, progress, and any verified hits so far. |
 | `vanity_grind_stop` | `mvgrind` | Stop a grind; keep what it already found. |
 | `vanity_apply` | — | Write a key to a device, moving it to the matching NodeNum. |
 
@@ -39,7 +39,7 @@ key ground on a friend's GPU is still inspectable and applicable here.
 
 ```python
 vanity_grind_start(color="crimson", tol=6)  # -> {"job_id": "ea27…"}
-vanity_grind_poll("ea27…")  # -> hits[0].node_id "!19d70f3f", verified true
+job("ea27…")  # -> hits[0].node_id "!19d70f3f", verified true
 vanity_apply(private_key=hits[0]["private_key_hex"], port="/dev/ttyUSB0", confirm=True)
 # -> {"changed": true, "node_id": "!19d70f3f", "verified": true}
 ```
@@ -173,7 +173,7 @@ Everything a grind produces is **private-key material**:
 
 - Hits land in `<MCP data dir>/grinds/<job_id>.keys`, mode `0600`.
 - The job log holds the same keys — mvgrind prints hits to stdout — also `0600`.
-- `vanity_grind_poll` returns keys inline, because that is what `vanity_apply`
+- `job` on a grind returns keys inline, because that is what `vanity_apply`
   consumes. They pass through the model's context; treat the transcript
   accordingly.
 - Never run `mvgrind` by hand in a repo checkout without `-o`: it appends to

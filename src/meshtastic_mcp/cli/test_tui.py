@@ -672,7 +672,7 @@ def _build_app(
         def _poll_once(self) -> None:
             try:
                 from meshtastic_mcp import devices as devices_mod
-                from meshtastic_mcp import info as info_mod
+                from meshtastic_mcp.backends import legacy as info_mod
             except Exception as exc:  # pragma: no cover
                 self._app.post_message(
                     PytestLine(source="stderr", line=f"[tui] device import failed: {exc!r}")

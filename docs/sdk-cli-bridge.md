@@ -11,8 +11,8 @@ the way the MCP already shells out to `pio` / `adb` / `idb` / `esptool`. It exis
 SDK's engine (BLE / TCP / USB-serial, two-stage handshake, NodeDB, ACK correlation) as an
 alternative device backend.
 
-The tools register only when the CLI launcher is resolvable (`capabilities.has_sdk_cli()`), so a
-plain install is unaffected.
+The SDK backend is available only when the CLI launcher resolves (`capabilities.has_sdk_cli()`), so
+a plain install is unaffected.
 
 ## Setup
 
@@ -29,13 +29,11 @@ Then point the MCP at it, either way:
   (`samples/cli/build/install/cli/bin/cli`).
 - `MESHTASTIC_SDK_ROOT` — a meshtastic-sdk checkout; the launcher is derived from it.
 
-## Tools
+## Using it
 
-- **`sdk_status`** — whether the CLI resolves, and from which env var.
-- **`sdk_device_info(transport, timeout_ms)`** — one-shot snapshot (own node + node count).
-- **`sdk_list_nodes(transport, timeout_ms)`** — node-DB snapshot (each node's wire-JSON).
-- **`sdk_send_text(transport, message, to, channel, await_ms, timeout_ms)`** — transmit and await
-  Acked/Delivered/Failed (device-mutating).
+Set `MESHTASTIC_MCP_BACKEND=sdk` and the device intents run through the CLI: `inspect` reads the
+summary and node DB, and `send` sends text. The other operations raise an error saying they are
+not available over the SDK yet. The pre-1.0 `sdk_*` tools are in the `legacy` toolset.
 
 `transport` accepts the SDK syntax `tcp:host[:port]` / `serial:port[:baud]` / `ble:needle`, and
 also `tcp://host` or a bare serial device path for convenience. A separate JVM process owns the

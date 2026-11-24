@@ -19,12 +19,12 @@ falls into exactly one bucket:
 ## Procedure
 
 1. **Collect the window.** Around the assertion deadline:
-   - `packets_window` — did a `TEXT_MESSAGE_APP` carrying the token cross the wire? from which node?
-   - `logs_window` — NAK / `err=5` MAX_RETRANSMIT (expected on broadcast in a flat mesh — not a
+   - `packets` — did a `TEXT_MESSAGE_APP` carrying the token cross the wire? from which node?
+   - `logs` — NAK / `err=5` MAX_RETRANSMIT (expected on broadcast in a flat mesh — not a
      delivery failure; see `loop-outbound.md`)? config-reboot loops? bind errors?
-   - `events_window` — your `mark_event` anchors.
+   - `events` — your `mark_event` anchors.
    - app `layout` / `screen capture` at the deadline — connection state + current screen.
-   The `triage_bundle` MCP tool gathers the three recorder windows in one call.
+   Read all three with `query` (one SELECT per view, filtered on `ts` around the deadline).
 2. **Correlate by epoch timestamp.** All recorder rows and `android layout` snapshots share the
    same clock — that alignment is the whole point.
 3. **Classify** into one bucket above. The bucket dictates the fix:
@@ -36,7 +36,7 @@ falls into exactly one bucket:
 
 ## Fast checks
 
-- Mesh formed? `list_nodes` on the DUT should show the tester's short name. If only itself, the
+- Mesh formed? `inspect(what="nodes")` on the DUT should show the tester's short name. If only itself, the
   mesh didn't form — NodeInfo warmup or multicast loopback.
 - App connected? The Connect screen shows "Subscribed"/"Connected Radio". If "Disconnected:
   Error while receiving data", the device plane went away (nodes died) — check the supervisor.

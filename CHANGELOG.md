@@ -5,6 +5,108 @@ All notable changes are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+- `vendor` matches subcommands regardless of case, so `CHIP_ID` runs as a read and `ERASE_FLASH` asks like `erase-flash`.
+- `sim_status` reports `inject_queued`, the accepted injections still waiting for an app to connect; `injected` counts only packets a client received.
+
+### Added
+- **Text messages carry their text in the recorder** - the `packets` view has a `text` column
+  with the decoded text of each `TEXT_MESSAGE_APP` packet, so `query` and `wait_for` match a
+  message directly (`text = 'hello'`). Rows recorded before it read as null.
+- **`wait_for` takes `node`** like `inspect`, `send` and `configure`; `port` still works.
+- **Eval results name each tool error** - every run records `tool_error_texts`, the tool and
+  its error message.
+- **More requests from `send`** - `request` takes `position`, `neighbor_info` and `node_info`
+  besides `traceroute` and `telemetry`, and `telemetry` names the metrics it asks for (`device`,
+  `environment`, `air_quality`, `power`, `local_stats`, `health`, `host`). Every request goes with
+  want_ack and the radio's own `lora.hop_limit`, which firmware needs before it answers.
+- **Remote admin** - `admin` and `configure` take `dest` to act on another node over PKI admin.
+  A node that does not list this radio's key in `security.admin_key` is named as the reason.
+- **`configure` keys beyond the config sections** - `owner.is_licensed` and
+  `owner.is_unmessagable`, `channel.N.*` to edit or add a channel and `channel.N.delete`,
+  `fixed_position` (set, or null to clear), `canned_messages` and `ringtone`.
+- **`admin` actions `set_time` and `add_contact`**, `inspect(what="contact_url")` for this radio's
+  shareable contact, and `set_channel_url(add_only=True)` to add channels without replacing the set.
+- **`doctor` checks the server itself** - a running `serve` on other code than this install, a
+  git or PyPI install next to a workspace checkout at another commit, and a binary that exists
+  but is off the server's PATH (systemd's default PATH has no `sbin`) are `degraded`, each with
+  the fix. A `serve` running from a checkout records its commit, so `doctor` flags one started
+  before the last pull, and the server names the commit it runs in its startup line.
+- **`nrf52_mount_uf2` and `nrf52_eject_uf2`** - mount a board's UF2 drive on a host that does not
+  automount it, and eject it the way a desktop does, through udisks2 or `diskutil`, for bootloader
+  benches; flashing never needs them. A polkit refusal over SSH prints the one-shot rule, and
+  `doctor` reports it on Linux.
+- **A hidden or removed tool name says what replaces it** - a call to `device_info` while
+  `legacy` is hidden names `inspect` and the `all,legacy` opt-in instead of `Unknown tool`.
+
+- **Generated configuration and index.** `docs/configuration.md` lists every environment variable
+  the package reads, from `env_vars.py`; a test fails when the code reads one it does not name.
+  The group table in `docs/toolsets.md` and `llms.txt` are generated too. New pages:
+  `docs/bench.md` for a shared bench and `docs/e2e.md` for the app test loop.
+
+### Changed
+- **Irreversible tools ask a person by default** - factory resets, erases, `vanity_apply` and
+  destructive `vendor` calls no longer run on the agent's own `confirm=True`; a client that cannot
+  ask gets a `Stopped:` refusal. `MESHTASTIC_MCP_CONFIRM` defaults to `human`, and `agent` restores
+  the old behavior for an unattended bench.
+- **One device path** - `set_channel_url`, `send_input_event`, the `meshtastic://device/*`
+  resources, `nrf52_enter_uf2`, `install`'s UF2 entry, the `info` and `nodes` CLI commands and the
+  legacy tools all reach the radio through the backend the intent tools use, and so do the web
+  control plane, recovery, the PA sweep, the RF oracle and the hardware suite. `info.py` and
+  `admin.py` are gone. Legacy `get_config` now withholds the fields the protos mark sensitive,
+  as `inspect` does; config snapshots still keep them for restore. `meshtastic>=2.7.10` is
+  required, for its fixed `factoryReset` and its contact URLs.
+- **The pre-1.0 tools are opt-in** - `device_info`, `get_config`, `set_config`, `send_text`,
+  `reboot`, the `replay_*` tools and the rest form a `legacy` toolset that is hidden unless named:
+  `MESHTASTIC_MCP_TOOLSETS=all,legacy`. `inspect`, `configure`, `send`, `admin`, `sim` and
+  `inject` replace them, and `legacy` is removed in 1.1.
+- **The default tool list is about 40 tools** - the tools a 1.0 tool replaces joined `legacy`:
+  the `_start`/`_poll` pairs (`job` follows every job), the recorder windows,
+  `telemetry_timeline` and `triage_bundle` (`query`), `serial_read` and `serial_list`,
+  `list_devices` (`devices(include_unknown=True)`), the per-flasher tools (`install`, `vendor`),
+  the `android_*`/`ios_*` drivers `app` and `app_view` cover, `replay_fuzz_presets`
+  (`sim_status(fuzz_presets=True)`) and the `sdk_*` bridge (`MESHTASTIC_MCP_BACKEND=sdk`).
+  Unset `MESHTASTIC_MCP_TOOLSETS` now exposes `core`, `app`, `hardware` and `replay`; `all`
+  adds the specialist groups `firmware`, `display`, `android`, `apple`, `tak`, `rf` and `sdk`.
+  Calling a tool from a group left out says which setting adds it.
+- **`job`, `install` and `vendor` return typed results** - their `outputSchema` names the
+  fields, like the other 1.0 tools.
+- **Each tool declares its own hints** - `@meta(...)` above a tool's `def` sets its
+  read-only, destructive, idempotent and open-world hints, its title and what its `port`
+  means for leases, replacing the name lists in `server.py`. `server` no longer re-exports
+  the tools and helpers; import them from the module that defines them.
+- **Discord moved to its own server** - the `discord_*` tools are served by
+  `meshtastic-mcp-discord`, not this server.
+- **A stdio client on the bench host bridges to a running `serve`** - so one server owns the
+  radios. `MESHTASTIC_MCP_STANDALONE=1` runs a separate server anyway.
+- **`duckdb` is a core dependency** - for the recorder's `query` and `wait_for`.
+- **Every tool call leaves a server-log line** - on stderr, with the tool, its target radio, the
+  duration and, on failure, the reason. Argument values other than the target are never logged.
+
+### Removed
+
+- `docs/sim-realism-plan.md`, a plan rather than a user doc.
+- **The local-model tools** - `summarize_window`, `vision_oracle`, `triage_window` and the
+  `local_model_*` tools.
+
+### Fixed
+- **Snapshots keep owner and channels** - `config_snapshot` and the snapshot `configure` takes
+  before a write now hold the owner and all eight channel slots, keys included, and
+  `configure(restore=...)` puts them back. A restore after an erase left the radio unnamed and on
+  default channels. Channel keys are withheld in `config_diff`. Older snapshots still restore.
+- `nrf52_flash_uf2` flashes a bootloader self-update (`update-*.uf2`), which it refused as built
+  for the other SoftDevice, and asks even with `confirm=True` under `MESHTASTIC_MCP_CONFIRM=human`.
+- A refusal from meshtastic-python (an unknown destination name, a blank owner name, a config
+  section it cannot write) is a tool error, not the end of the server.
+- Waiting for a restarted radio survives the library's handshake timeout, and a `configure` whose
+  read-back fails still returns its snapshot.
+- `admin` resets wait out the firmware's restart timer before reconnecting.
+- `install` writes a `.bin` at 0x0 only when it is a `firmware-*.factory.bin` image.
+- `MESHTASTIC_MCP_TOOLSETS` naming `discord` or `local-model` logs where they went instead of
+  stopping the server.
+- `config_diff` shows that a key or password changed, not its value, unless `reveal_secrets`.
+- A flash or vendor call that names no port is refused while another session holds a lease.
+
 ## [0.4.0] - 2026-11-17
 
 ### Added

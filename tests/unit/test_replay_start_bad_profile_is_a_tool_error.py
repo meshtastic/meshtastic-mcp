@@ -11,6 +11,8 @@ from typing import Any
 import pytest
 from fastmcp.exceptions import ToolError
 
+from meshtastic_mcp.tools import replay as tools_replay
+
 _BAD_PROFILES: list[Any] = [
     {"beacon_presets": "SHORT"},
     {"beacon_presets": ["NOT_A_PRESET"]},
@@ -41,7 +43,7 @@ def _args(profile: Any) -> dict[str, Any]:
 @pytest.mark.parametrize("profile", _BAD_PROFILES)
 def test_bad_sim_profile_raises_tool_error(server, profile: Any) -> None:
     with pytest.raises(ToolError):
-        server.replay_start(**_args(profile))
+        tools_replay.replay_start(**_args(profile))
 
 
 def test_bad_sim_profile_reaches_the_client_as_its_own_message(server) -> None:

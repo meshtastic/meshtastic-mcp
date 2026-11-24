@@ -11,7 +11,21 @@ import pytest
 from fastmcp import Client
 from mcp.types import ElicitResult
 
-from meshtastic_mcp import admin, confirm
+from meshtastic_mcp import confirm
+
+
+def _record_admin(monkeypatch, calls: list[dict], keys: tuple[str, ...]) -> None:
+    """The legacy reboot and factory_reset tools reach the radio through the backend."""
+    from meshtastic_mcp import backends
+    from meshtastic_mcp.backends.python import PythonBackend
+
+    def fake_admin(self, target, action, node_id, seconds, wait_back, timeout_s, *rest):
+        seen = {"port": target, "confirm": True, "full": action.endswith("_full")}
+        calls.append({k: seen[k] for k in keys})
+        return {"target": target, "action": action, "ok": True}
+
+    monkeypatch.setattr(PythonBackend, "admin", fake_admin)
+    monkeypatch.delenv(backends.BACKEND_ENV, raising=False)
 
 
 @pytest.fixture
@@ -20,14 +34,7 @@ def reboots(monkeypatch):
     from meshtastic_mcp import server
 
     calls: list[dict] = []
-    monkeypatch.setattr(
-        admin,
-        "reboot",
-        lambda port=None, confirm=False, seconds=10: (
-            calls.append({"port": port, "confirm": confirm})
-            or {"ok": True, "rebooting_in_s": seconds}
-        ),
-    )
+    _record_admin(monkeypatch, calls, ("port", "confirm"))
     monkeypatch.delenv(confirm_env(), raising=False)
     return calls, server
 
@@ -114,14 +121,8 @@ def resets(monkeypatch):
     from meshtastic_mcp import server
 
     calls: list[dict] = []
-    monkeypatch.setattr(
-        admin,
-        "factory_reset",
-        lambda port=None, confirm=False, full=False: (
-            calls.append({"confirm": confirm, "full": full}) or {"ok": True, "full": full}
-        ),
-    )
-    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    _record_admin(monkeypatch, calls, ("confirm", "full"))
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
     return calls, server
 
 
@@ -169,9 +170,25 @@ def test_human_policy_refuses_a_client_that_cannot_ask(resets, monkeypatch) -> N
     assert calls == []
 
 
+def test_an_agent_cannot_confirm_an_irreversible_tool_by_default(resets, monkeypatch) -> None:
+    calls, server = resets
+    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    text = _reset(server, {"confirm": True}).content[0].text
+    assert calls == []
+    assert "Stopped" in text and "cannot be undone" in text
+    assert "confirm=True" not in text
+
+
+def test_agent_policy_lets_an_unattended_bench_confirm(resets, monkeypatch) -> None:
+    calls, server = resets
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
+    assert _reset(server, {"confirm": True}).is_error is False
+    assert len(calls) == 1
+
+
 def test_human_policy_does_not_ask_for_a_reversible_tool(reboots, monkeypatch) -> None:
     calls, server = reboots
-    assert confirm.policy({}) == "agent"
+    assert confirm.policy({}) == "human"
     assert confirm.policy({confirm.POLICY_ENV: "HUMAN"}) == "human"
     with pytest.raises(ValueError, match=confirm.POLICY_ENV):
         confirm.policy({confirm.POLICY_ENV: "sometimes"})

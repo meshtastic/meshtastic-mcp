@@ -18,6 +18,7 @@ import zlib
 import pytest
 
 from meshtastic_mcp import display_mirror as dm
+from meshtastic_mcp.tools import core as tools_core
 
 # ── wire helpers ───────────────────────────────────────────────────────────
 
@@ -559,16 +560,15 @@ def test_an_undecodable_region_drops_the_whole_table() -> None:
 
 
 def test_capture_paths_stay_inside_the_capture_base(tmp_path, monkeypatch) -> None:
-    from meshtastic_mcp import server
 
     monkeypatch.setenv("MESHTASTIC_MCP_CAPTURE_DIR", str(tmp_path))
-    assert server._capture_target("docs/01-home.png") == tmp_path / "docs" / "01-home.png"
+    assert tools_core._capture_target("docs/01-home.png") == tmp_path / "docs" / "01-home.png"
     with pytest.raises(ValueError, match="inside"):
-        server._capture_target("../escape.png")
+        tools_core._capture_target("../escape.png")
     with pytest.raises(ValueError, match="inside"):
-        server._capture_target("/etc/passwd.png")
+        tools_core._capture_target("/etc/passwd.png")
     with pytest.raises(ValueError, match=r"\.png"):
-        server._capture_target("notes.txt")
+        tools_core._capture_target("notes.txt")
 
 
 # ── wake ───────────────────────────────────────────────────────────────────

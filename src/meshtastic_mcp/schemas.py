@@ -52,6 +52,62 @@ class DeviceInfo(TypedDict, total=False):
     display: Any
 
 
+class InspectResult(TypedDict):
+    target: Any
+    backend: str
+    summary: NotRequired[dict[str, Any]]
+    config: NotRequired[dict[str, Any]]
+    channels: NotRequired[list[dict[str, Any]]]
+    url: NotRequired[dict[str, str]]
+    contact_url: NotRequired[str]
+    nodes: NotRequired[list[dict[str, Any]]]
+    network: NotRequired[dict[str, Any]]
+    errors: NotRequired[dict[str, str]]
+
+
+class AdminResult(TypedDict):
+    target: Any
+    action: str
+    ok: bool
+    dest: NotRequired[str]
+    node_id: NotRequired[Any]
+    time: NotRequired[int]
+    back: NotRequired[bool | None]
+    restarted: NotRequired[bool]
+    uptime_s: NotRequired[float]
+    error: NotRequired[str]
+
+
+class ConfigureResult(TypedDict):
+    target: Any
+    dry_run: bool
+    changes: dict[str, Any]
+    verified: bool | None
+    restarted: bool | None
+    snapshot: NotRequired[dict[str, str]]
+    transaction: NotRequired[bool]
+    mismatches: NotRequired[dict[str, Any]]
+    side_effects: NotRequired[dict[str, Any]]
+    uptime_s: NotRequired[dict[str, Any]]
+    errors: NotRequired[dict[str, str]]
+    dest: NotRequired[str]
+    unverified: NotRequired[list[str]]
+
+
+class SendResult(TypedDict):
+    target: Any
+    destination: Any
+    kind: str
+    packet_id: NotRequired[Any]
+    delivery: NotRequired[str | None]
+    ack_from: NotRequired[Any]
+    reply: NotRequired[Any]
+    waited_s: NotRequired[float]
+    tx_confirmed: NotRequired[bool | None]
+    tx_latency_s: NotRequired[float | None]
+    tx_unconfirmed_reason: NotRequired[str]
+
+
 class NodeUser(TypedDict, total=False):
     long_name: str | None
     short_name: str | None
@@ -87,6 +143,59 @@ class LogsWindow(TypedDict, total=False):
     total_matched: int
     dropped: int
     window: QueryWindow
+
+
+class NamedDevice(TypedDict):
+    name: str | None
+    port: str | None
+    attached: bool
+    node_num: int | None
+    model: str | None
+    long_name: str | None
+    short_name: str | None
+    ble_address: str | None
+    ble_name: str | None
+    last_seen: float | None
+    leased_to: str | None
+    key: str
+
+
+class DevicesResult(TypedDict):
+    devices: list[NamedDevice]
+    other_ports: NotRequired[
+        Annotated[
+            list[DeviceEntry],
+            Field(description="with include_unknown: serial ports not seen as a radio"),
+        ]
+    ]
+
+
+class LeaseInfo(TypedDict):
+    device: str
+    port: str
+    holder: str
+    host: str
+    claimed_at: float
+    expires_at: float
+
+
+class ClaimResult(LeaseInfo):
+    lease: str
+
+
+class QueryResult(TypedDict):
+    columns: list[str]
+    rows: list[list[Any]]
+    row_count: int
+    truncated: bool
+
+
+class WaitForResult(TypedDict):
+    matched: bool
+    rows: list[list[Any]]
+    columns: list[str]
+    waited_s: float
+    port: str
 
 
 class PacketsWindow(TypedDict, total=False):
@@ -139,7 +248,9 @@ class SetChannelUrlResult(TypedDict):
     """`set_channel_url` result."""
 
     ok: bool
+    target: NotRequired[Any]
     channels_imported: Annotated[int, Field(description="channels not DISABLED after the import")]
+    channels_added: NotRequired[Annotated[int, Field(description="new channels, with add_only")]]
 
 
 class SendTextResult(TypedDict):
@@ -163,6 +274,15 @@ class SendTextResult(TypedDict):
     tx_unconfirmed_reason: NotRequired[
         Annotated[str, Field(description="why `tx_confirmed` is false or null")]
     ]
+
+
+class InjectResult(TypedDict, total=False):
+    """`inject` result: `id`, `queued` and `connected`, or `error` for an unknown session."""
+
+    id: str
+    queued: int
+    connected: bool
+    error: str
 
 
 class RebootResult(TypedDict):
@@ -368,3 +488,122 @@ class BleSniffStatus(TypedDict):
     capture_dir: str
     transmit_supported: Annotated[bool, Field(description="always false")]
     active_captures: list[BleActiveCapture]
+
+
+# ---------- simulated radio (`sim`, `sim_status`) ---------------------------
+
+
+class SimSession(TypedDict, total=False):
+    """One simulated radio session, as `sim(action="start")` and `sim_status` report it."""
+
+    id: str
+    capture: str
+    listen: str
+    connect: list[str]
+    mode: str
+    target_rate: float | None
+    achieved_rate: float | None
+    loop: bool
+    hold: bool
+    pass_complete: bool
+    nodes: int
+    channels: Any
+    packets_total: int
+    packets_sent: int
+    injected: Annotated[int, Field(description="injected packets written to a connected client")]
+    inject_queued: NotRequired[
+        Annotated[int, Field(description="accepted injections waiting for a client to connect")]
+    ]
+    stats_sent: int
+    duplicates_seen: int
+    connected: bool
+    client: Any
+    ended: bool
+    error: Any
+    capture_span: dict[str, Any]
+    uptime_s: float
+    fuzz: Any
+    mdns: Any
+    local_metrics: Any
+
+
+class SimResult(SimSession):
+    """`sim` result: the started session, or `stopped` for `action="stop"`."""
+
+    stopped: NotRequired[
+        Annotated[list[str], Field(description="ids of the sessions a stop ended")]
+    ]
+
+
+class SimStatusResult(SimSession):
+    """`sim_status` result: one session's fields, `sessions` for all, or `error` for a bad id."""
+
+    sessions: NotRequired[list[SimSession]]
+    presets: NotRequired[
+        Annotated[dict[str, Any], Field(description="with fuzz_presets: {name: {category: rate}}")]
+    ]
+    usage: NotRequired[str]
+
+
+# ---------- App driving -----------------------------------------------------
+
+
+class AppResult(TypedDict):
+    """`app` and `app_view` result."""
+
+    platform: str
+    action: str
+    result: Annotated[Any, Field(description="what the backing tool returns; its shape varies")]
+
+
+# ---------- background jobs, install and vendor ------------------------------
+
+
+class JobListEntry(TypedDict, total=False):
+    job_id: str
+    kind: str
+    label: str
+    status: str
+    elapsed_s: float
+
+
+class JobResult(TypedDict, total=False):
+    """`job` result: one job's state (plus the keys its kind's poller adds), or `jobs`."""
+
+    jobs: Annotated[list[JobListEntry], Field(description="every job, when no id was given")]
+    job_id: str
+    kind: str
+    label: str
+    status: Annotated[str, Field(description="running, done, failed or canceled")]
+    elapsed_s: float
+    duration_s: float | None
+    exit_code: int | None
+    artifacts: list[Any]
+    log_tail: Any
+    log_path: str
+    worker_error: Any
+
+
+class VendorResult(TypedDict, total=False):
+    """`vendor` result: the command's exit code and output; parsed keys vary by subcommand."""
+
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    stdout_tail: Any
+    stderr_tail: Any
+    raw_stdout_tail: Any
+    duration_s: float
+
+
+class InstallResult(TypedDict, total=False):
+    """`install` result: the flash job, the method it used and what the board reports after."""
+
+    job_id: str
+    method: Annotated[str, Field(description="the flasher used, e.g. esptool-ota, uf2, nrfutil")]
+    exit_code: int | None
+    stdout_tail: Any
+    stderr_tail: Any
+    back: Annotated[bool, Field(description="the board answered after the write")]
+    firmware_version: str | None
+    error: Any

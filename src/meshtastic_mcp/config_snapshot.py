@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import admin
+from . import backends
 
 
 def _snapshot_dir() -> Path:
@@ -69,21 +69,20 @@ def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def capture(name: str, port: str | None = None) -> dict[str, Any]:
-    """Capture the device's full config to a named snapshot.
+    """Capture the device's config, owner and channels to a named snapshot.
 
     Overwrites an existing snapshot of the same name. Returns metadata about
     what was captured (counts, path).
     """
     path = _snapshot_path(name)
-    cfg = admin.get_config(section=None, port=port)  # full config
+    config: dict[str, Any] = backends.for_target(port).raw_config(port, 10.0)
     snapshot = {
         "name": name,
         "captured_at": time.time(),
         "port": port,
-        "config": cfg.get("config", cfg),
+        "config": config,
     }
     _write_private_json(path, snapshot)
-    config = snapshot["config"]
     local = config.get("localConfig", {})
     module = config.get("moduleConfig", {})
     return {
@@ -93,6 +92,20 @@ def capture(name: str, port: str | None = None) -> dict[str, Any]:
         "local_sections": sorted(local.keys()),
         "module_sections": sorted(module.keys()),
     }
+
+
+def save(name: str, port: str | None, config: dict[str, Any]) -> str:
+    """Write `config` as snapshot `name` and return its path."""
+    path = _snapshot_path(name)
+    _write_private_json(
+        path, {"name": name, "captured_at": time.time(), "port": port, "config": config}
+    )
+    return str(path)
+
+
+def load_config(name: str) -> dict[str, Any]:
+    """A snapshot's config, owner and channels (older snapshots hold config only)."""
+    return dict(_load(name)["config"])
 
 
 def list_snapshots() -> list[dict[str, Any]]:
@@ -133,7 +146,30 @@ def _flatten(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     return flat
 
 
-def diff(name_a: str, name_b: str | None = None, port: str | None = None) -> dict[str, Any]:
+def _secret_paths() -> frozenset[str]:
+    from meshtastic.protobuf import localonly_pb2
+
+    from .backends.protodict import sensitive_paths
+
+    return sensitive_paths(localonly_pb2.LocalConfig.DESCRIPTOR, "localConfig") | sensitive_paths(
+        localonly_pb2.LocalModuleConfig.DESCRIPTOR, "moduleConfig"
+    )
+
+
+def _withhold(path: str, value: Any, secrets: frozenset[str]) -> Any:
+    from .backends.protodict import REDACTED
+
+    secret = path in secrets or (path.startswith("channels.") and path.endswith(".psk"))
+    # An empty value stays, so "no password set" is still visible.
+    return REDACTED if secret and value not in ("", 0, [], None) else value
+
+
+def diff(
+    name_a: str,
+    name_b: str | None = None,
+    port: str | None = None,
+    reveal_secrets: bool = False,
+) -> dict[str, Any]:
     """Diff two snapshots, or a snapshot against the live device.
 
     If `name_b` is None, snapshot `name_a` is diffed against the current live
@@ -142,8 +178,7 @@ def diff(name_a: str, name_b: str | None = None, port: str | None = None) -> dic
     """
     config_a = _load(name_a)["config"]
     if name_b is None:
-        live = admin.get_config(section=None, port=port)
-        config_b = live.get("config", live)
+        config_b = backends.for_target(port).raw_config(port, 10.0)
         label_b = "live"
     else:
         config_b = _load(name_b)["config"]
@@ -158,6 +193,15 @@ def diff(name_a: str, name_b: str | None = None, port: str | None = None) -> dic
     }
     added = {k: flat_b[k] for k in keys_b - keys_a}
     removed = {k: flat_a[k] for k in keys_a - keys_b}
+    if not reveal_secrets:
+        # A snapshot holds keys and passwords in clear; the diff says that one changed, not to what.
+        secrets = _secret_paths()
+        changed = {
+            k: {"from": _withhold(k, v["from"], secrets), "to": _withhold(k, v["to"], secrets)}
+            for k, v in changed.items()
+        }
+        added = {k: _withhold(k, v, secrets) for k, v in added.items()}
+        removed = {k: _withhold(k, v, secrets) for k, v in removed.items()}
 
     return {
         "from": name_a,

@@ -59,7 +59,7 @@ dut = avd.tcp_dut_address(4403)  # "10.0.2.2:4403"
 
 # 4. Run a loop, e.g. inbound (device → app):
 TOKEN = f"E2E-{int(time.time())}"
-# tester sends via the MCP send_text / mesh_e2e.py against :4404 ...
+# tester sends via the MCP send / mesh_e2e.py against :4404 ...
 assert avd.poll_for_text(TOKEN, serial=serial, timeout=30)  # app rendered it → PASS
 ```
 
@@ -82,7 +82,7 @@ stays suppressed). `CLIENT_MUTE` nodes never rebroadcast at all, compounding it.
 
 ### Correct handling
 - **Assert the outbound loop on wire truth, not the UI checkmark.** The receiving node *does*
-  get the `TEXT_MESSAGE_APP` (verify via the recorder `packets_window` / a
+  get the `TEXT_MESSAGE_APP` (verify via `query` over the recorder's `packets` view / a
   `meshtastic.receive.text` listener on the tester). The bubble's delivery state is a separate,
   topology-dependent signal that is unreliable in a flat virtual mesh.
 - **For app-visible delivery success, send a directed message (DM), not a broadcast.** A DM gets

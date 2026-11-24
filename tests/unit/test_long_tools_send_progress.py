@@ -23,6 +23,7 @@ import pytest
 from fastmcp import Client, FastMCP
 
 from meshtastic_mcp import config, confirm, flash, jobs, pio, port_recovery, userprefs
+from tests.unit._tool_fns import tool_fn
 
 PORT = "/dev/progress-test-port"
 
@@ -71,7 +72,7 @@ COMPILE = [
 @pytest.fixture(autouse=True)
 def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHTASTIC_MCP_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
     monkeypatch.delenv("MESHTASTIC_MCP_FLASH_LOG", raising=False)
 
 
@@ -125,7 +126,7 @@ def firmware_tree(tmp_path, monkeypatch):
 def _app(server, *names: str, task: bool = False) -> FastMCP:
     app = FastMCP("t")
     for name in names:
-        tool = getattr(server, name)
+        tool = tool_fn(name)
         register = app.tool(task=True) if task else app.tool()
         register(getattr(tool, "fn", tool))
     return app

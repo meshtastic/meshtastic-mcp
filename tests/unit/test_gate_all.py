@@ -13,12 +13,13 @@ from fastmcp import Client, FastMCP
 from mcp.types import ElicitResult
 
 from meshtastic_mcp import confirm, flash, hw_tools, jobs
+from tests.unit._tool_fns import tool_fn
 
 
 @pytest.fixture(autouse=True)
 def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHTASTIC_MCP_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
 
 
 @pytest.fixture(scope="module")
@@ -43,7 +44,7 @@ def _answer(action: str = "accept"):
 def _app_with(server, *names: str) -> FastMCP:
     app = FastMCP("t")
     for name in names:
-        tool = getattr(server, name)
+        tool = tool_fn(name)
         app.tool()(getattr(tool, "fn", tool))
     return app
 

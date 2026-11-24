@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..tool_meta import meta
 from ._app import app_plane_tool, apple_tool
 from ._shared import _capture_dir
 
@@ -18,6 +19,7 @@ _IOS_SCREENSHOT_DIR = Path(tempfile.mkdtemp(prefix="meshtastic-mcp-ios-"))
 
 
 @apple_tool()
+@meta("read")
 def ios_list_simulators(available_only: bool = True) -> list[dict[str, Any]]:
     """List iOS Simulator devices: `udid`, `name`, `state` (Booted/Shutdown) and `runtime`.
 
@@ -33,6 +35,7 @@ def ios_list_simulators(available_only: bool = True) -> list[dict[str, Any]]:
 
 
 @apple_tool()
+@meta("destructive")
 def ios_boot(name_contains: str = "iPhone", udid: str | None = None) -> dict[str, Any]:
     """Boot an iOS Simulator and return its `udid`.
 
@@ -52,6 +55,7 @@ def ios_boot(name_contains: str = "iPhone", udid: str | None = None) -> dict[str
 
 
 @apple_tool()
+@meta("destructive")
 def ios_screenshot(
     udid: str | None = None,
     appearance: str | None = None,
@@ -82,6 +86,7 @@ def ios_screenshot(
 
 
 @apple_tool()
+@meta("destructive", port="not_device")
 def ios_open_url(
     url: str | None = None, port: int | None = None, udid: str | None = None
 ) -> dict[str, Any]:
@@ -94,7 +99,7 @@ def ios_open_url(
 
     Args:
         url: The URL to open, such as a deep link.
-        port: Host TCP port of a node such as a `replay_start` session; opens the app's
+        port: Host TCP port of a node such as a `sim` session; opens the app's
             connect link to it. Needs Meshtastic-Apple 2.7.28 or later.
         udid: Simulator to open it in; omit for the booted one.
     """
@@ -109,6 +114,7 @@ def ios_open_url(
 
 
 @app_plane_tool()
+@meta("destructive")
 def screenshot_set_start(
     screens: list[str | dict[str, Any]],
     platforms: list[str] | None = None,
@@ -127,7 +133,7 @@ def screenshot_set_start(
 
     Serves each app a replay node from one seed and connects both, then opens each of
     `screens` by deep link and screenshots it in each appearance. Returns `{job_id, status,
-    log_path, out_dir}` at once; poll `screenshot_set_poll`. PNGs land in
+    log_path, out_dir}` at once; follow it with `job`. PNGs land in
     `<out_dir>/<screen>/<platform>-<appearance>.png`. Needs a running emulator with
     Meshtastic-Android, a booted Simulator with Meshtastic-Apple 2.7.28+ past onboarding,
     and idb; a platform that cannot be driven is skipped. Connecting switches each app to
@@ -151,7 +157,7 @@ def screenshot_set_start(
         reset_apps: Reset app settings first (Android clears its data and needs a debug
             build).
         beacon_listen: Serve both replay nodes with the mesh beacon module listening, as
-            `replay_start(beacon_listen=True)` does.
+            `sim(action="start", beacon_listen=True)` does.
     """
     from .. import jobs
     from .. import screenshot_set as ss
@@ -184,6 +190,7 @@ def screenshot_set_start(
 
 
 @app_plane_tool()
+@meta("read")
 def screenshot_set_poll(job_id: str) -> dict[str, Any]:
     """Status, log tail and the PNGs captured so far for a `screenshot_set_start` job.
 
@@ -200,6 +207,7 @@ def screenshot_set_poll(job_id: str) -> dict[str, Any]:
 
 
 @apple_tool()
+@meta("read")
 def ios_ui_dump(udid: str | None = None) -> list[dict[str, Any]]:
     """Dump the iOS Simulator's accessibility tree (labels, values, frames).
 
@@ -215,6 +223,7 @@ def ios_ui_dump(udid: str | None = None) -> list[dict[str, Any]]:
 
 
 @apple_tool()
+@meta("destructive")
 def ios_tap(x: int, y: int, udid: str | None = None) -> dict[str, Any]:
     """Tap the iOS Simulator at (x, y) in points. Needs idb; find targets with `ios_ui_dump`.
 
@@ -230,6 +239,7 @@ def ios_tap(x: int, y: int, udid: str | None = None) -> dict[str, Any]:
 
 
 @apple_tool()
+@meta("destructive")
 def ios_type_text(text: str, udid: str | None = None) -> dict[str, Any]:
     """Type text into the focused field in the iOS Simulator. Needs idb.
 

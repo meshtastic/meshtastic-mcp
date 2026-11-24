@@ -16,7 +16,8 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import admin, flash
+from meshtastic_mcp import flash
+from meshtastic_mcp.backends import legacy
 
 # Deterministic 32-byte "admin key" — just the byte values 0..31 for easy
 # recognition in the output, formatted as a C brace-init.
@@ -56,7 +57,7 @@ def test_admin_key_baked(
         )
         assert result["exit_code"] == 0
 
-        security = admin.get_config(section="security", port=port)["config"]["security"]
+        security = legacy.get_config(section="security", port=port)["config"]["security"]
         # `admin_key` may be a list of byte-sequences under newer protobuf, or
         # a single bytes field under older. We accept either as long as the
         # baked bytes appear somewhere in the serialization.

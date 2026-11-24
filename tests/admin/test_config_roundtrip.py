@@ -31,14 +31,14 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import admin, info
+from meshtastic_mcp.backends import legacy
 
 from .._port_discovery import resolve_port_by_role
 
 
 def _get_hop_limit(port: str) -> int:
     """Read `lora.hop_limit` from the device's current config."""
-    lora = admin.get_config("lora", port=port).get("config", {}).get("lora", {})
+    lora = legacy.get_config("lora", port=port).get("config", {}).get("lora", {})
     hl = lora.get("hop_limit")
     assert isinstance(hl, int), (
         f"lora.hop_limit missing or non-int in get_config response: {lora!r}"
@@ -72,7 +72,7 @@ def test_lora_hop_limit_survives_reboot(
         # assertion still fires then, so this does not mask a regression.
         readback = None
         for _attempt in range(3):
-            admin.set_config("lora.hop_limit", new_value, port=port)
+            legacy.set_config("lora.hop_limit", new_value, port=port)
             time.sleep(1.5)
             try:
                 readback = _get_hop_limit(port)
@@ -87,7 +87,7 @@ def test_lora_hop_limit_survives_reboot(
         # Reboot. `seconds=3` gives the Python client time to
         # disconnect cleanly; sleep long enough for the boot to start
         # before we begin polling.
-        admin.reboot(port=port, confirm=True, seconds=3)
+        legacy.reboot(port=port, confirm=True, seconds=3)
         time.sleep(8.0)
 
         # nRF52 re-enumerates on reboot. Re-resolve INSIDE the poll (with the
@@ -99,7 +99,7 @@ def test_lora_hop_limit_survives_reboot(
             nonlocal port
             try:
                 port = resolve_port_by_role(role, timeout_s=15.0, require_openable=True)
-                if info.device_info(port=port, timeout_s=5.0).get("my_node_num") is None:
+                if legacy.device_info(port=port, timeout_s=5.0).get("my_node_num") is None:
                     return None
                 return _get_hop_limit(port)  # 1..7 → always truthy on success
             except Exception:
@@ -120,6 +120,6 @@ def test_lora_hop_limit_survives_reboot(
         # there is a non-default hop_limit sticks around, which is
         # benign (mesh still works at hop_limit 3 or 5).
         try:
-            admin.set_config("lora.hop_limit", original, port=port)
+            legacy.set_config("lora.hop_limit", original, port=port)
         except Exception:
             pass

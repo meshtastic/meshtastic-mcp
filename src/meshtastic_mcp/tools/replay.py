@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from fastmcp.exceptions import ToolError
 
@@ -20,6 +21,8 @@ from ..replay import engine as replay_engine
 from ..replay import fuzz as replay_fuzz
 from ..replay import get_manager as get_replay_manager
 from ..replay import sim as replay_sim
+from ..schemas import InjectResult, SimResult, SimStatusResult
+from ..tool_meta import meta
 from ._app import app
 
 # ---------- Replay: simulated Meshtastic TCP device -----------------------
@@ -66,6 +69,7 @@ def _load_replay_capture(
 
 
 @app.tool()
+@meta("destructive", port="not_device")
 def replay_start(
     source: str = "meshcon",
     kind: str = "auto",
@@ -219,6 +223,7 @@ def replay_start(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject(
     session_id: str,
     kind: str,
@@ -237,7 +242,7 @@ def replay_inject(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         kind: `waypoint`, `position`, `text`, `nodeinfo` or `raw`.
         args: Fields for `kind`. `waypoint` takes `lat`, `lon`, `name`, `geofence_radius`,
             `bbox`, `notify_on_enter`, `notify_on_exit`, `notify_favorites_only`, `icon`;
@@ -260,6 +265,7 @@ def replay_inject(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject_beacon(
     session_id: str,
     message: str = "Mesh beacon — join the network",
@@ -279,7 +285,7 @@ def replay_inject_beacon(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         message: Beacon text, at most 100 bytes on firmware.
         from_node: Sender node number; omit for a synthetic injector node.
         channel: Channel name to send on.
@@ -309,6 +315,7 @@ def replay_inject_beacon(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject_fileinfo(
     session_id: str,
     file_name: str,
@@ -325,7 +332,7 @@ def replay_inject_fileinfo(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         file_name: Reported file name; with `count` above 1 each copy gets a distinct
             suffix.
         size_bytes: Reported file size in bytes.
@@ -345,6 +352,7 @@ def replay_inject_fileinfo(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject_client_notification(
     session_id: str,
     variant: str = "low_entropy_key",
@@ -366,7 +374,7 @@ def replay_inject_client_notification(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         variant: `low_entropy_key` (regenerated weak keys), `duplicated_public_key`,
             `key_verification_number_request`, `key_verification_number_inform`,
             `key_verification_final`, or `text`.
@@ -397,6 +405,7 @@ def replay_inject_client_notification(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject_traceroute(
     session_id: str,
     destination_node: int,
@@ -417,7 +426,7 @@ def replay_inject_traceroute(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         destination_node: The responding node's number.
         route: Node numbers along the path, destination last; omitted, the path is
             `[from_node, destination_node]`, or a synthetic origin-relay-destination path
@@ -457,6 +466,7 @@ def replay_inject_traceroute(
 
 
 @app.tool()
+@meta("destructive")
 def replay_inject_waypoint(
     session_id: str,
     lat: float,
@@ -483,7 +493,7 @@ def replay_inject_waypoint(
     Returns `{id, queued, connected}`, or `{error}` for an unknown session.
 
     Args:
-        session_id: Session id from `replay_start`.
+        session_id: Session id from `sim(action="start")`.
         lat: Waypoint latitude in decimal degrees.
         lon: Waypoint longitude in decimal degrees.
         name: Waypoint name.
@@ -519,11 +529,229 @@ def replay_inject_waypoint(
     return get_replay_manager().inject(session_id, pkts, channel=channel)
 
 
+_PACKET_KINDS = ("text", "position", "nodeinfo", "raw")
+_PACKET_PARAMS = ("args", "from_node", "to_node", "channel", "count", "fuzz")
+_INJECT_KIND_PARAMS: dict[str, tuple[str, ...]] = {
+    **dict.fromkeys(_PACKET_KINDS, _PACKET_PARAMS),
+    "packet": ("packet_kind", *_PACKET_PARAMS),
+    "waypoint": (
+        "lat",
+        "lon",
+        "name",
+        "description",
+        "icon",
+        "geofence_radius",
+        "bbox",
+        "notify_on_enter",
+        "notify_on_exit",
+        "notify_favorites_only",
+        "from_node",
+        "channel",
+        "count",
+    ),
+    "beacon": (
+        "message",
+        "offer_channel_name",
+        "offer_channel_psk_hex",
+        "offer_region",
+        "offer_preset",
+        "from_node",
+        "channel",
+        "count",
+    ),
+    "client_notification": (
+        "variant",
+        "message",
+        "level",
+        "remote_longname",
+        "nonce",
+        "security_number",
+        "verification_characters",
+        "is_sender",
+        "count",
+    ),
+    "fileinfo": ("file_name", "size_bytes", "count"),
+    "traceroute": (
+        "destination_node",
+        "route",
+        "snr_towards",
+        "route_back",
+        "snr_back",
+        "from_node",
+        "channel",
+    ),
+}
+_INJECT_REQUIRED: dict[str, tuple[str, ...]] = {
+    "packet": ("packet_kind",),
+    "waypoint": ("lat", "lon"),
+    "fileinfo": ("file_name",),
+    "traceroute": ("destination_node",),
+}
+
+
 @app.tool()
+@meta("destructive")
+def inject(
+    session_id: str,
+    kind: Literal[
+        "text",
+        "position",
+        "nodeinfo",
+        "raw",
+        "packet",
+        "waypoint",
+        "beacon",
+        "client_notification",
+        "fileinfo",
+        "traceroute",
+    ],
+    packet_kind: str | None = None,
+    args: dict[str, Any] | None = None,
+    from_node: int | None = None,
+    to_node: int | None = None,
+    channel: str | None = None,
+    count: int | None = None,
+    fuzz: bool | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
+    name: str | None = None,
+    description: str | None = None,
+    icon: int | None = None,
+    geofence_radius: int | None = None,
+    bbox: list[float] | None = None,
+    notify_on_enter: bool | None = None,
+    notify_on_exit: bool | None = None,
+    notify_favorites_only: bool | None = None,
+    message: str | None = None,
+    offer_channel_name: str | None = None,
+    offer_channel_psk_hex: str | None = None,
+    offer_region: str | None = None,
+    offer_preset: str | None = None,
+    variant: str | None = None,
+    level: str | None = None,
+    remote_longname: str | None = None,
+    nonce: int | None = None,
+    security_number: int | None = None,
+    verification_characters: str | None = None,
+    is_sender: bool | None = None,
+    file_name: str | None = None,
+    size_bytes: int | None = None,
+    destination_node: int | None = None,
+    route: list[int] | None = None,
+    snr_towards: list[int] | None = None,
+    route_back: list[int] | None = None,
+    snr_back: list[int] | None = None,
+) -> InjectResult:
+    """Inject a packet or FromRadio message into a running replay session to drive an app.
+
+    `kind` picks what is sent, and only that kind's parameters are accepted; another kind's
+    parameter is refused. `text`, `position`, `nodeinfo` and `raw` take `args`, `from_node`,
+    `to_node`, `channel`, `count` and `fuzz`; `packet` takes those plus `packet_kind`, for any
+    packet the builder knows by name that has no kind of its own, such as a hand-built
+    `traceroute` reply with a `request_id`. `waypoint` (geofence included) takes `lat`,
+    `lon`, `name`, `description`, `icon`, `geofence_radius`, `bbox`, `notify_on_enter`,
+    `notify_on_exit`, `notify_favorites_only`, `from_node`, `channel` and `count`. `beacon`
+    is a MESH_BEACON_APP packet for Local Mesh Discovery. `client_notification` and
+    `fileinfo` are top-level FromRadio messages with no packet envelope. `traceroute` is an
+    unsolicited RouteDiscovery reply, which an app records as an observed traceroute. Omitted
+    parameters keep the defaults named below. Examples: docs/replay.md.
+
+    Returns `{id, queued, connected}`, or `{error}` for an unknown session.
+
+    Args:
+        session_id: Session id from `sim(action="start")`.
+        kind: What to inject: `text`, `position`, `nodeinfo`, `raw`, `packet`, `waypoint`,
+            `beacon`, `client_notification`, `fileinfo` or `traceroute`.
+        packet_kind: For `packet`: the builder's packet name, such as `traceroute` or
+            `beacon`, with its fields in `args`.
+        args: For `text`, `position`, `nodeinfo`, `raw` and `packet`: `text` takes `body`
+            (and `reply_id`, `emoji` for a tapback); `position` takes `lat`, `lon`,
+            `altitude`; `nodeinfo` takes `id`, `long_name`, `short_name`, `hw_model`,
+            `role`; `raw` takes `portnum`, `payload_hex`; `traceroute` takes `route`,
+            `snr_towards`, `route_back`, `snr_back`, `request_id`.
+        from_node: Sender node number; omit for a synthetic injector node. For `traceroute`,
+            omit to send from `destination_node`.
+        to_node: Destination node number for `text`, `position`, `nodeinfo` and `raw`; omit
+            to broadcast.
+        channel: Channel name to send on; default `LongFast`. Not for `client_notification`
+            or `fileinfo`.
+        count: How many copies to send; default 1. For `fileinfo`, with `count` above 1 each
+            entry's `file_name` gets a distinct suffix. Not for `traceroute`.
+        fuzz: For `text`, `position`, `nodeinfo`, `raw` and `packet`: `True` runs each packet
+            through the session's fuzz mutator first.
+        lat: `waypoint` latitude in decimal degrees (required for it).
+        lon: `waypoint` longitude in decimal degrees (required for it).
+        name: `waypoint` name.
+        description: `waypoint` description.
+        icon: `waypoint` icon as a Unicode code point; 0 sets none.
+        geofence_radius: `waypoint` geofence circle radius in meters; 0 for none.
+        bbox: `waypoint` geofence box `[south, west, north, east]` in decimal degrees.
+        notify_on_enter: `waypoint`: notify when a node enters the geofence.
+        notify_on_exit: `waypoint`: notify when a node leaves the geofence.
+        notify_favorites_only: `waypoint`: notify only for favorite nodes.
+        message: `beacon` text, at most 100 bytes on firmware; or, for `client_notification`,
+            text that replaces firmware's wording (empty keeps it).
+        offer_channel_name: `beacon`: name of a channel the app can offer to switch to.
+        offer_channel_psk_hex: `beacon`: that channel's PSK, in hex.
+        offer_region: `beacon`: LoRa region the beaconed mesh advertises; default `US`.
+        offer_preset: `beacon`: modem preset the beaconed mesh advertises; default
+            `LONG_FAST`.
+        variant: `client_notification` variant: `low_entropy_key` (the default),
+            `duplicated_public_key`, `key_verification_number_request`,
+            `key_verification_number_inform`, `key_verification_final` or `text`.
+        level: `client_notification` level: DEBUG, INFO, WARNING (the default), ERROR or
+            CRITICAL.
+        remote_longname: `client_notification`: the remote node's long name, for the
+            key-verification variants.
+        nonce: `client_notification`: key-verification nonce.
+        security_number: `client_notification`: security number, for
+            `key_verification_number_inform`.
+        verification_characters: `client_notification`: verification characters, for
+            `key_verification_final`.
+        is_sender: `client_notification`: whether this side started the verification, for
+            `key_verification_final`.
+        file_name: `fileinfo` reported file name (required for it).
+        size_bytes: `fileinfo` reported size in bytes; negative values make a malformed entry.
+        destination_node: `traceroute` responding node's number (required for it).
+        route: `traceroute` node numbers along the path, destination last; omitted, a
+            synthetic origin, relay and destination path is used.
+        snr_towards: `traceroute` per-hop SNR towards the destination; omitted, none are sent.
+        route_back: `traceroute` node numbers along the return path, source last.
+        snr_back: `traceroute` per-hop SNR on the return path; omitted, none are sent.
+    """
+    given = {
+        key: value
+        for key, value in locals().items()
+        if key not in ("session_id", "kind") and value is not None
+    }
+    allowed = _INJECT_KIND_PARAMS[kind]
+    stray = sorted(set(given) - set(allowed))
+    if stray:
+        raise ToolError(
+            f"inject kind {kind!r} does not take {', '.join(stray)}; it takes {', '.join(allowed)}"
+        )
+    missing = [key for key in _INJECT_REQUIRED.get(kind, ()) if key not in given]
+    if missing:
+        raise ToolError(f"inject kind {kind!r} needs {', '.join(missing)}")
+    if kind in (*_PACKET_KINDS, "packet"):
+        builder_kind = given.pop("packet_kind", kind)
+        return cast(InjectResult, replay_inject(session_id, builder_kind, **given))
+    targets: dict[str, Callable[..., Any]] = {
+        "waypoint": replay_inject_waypoint,
+        "beacon": replay_inject_beacon,
+        "client_notification": replay_inject_client_notification,
+        "fileinfo": replay_inject_fileinfo,
+        "traceroute": replay_inject_traceroute,
+    }
+    return cast(InjectResult, targets[kind](session_id, **given))
+
+
+@app.tool()
+@meta("read")
 def replay_fuzz_presets() -> dict[str, Any]:
     """List the built-in replay fuzz presets and the fault categories each enables.
 
-    Use the returned names as the `fuzz=` argument to `replay_start`, or pass a
+    Use the returned names as the `fuzz=` argument to `sim(action="start")`, or pass a
     dict like `{"preset": "parser", "drop": 0.1}` to override individual rates.
 
     Returns `{presets: {name: {category: rate}}, usage}`.
@@ -553,11 +781,14 @@ def replay_fuzz_presets() -> dict[str, Any]:
         out[nm] = enabled
     return {
         "presets": out,
-        "usage": "replay_start(fuzz='parser') or fuzz={'preset':'adversary','flooder_rate':20}",
+        "usage": (
+            "sim(action='start', fuzz='parser') or fuzz={'preset':'adversary','flooder_rate':20}"
+        ),
     }
 
 
 @app.tool()
+@meta("read")
 def replay_status(session_id: str | None = None) -> dict[str, Any]:
     """Status of replay sessions: connection state, packets sent and total, mode.
 
@@ -572,6 +803,7 @@ def replay_status(session_id: str | None = None) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive")
 def replay_stop(session_id: str | None = None) -> dict[str, Any]:
     """Stop a replay session, or every session when `session_id` is omitted.
 
@@ -581,6 +813,160 @@ def replay_stop(session_id: str | None = None) -> dict[str, Any]:
         session_id: Session to stop; omit to stop all.
     """
     return get_replay_manager().stop(session_id)
+
+
+@app.tool()
+@meta("destructive", port="not_device")
+def sim(
+    action: Literal["start", "stop"],
+    session_id: str | None = None,
+    source: str | None = None,
+    kind: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    speed: float | None = None,
+    rate: float | None = None,
+    duration: float | None = None,
+    max_gap: float | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    loop: bool | None = None,
+    limit_nodes: int | None = None,
+    node_delay: float | None = None,
+    channels: list[dict[str, Any]] | None = None,
+    announce_interval: float | None = None,
+    stats_interval: float | None = None,
+    dupe_every: int | None = None,
+    modem_preset: str | None = None,
+    firmware_edition: str | None = None,
+    firmware_version: str | None = None,
+    observer_lat: int | None = None,
+    observer_lon: int | None = None,
+    observer_num: int | None = None,
+    sim_nodes: int | None = None,
+    sim_days: int | None = None,
+    sim_seed: int | None = None,
+    sim_profile: str | dict[str, Any] | None = None,
+    fuzz: str | dict[str, Any] | None = None,
+    fuzz_seed: int | None = None,
+    mdns: bool | None = None,
+    local_metrics_interval: float | None = None,
+    clock_anchor: int | None = None,
+    hold: bool | None = None,
+    beacon_listen: bool | None = None,
+) -> SimResult:
+    """Start or stop a simulated Meshtastic TCP device that streams a capture to an app.
+
+    `action="start"` serves a simulated radio: an app, an AVD at `10.0.2.2:<port>`, or the
+    Python library connects to `host:port` and gets a paced packet stream restamped to now.
+    Read it with `sim_status`. `action="stop"` ends one session, or every session without
+    `session_id`. Pacing, highest first: `duration`, then `rate`, then `speed`. Give
+    concurrent sessions distinct `observer_num`s. `start` takes every parameter but
+    `session_id`, `stop` takes only `session_id`, and passing a start parameter to `stop` is
+    an error. Every parameter and example: docs/replay.md.
+
+    Returns the session status for `start`: `{id, capture, listen, connect, mode,
+    packets_total, packets_sent, connected, ...}`; `{stopped}`, the ids it stopped, for `stop`.
+
+    Args:
+        action: `start` serves a session, `stop` ends one or all.
+        session_id: `stop` only: session to stop; omit to stop all.
+        source: `start` only: `meshcon`/`sim`, `burningman`, `defcon`, `conference-stress`
+            (generated meshes), a `*.db`/`*.db.gz` SQLite capture or a recorder `*.jsonl`.
+            Default `meshcon`.
+        kind: `start` only: `auto` infers it from `source`; or `sim`, `sqlite`, `jsonl`.
+            Default `auto`.
+        host: `start` only: listen address; `0.0.0.0` (the default) serves every interface.
+        port: `start` only: TCP port the session listens on for the app. Default 4403.
+        speed: `start` only: multiplier on the capture's own cadence. Default 1.0.
+        rate: `start` only: steady packets per second, ignoring capture timing; wins over
+            `speed`.
+        duration: `start` only: play the whole window in N wall-clock seconds; wins over
+            `rate`.
+        max_gap: `start` only: cap on idle seconds between packets. Default 20.
+        start: `start` only: window start, ISO-8601 (UTC when no zone is given).
+        end: `start` only: window end, ISO-8601.
+        loop: `start` only: repeat the window when it ends. Default false.
+        limit_nodes: `start` only: cap on a file source's node DB. Default 200.
+        node_delay: `start` only: seconds between NodeInfos during the node DB download.
+            Default 0.01.
+        channels: `start` only: channel list that splits a SQLite capture by OTA hash with
+            real PSKs, each `{"name", "psk", "primary", "ota_hashes", "catch_all"}`.
+        announce_interval: `start` only: seconds between "Replay Clock" progress posts to the
+            busiest channel; 0 (the default) is off.
+        stats_interval: `start` only: seconds between the connected node's LocalStats
+            updates; 0 keeps only the initial snapshot. Default 5.
+        dupe_every: `start` only: simulate a duplicate radio receive every Nth packet; 0
+            (the default) is off.
+        modem_preset: `start` only: advertised LoRa preset. Default `LONG_FAST`.
+        firmware_edition: `start` only: the app's event banner, such as `VANILLA` (the
+            default), `DEFCON`, `BURNING_MAN` or `HAMVENTION`.
+        firmware_version: `start` only: reported firmware build; omit for the edition's
+            default.
+        observer_lat: `start` only: connected node's latitude in 1e-7 degrees; omit for the
+            capture's median position.
+        observer_lon: `start` only: connected node's longitude in 1e-7 degrees; omit for the
+            capture's median position.
+        observer_num: `start` only: this session's node number; omit for the process default
+            (`MESHTASTIC_REPLAY_OBSERVER_NUM`).
+        sim_nodes: `start` only: node count of a generated mesh. Default 800.
+        sim_days: `start` only: days of traffic a generated mesh spans, ending now unless
+            `start` is set. Default 3.
+        sim_seed: `start` only: seed for a generated mesh. Default 1337.
+        sim_profile: `start` only: overrides deep-merged over a generated preset, as a dict
+            or JSON object, never a file path.
+        fuzz: `start` only: makes the stream hostile: a preset (`light`, `parser`,
+            `adversary`, `chaos`) or a dict of overrides with an optional `preset` base.
+        fuzz_seed: `start` only: fuzz seed, so a crash reproduces. Default 0.
+        mdns: `start` only: advertise the session over mDNS as `_meshtastic._tcp`; omit for
+            on unless bound to loopback only.
+        local_metrics_interval: `start` only: seconds between the connected node's
+            `DEVICE_METRICS` packets; 0 is off. Default 300.
+        clock_anchor: `start` only: epoch seconds the window's last packet is stamped as, so
+            sessions sharing it show identical times; omit to stamp each packet now.
+        hold: `start` only: play the window once per connection, then stay connected and
+            quiet; ignored with `loop`. Default false.
+        beacon_listen: `start` only: advertise the mesh beacon module as listening, so the
+            app keeps `MESH_BEACON_APP` packets. Default false.
+    """
+    passed = {
+        k: v for k, v in locals().items() if k not in ("action", "session_id") and v is not None
+    }
+    if action == "stop":
+        if passed:
+            raise ToolError(
+                f"sim(action='stop') takes only session_id; got start parameters {sorted(passed)}. "
+                "action='start' takes every parameter but session_id."
+            )
+        return cast(SimResult, replay_stop(session_id))
+    if session_id is not None:
+        raise ToolError(
+            "sim(action='start') does not take session_id, which only action='stop' takes; "
+            "it returns the new session's id."
+        )
+    return cast(SimResult, replay_start(**passed))
+
+
+@app.tool()
+@meta("read")
+def sim_status(session_id: str | None = None, fuzz_presets: bool = False) -> SimStatusResult:
+    """Status of simulated radio sessions: connection state, packets sent and total, mode.
+
+    Returns one session's `{id, capture, listen, connect, mode, target_rate,
+    achieved_rate, packets_total, packets_sent, injected, inject_queued, connected, client,
+    ended, error, fuzz, mdns, ...}`, `{sessions: [...]}` for all, or `{error}` for an unknown
+    id. `injected` counts packets written to a connected client; `inject_queued` counts
+    accepted injections still waiting for one. With `fuzz_presets`, also `presets` and
+    `usage`: the names `sim(fuzz=...)` takes.
+
+    Args:
+        session_id: One session's id; omit for every running session.
+        fuzz_presets: Add the built-in fuzz presets and the fault rates each sets.
+    """
+    out = dict(replay_status(session_id))
+    if fuzz_presets:
+        out.update(replay_fuzz_presets())
+    return cast(SimStatusResult, out)
 
 
 # ---------- ATAK / CoT capture + fleet ------------------------------------
@@ -616,6 +1002,7 @@ def _safe_session_name(session: str) -> str:
 
 
 @app.tool()
+@meta("destructive", open_world=True, port="not_device")
 def cot_relay_start(port: int = 8087, session: str | None = None) -> dict[str, Any]:
     """Start a CoT capture and relay server for real ATAK/iTAK traffic.
 
@@ -661,6 +1048,7 @@ def cot_relay_start(port: int = 8087, session: str | None = None) -> dict[str, A
 
 
 @app.tool()
+@meta("read", open_world=True)
 def cot_relay_status() -> dict[str, Any]:
     """Live capture/relay state: connected peers, total events, per-CoT-type counts.
 
@@ -675,6 +1063,7 @@ def cot_relay_status() -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive")
 def cot_relay_stop() -> dict[str, Any]:
     """Stop the CoT relay and close its capture files.
 

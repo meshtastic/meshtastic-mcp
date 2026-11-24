@@ -1,0 +1,1352 @@
+{
+ "admin": {
+  "destructive": true,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Admin",
+  "toolset": "core"
+ },
+ "android_clear_logcat": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Android Clear Logcat",
+  "toolset": "legacy"
+ },
+ "android_docs_fetch": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Android Docs Fetch",
+  "toolset": "android"
+ },
+ "android_docs_search": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Android Docs Search",
+  "toolset": "android"
+ },
+ "android_find_text": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Android Find Text",
+  "toolset": "legacy"
+ },
+ "android_poll_for_text": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Android Poll For Text",
+  "toolset": "legacy"
+ },
+ "android_read_logcat": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Android Read Logcat",
+  "toolset": "legacy"
+ },
+ "android_render_compose_preview": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Android Render Compose Preview",
+  "toolset": "android"
+ },
+ "android_resolve": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Android Resolve",
+  "toolset": "legacy"
+ },
+ "android_screenshot": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Android Screenshot",
+  "toolset": "legacy"
+ },
+ "android_swipe": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Android Swipe",
+  "toolset": "legacy"
+ },
+ "android_tap": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Android Tap",
+  "toolset": "legacy"
+ },
+ "android_type_text": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Android Type Text",
+  "toolset": "legacy"
+ },
+ "android_ui_dump": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Android Ui Dump",
+  "toolset": "legacy"
+ },
+ "android_version_lookup": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Android Version Lookup",
+  "toolset": "android"
+ },
+ "app": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "App",
+  "toolset": "app"
+ },
+ "app_view": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "App View",
+  "toolset": "app"
+ },
+ "atak_drive_route": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Atak Drive Route",
+  "toolset": "tak"
+ },
+ "atak_drive_stop": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Atak Drive Stop",
+  "toolset": "tak"
+ },
+ "atak_fleet_down": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Atak Fleet Down",
+  "toolset": "tak"
+ },
+ "atak_fleet_status": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Atak Fleet Status",
+  "toolset": "tak"
+ },
+ "atak_fleet_up": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Atak Fleet Up",
+  "toolset": "tak"
+ },
+ "atak_share_item": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Atak Share Item",
+  "toolset": "tak"
+ },
+ "ble_sniff_poll": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "BLE Capture (Poll Status)",
+  "toolset": "legacy"
+ },
+ "ble_sniff_start": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "BLE Capture (Async Start)",
+  "toolset": "rf"
+ },
+ "ble_sniff_status": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "BLE Sniffer Status",
+  "toolset": "rf"
+ },
+ "ble_sniff_stop": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "BLE Capture (Stop)",
+  "toolset": "rf"
+ },
+ "build": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Build",
+  "toolset": "firmware"
+ },
+ "build_poll": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Build Firmware (Poll Status)",
+  "toolset": "legacy"
+ },
+ "build_start": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Build Firmware (Async Start)",
+  "toolset": "legacy"
+ },
+ "capture_display": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Capture Display",
+  "toolset": "display"
+ },
+ "capture_screen": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Capture Screen",
+  "toolset": "display"
+ },
+ "claim": {
+  "destructive": false,
+  "idempotent": false,
+  "open_world": false,
+  "port": "not_device",
+  "read_only": false,
+  "title": "Claim",
+  "toolset": "core"
+ },
+ "clean": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Clean",
+  "toolset": "firmware"
+ },
+ "config_diff": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Config Diff",
+  "toolset": "core"
+ },
+ "config_snapshot": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Config Snapshot",
+  "toolset": "core"
+ },
+ "config_snapshots_list": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Config Snapshots List",
+  "toolset": "core"
+ },
+ "configure": {
+  "destructive": true,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Configure",
+  "toolset": "core"
+ },
+ "cot_relay_start": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "not_device",
+  "read_only": false,
+  "title": "Cot Relay Start",
+  "toolset": "tak"
+ },
+ "cot_relay_status": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Cot Relay Status",
+  "toolset": "tak"
+ },
+ "cot_relay_stop": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Cot Relay Stop",
+  "toolset": "tak"
+ },
+ "device_info": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Device Info",
+  "toolset": "legacy"
+ },
+ "devices": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Devices",
+  "toolset": "core"
+ },
+ "doctor": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Doctor",
+  "toolset": "core"
+ },
+ "drive_display_poll": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Drive Display Poll",
+  "toolset": "legacy"
+ },
+ "drive_display_start": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Drive Display Start",
+  "toolset": "display"
+ },
+ "erase_and_flash": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Erase and Factory Flash (ESP32)",
+  "toolset": "legacy"
+ },
+ "esptool_chip_info": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "ESPTool Chip Info",
+  "toolset": "legacy"
+ },
+ "esptool_erase_flash": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "ESPTool Erase Flash",
+  "toolset": "legacy"
+ },
+ "esptool_raw": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "finds_own",
+  "read_only": false,
+  "title": "ESPTool Raw Pass-Through",
+  "toolset": "legacy"
+ },
+ "events_window": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Events Window",
+  "toolset": "legacy"
+ },
+ "factory_reset": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Factory Reset",
+  "toolset": "legacy"
+ },
+ "flash_poll": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Flash Firmware (Poll Status)",
+  "toolset": "legacy"
+ },
+ "flash_start": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Flash Firmware (Async Start)",
+  "toolset": "legacy"
+ },
+ "get_board": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Get Board",
+  "toolset": "firmware"
+ },
+ "get_channel_url": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Get Channel Url",
+  "toolset": "legacy"
+ },
+ "get_config": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Get Config",
+  "toolset": "legacy"
+ },
+ "inject": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Inject",
+  "toolset": "replay"
+ },
+ "inject_frame": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Inject Frame",
+  "toolset": "core"
+ },
+ "inspect": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Inspect",
+  "toolset": "core"
+ },
+ "install": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Install",
+  "toolset": "hardware"
+ },
+ "ios_boot": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Ios Boot",
+  "toolset": "legacy"
+ },
+ "ios_list_simulators": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Ios List Simulators",
+  "toolset": "apple"
+ },
+ "ios_open_url": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "not_device",
+  "read_only": false,
+  "title": "Ios Open Url",
+  "toolset": "legacy"
+ },
+ "ios_screenshot": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Ios Screenshot",
+  "toolset": "apple"
+ },
+ "ios_tap": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Ios Tap",
+  "toolset": "legacy"
+ },
+ "ios_type_text": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Ios Type Text",
+  "toolset": "legacy"
+ },
+ "ios_ui_dump": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Ios Ui Dump",
+  "toolset": "legacy"
+ },
+ "job": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Job",
+  "toolset": "core"
+ },
+ "list_boards": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "List Boards",
+  "toolset": "firmware"
+ },
+ "list_devices": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "List Devices",
+  "toolset": "legacy"
+ },
+ "list_nodes": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "List Nodes",
+  "toolset": "legacy"
+ },
+ "logs_window": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "not_device",
+  "read_only": true,
+  "title": "Logs Window",
+  "toolset": "legacy"
+ },
+ "mark_event": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Mark Event",
+  "toolset": "core"
+ },
+ "nrf52_backup_firmware": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "nRF52 Back Up Firmware",
+  "toolset": "hardware"
+ },
+ "nrf52_bootloader_info": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "nRF52 Bootloader Info",
+  "toolset": "hardware"
+ },
+ "nrf52_eject_uf2": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "finds_own",
+  "read_only": false,
+  "title": "nRF52 Eject UF2 Drive",
+  "toolset": "hardware"
+ },
+ "nrf52_enter_uf2": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "nRF52 Enter UF2 Mode",
+  "toolset": "hardware"
+ },
+ "nrf52_factory_erase": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "finds_own",
+  "read_only": false,
+  "title": "nRF52 Factory Erase",
+  "toolset": "hardware"
+ },
+ "nrf52_flash_uf2": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "finds_own",
+  "read_only": false,
+  "title": "nRF52 Flash UF2",
+  "toolset": "legacy"
+ },
+ "nrf52_mount_uf2": {
+  "destructive": false,
+  "idempotent": false,
+  "open_world": true,
+  "port": "finds_own",
+  "read_only": false,
+  "title": "nRF52 Mount UF2 Drive",
+  "toolset": "hardware"
+ },
+ "nrfutil_dfu": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "nRF DFU Flash",
+  "toolset": "legacy"
+ },
+ "nrfutil_raw": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "finds_own",
+  "read_only": false,
+  "title": "nRFUtil Raw Pass-Through",
+  "toolset": "legacy"
+ },
+ "pa_measure": {
+  "destructive": true,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "PA Meter Measure",
+  "toolset": "rf"
+ },
+ "pa_meter_status": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "PA Meter Status",
+  "toolset": "rf"
+ },
+ "pa_sweep": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "PA Power Sweep (Closed-Loop)",
+  "toolset": "rf"
+ },
+ "packets_window": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Packets Window",
+  "toolset": "legacy"
+ },
+ "picotool_info": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Picotool Info",
+  "toolset": "legacy"
+ },
+ "picotool_load": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "finds_own",
+  "read_only": false,
+  "title": "Picotool Load UF2",
+  "toolset": "legacy"
+ },
+ "picotool_raw": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "finds_own",
+  "read_only": false,
+  "title": "Picotool Raw Pass-Through",
+  "toolset": "legacy"
+ },
+ "pio_flash": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "PlatformIO Flash",
+  "toolset": "legacy"
+ },
+ "push_fake_nodedb": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Push Fake Nodedb",
+  "toolset": "firmware"
+ },
+ "query": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Query",
+  "toolset": "core"
+ },
+ "reboot": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Reboot",
+  "toolset": "legacy"
+ },
+ "recorder_export": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Recorder Export",
+  "toolset": "core"
+ },
+ "recorder_pause": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Recorder Pause",
+  "toolset": "core"
+ },
+ "recorder_resume": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Recorder Resume",
+  "toolset": "core"
+ },
+ "recorder_status": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Recorder Status",
+  "toolset": "core"
+ },
+ "release": {
+  "destructive": false,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Release",
+  "toolset": "core"
+ },
+ "replay_fuzz_presets": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Replay Fuzz Presets",
+  "toolset": "legacy"
+ },
+ "replay_inject": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Replay Inject",
+  "toolset": "legacy"
+ },
+ "replay_inject_beacon": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Replay Inject Beacon",
+  "toolset": "legacy"
+ },
+ "replay_inject_client_notification": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Replay Inject Client Notification",
+  "toolset": "legacy"
+ },
+ "replay_inject_fileinfo": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Replay Inject Fileinfo",
+  "toolset": "legacy"
+ },
+ "replay_inject_traceroute": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Replay Inject Traceroute",
+  "toolset": "legacy"
+ },
+ "replay_inject_waypoint": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Replay Inject Waypoint",
+  "toolset": "legacy"
+ },
+ "replay_start": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "not_device",
+  "read_only": false,
+  "title": "Replay Start",
+  "toolset": "legacy"
+ },
+ "replay_status": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Replay Status",
+  "toolset": "legacy"
+ },
+ "replay_stop": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Replay Stop",
+  "toolset": "legacy"
+ },
+ "rf_confirm_tx": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Rf Confirm Tx",
+  "toolset": "rf"
+ },
+ "rf_scan": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Rf Scan",
+  "toolset": "rf"
+ },
+ "screenshot_set_poll": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Screenshot Set Poll",
+  "toolset": "legacy"
+ },
+ "screenshot_set_start": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Screenshot Set Start",
+  "toolset": "apple"
+ },
+ "sdk_device_info": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Sdk Device Info",
+  "toolset": "legacy"
+ },
+ "sdk_list_nodes": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Sdk List Nodes",
+  "toolset": "legacy"
+ },
+ "sdk_send_text": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Sdk Send Text",
+  "toolset": "legacy"
+ },
+ "sdk_status": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Sdk Status",
+  "toolset": "legacy"
+ },
+ "send": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Send",
+  "toolset": "core"
+ },
+ "send_input_event": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Send Input Event",
+  "toolset": "display"
+ },
+ "send_text": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Send Text",
+  "toolset": "legacy"
+ },
+ "serial_close": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Serial Close",
+  "toolset": "hardware"
+ },
+ "serial_list": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Serial List",
+  "toolset": "legacy"
+ },
+ "serial_open": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Serial Open",
+  "toolset": "hardware"
+ },
+ "serial_read": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Serial Read",
+  "toolset": "legacy"
+ },
+ "set_channel_url": {
+  "destructive": true,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Set Channel Url",
+  "toolset": "core"
+ },
+ "set_config": {
+  "destructive": true,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Set Config",
+  "toolset": "legacy"
+ },
+ "set_debug_log_api": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Set Debug Log Api",
+  "toolset": "legacy"
+ },
+ "set_owner": {
+  "destructive": true,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Set Owner",
+  "toolset": "legacy"
+ },
+ "shutdown": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Shutdown",
+  "toolset": "legacy"
+ },
+ "sim": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "not_device",
+  "read_only": false,
+  "title": "Sim",
+  "toolset": "replay"
+ },
+ "sim_status": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Sim Status",
+  "toolset": "replay"
+ },
+ "telemetry_timeline": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "not_device",
+  "read_only": true,
+  "title": "Telemetry Timeline",
+  "toolset": "legacy"
+ },
+ "touch_1200bps": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Touch 1200Bps",
+  "toolset": "hardware"
+ },
+ "triage_bundle": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Triage Bundle",
+  "toolset": "legacy"
+ },
+ "uhubctl_cycle": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "not_device",
+  "read_only": false,
+  "title": "USB Hub Port Cycle",
+  "toolset": "hardware"
+ },
+ "uhubctl_list": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "USB Hub List",
+  "toolset": "hardware"
+ },
+ "uhubctl_power": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "not_device",
+  "read_only": false,
+  "title": "USB Hub Port Power",
+  "toolset": "hardware"
+ },
+ "update_flash": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "OTA App-Partition Flash (ESP32)",
+  "toolset": "legacy"
+ },
+ "userprefs_get": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Userprefs Get",
+  "toolset": "firmware"
+ },
+ "userprefs_manifest": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Userprefs Manifest",
+  "toolset": "firmware"
+ },
+ "userprefs_reset": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Userprefs Reset",
+  "toolset": "firmware"
+ },
+ "userprefs_set": {
+  "destructive": true,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Userprefs Set",
+  "toolset": "firmware"
+ },
+ "userprefs_testing_profile": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Userprefs Testing Profile",
+  "toolset": "firmware"
+ },
+ "vanity_apply": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": true,
+  "port": "device",
+  "read_only": false,
+  "title": "Adopt Vanity Identity",
+  "toolset": "rf"
+ },
+ "vanity_grind_poll": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Vanity Grind (Poll Status)",
+  "toolset": "legacy"
+ },
+ "vanity_grind_start": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Vanity Grind (Async Start)",
+  "toolset": "rf"
+ },
+ "vanity_grind_stop": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "device",
+  "read_only": false,
+  "title": "Vanity Grind (Stop)",
+  "toolset": "rf"
+ },
+ "vanity_preview": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": false,
+  "port": "device",
+  "read_only": true,
+  "title": "Vanity Identity Preview",
+  "toolset": "rf"
+ },
+ "vendor": {
+  "destructive": true,
+  "idempotent": false,
+  "open_world": false,
+  "port": "finds_own",
+  "read_only": false,
+  "title": "Vendor Flash Tool Pass-Through",
+  "toolset": "hardware"
+ },
+ "wait_for": {
+  "destructive": false,
+  "idempotent": true,
+  "open_world": true,
+  "port": "device",
+  "read_only": true,
+  "title": "Wait For",
+  "toolset": "core"
+ }
+}

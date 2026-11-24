@@ -36,15 +36,11 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-from meshtastic.protobuf import channel_pb2
-
 if TYPE_CHECKING:  # numpy ships with the [sdr] extra — keep the base install slim
     import numpy as np
 
-from . import lora_compliance, sdr
-from .admin import _message_to_dict
-from .admin import send_text as _admin_send_text
-from .connection import connect
+from . import backends, lora_compliance, sdr
+from .backends.legacy import send_text as _admin_send_text
 from .log_query import packets_window
 
 
@@ -68,18 +64,19 @@ _MIN_SAFE_SAMPLE_RATE_HZ = 2_048_000.0
 
 
 def read_lora_context(port: str | None = None) -> dict[str, Any]:
-    """One `connect()` round-trip: everything `lora_compliance.predict_lora_params`
+    """One backend read: everything `lora_compliance.predict_lora_params`
     needs, read straight off a live device — configured LoRa settings, device
     role (for the EU_866 duty-cycle split), and the primary channel's name
     (empty string if unset, matching firmware's own default-name fallback).
     """
-    with connect(port=port) as iface:
-        node = iface.localNode
-        lora = _message_to_dict(node.localConfig.lora)
-        device = _message_to_dict(node.localConfig.device)
-        channels = list(node.channels or [])
-        primary = next((c for c in channels if c.role == channel_pb2.Channel.Role.PRIMARY), None)
-        channel_name = primary.settings.name if primary is not None else ""
+    got = backends.for_target(port).read(
+        port, ["config", "channels"], ["lora", "device"], "brief", 10.0
+    )
+    config = got.get("config") or {}
+    lora = config.get("lora") or {}
+    device = config.get("device") or {}
+    primary = next((c for c in got.get("channels") or [] if c.get("role") == "PRIMARY"), None)
+    channel_name = ((primary or {}).get("settings") or {}).get("name") or ""
 
     return {
         "region": lora.get("region", "UNSET"),

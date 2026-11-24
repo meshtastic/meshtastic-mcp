@@ -61,3 +61,182 @@ def test_report_renders_text() -> None:
     text = doctor.report()
     assert "meshtastic-mcp doctor" in text
     assert "capabilities:" in text
+
+
+# ---------- the server itself ----------------------------------------------
+
+
+def _serve(monkeypatch, info, *, ours="1.0.0", answers=True, source=None) -> doctor.Check:
+    from meshtastic_mcp import bridge
+
+    monkeypatch.setattr(bridge, "find_local", lambda: info)
+    monkeypatch.setattr(bridge, "source_commit", lambda: source)
+    monkeypatch.setattr(doctor, "_installed_version", lambda: ours)
+    monkeypatch.setattr(doctor, "_answers", lambda url: answers)
+    monkeypatch.delenv("MESHTASTIC_WORKSPACE", raising=False)
+    return doctor._serve_version_check()
+
+
+def test_a_serve_running_other_code_is_degraded_with_both_versions(monkeypatch) -> None:
+    info = {"url": "http://127.0.0.1:8765/mcp", "pid": 42, "version": "0.4.1.dev42+g19d990745"}
+    c = _serve(monkeypatch, info)
+    assert c.status == doctor.STATUS_DEGRADED
+    assert "0.4.1.dev42+g19d990745" in c.detail and "1.0.0" in c.detail
+    assert "restart" in c.fix
+
+
+def test_a_serve_running_this_code_is_ok(monkeypatch) -> None:
+    info = {"url": "http://127.0.0.1:8765/mcp", "pid": 42, "version": "1.0.0"}
+    assert _serve(monkeypatch, info).status == doctor.STATUS_OK
+
+
+def test_no_serve_is_ok(monkeypatch) -> None:
+    assert _serve(monkeypatch, None).status == doctor.STATUS_OK
+
+
+_EDITABLE_VERSION = "0.4.1.dev62+g274e22b7e"  # frozen at install, whatever the checkout runs
+_STARTED = "274e22b7e" + "0" * 31
+_NOW = "25d3689aa" + "1" * 31
+
+
+def test_an_editable_serve_started_before_a_pull_is_degraded(monkeypatch) -> None:
+    info = {
+        "url": "http://127.0.0.1:8765/mcp",
+        "pid": 42,
+        "version": _EDITABLE_VERSION,
+        "commit": _STARTED,
+        "dirty": False,
+    }
+    c = _serve(monkeypatch, info, ours=_EDITABLE_VERSION, source={"commit": _NOW, "dirty": False})
+    assert c.status == doctor.STATUS_DEGRADED
+    assert "274e22b7e" in c.detail and "25d3689aa" in c.detail
+    assert "restart" in c.fix
+
+
+def test_an_editable_serve_at_the_checkout_head_is_ok(monkeypatch) -> None:
+    info = {
+        "url": "http://127.0.0.1:8765/mcp",
+        "pid": 42,
+        "version": _EDITABLE_VERSION,
+        "commit": _NOW,
+        "dirty": False,
+    }
+    c = _serve(monkeypatch, info, ours=_EDITABLE_VERSION, source={"commit": _NOW, "dirty": False})
+    assert c.status == doctor.STATUS_OK
+    assert "25d3689aa" in c.detail
+
+
+def test_an_editable_serve_that_records_no_commit_asks_for_a_restart(monkeypatch) -> None:
+    info = {"url": "http://127.0.0.1:8765/mcp", "pid": 42, "version": _EDITABLE_VERSION}
+    c = _serve(monkeypatch, info, ours=_EDITABLE_VERSION, source={"commit": _NOW, "dirty": False})
+    assert c.status == doctor.STATUS_DEGRADED
+    assert "restart" in c.fix
+
+
+def test_serve_records_the_checkout_commit(monkeypatch, tmp_path) -> None:
+    import json
+
+    from meshtastic_mcp import bridge
+
+    monkeypatch.setattr(bridge, "_data_dir", lambda: tmp_path)
+    fh = bridge.claim_host("http://x/mcp", None, "1.0.0", {"commit": _NOW, "dirty": True})
+    try:
+        info = json.loads((tmp_path / "serve.json").read_text())
+    finally:
+        fh.close()
+    assert info["commit"] == _NOW and info["dirty"] is True
+
+
+def test_source_commit_reads_this_checkout() -> None:
+    from meshtastic_mcp import bridge
+
+    src = bridge.source_commit()
+    # The tests run from a git checkout of the repo; a built install would give None.
+    assert src is not None and len(src["commit"]) == 40
+
+
+def test_a_serve_that_does_not_answer_is_reported_not_fatal(monkeypatch) -> None:
+    info = {"url": "http://127.0.0.1:8765/mcp", "pid": 42, "version": "1.0.0"}
+    c = _serve(monkeypatch, info, answers=False)
+    assert c.status == doctor.STATUS_DEGRADED
+    assert "does not answer" in c.detail
+
+
+def _workspace(monkeypatch, tmp_path):
+    checkout = tmp_path / "meshtastic-mcp"
+    checkout.mkdir()
+    (checkout / "pyproject.toml").write_text("[project]\n")
+    monkeypatch.setenv("MESHTASTIC_WORKSPACE", str(tmp_path))
+    monkeypatch.setattr(doctor, "_git_head", lambda repo: "274e22b7e0123456789")
+    return checkout
+
+
+def test_a_git_install_of_other_code_than_the_checkout_is_degraded(monkeypatch, tmp_path) -> None:
+    checkout = _workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(doctor, "_install_source", lambda: ("git https://x@19d990745", False))
+    monkeypatch.setattr(doctor, "_installed_version", lambda: "0.4.1.dev42+g19d990745")
+    c = doctor._install_source_check()
+    assert c is not None and c.status == doctor.STATUS_DEGRADED
+    assert "274e22b7e" in c.detail
+    assert f"--editable '{checkout}[ui,tasks]'" in c.fix
+
+
+def test_an_install_of_the_checkout_head_is_ok(monkeypatch, tmp_path) -> None:
+    _workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(doctor, "_install_source", lambda: ("git https://x@274e22b7e", False))
+    monkeypatch.setattr(doctor, "_installed_version", lambda: "0.4.1.dev62+g274e22b7e")
+    c = doctor._install_source_check()
+    assert c is not None and c.status == doctor.STATUS_OK
+
+
+def test_an_editable_install_is_ok(monkeypatch, tmp_path) -> None:
+    _workspace(monkeypatch, tmp_path)
+    monkeypatch.setattr(doctor, "_install_source", lambda: ("editable /somewhere", True))
+    c = doctor._install_source_check()
+    assert c is not None and c.status == doctor.STATUS_OK
+
+
+def test_no_checkout_means_no_install_source_check(monkeypatch) -> None:
+    monkeypatch.delenv("MESHTASTIC_WORKSPACE", raising=False)
+    assert doctor._install_source_check() is None
+
+
+def _exe(path) -> None:
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+
+
+def test_a_binary_off_the_servers_path_is_degraded_not_missing(monkeypatch, tmp_path) -> None:
+    sbin = tmp_path / "sbin"
+    sbin.mkdir()
+    _exe(sbin / "uhubctl")
+    monkeypatch.setattr(doctor, "_which", lambda name: None)
+    monkeypatch.setattr(doctor, "_EXTRA_BIN_DIRS", (str(sbin),))
+    monkeypatch.setattr(doctor, "_login_path_dirs", lambda: ())
+    checks = [doctor.Check("uhubctl", "observability", doctor.STATUS_MISSING, "x", fix="apt")]
+    doctor._apply_path_gaps(checks)
+    c = checks[0]
+    assert c.status == doctor.STATUS_DEGRADED
+    assert c.detail == f"found at {sbin / 'uhubctl'} but not on this server's PATH"
+    assert str(sbin) in c.fix and "Environment=PATH" in c.fix
+
+
+def test_a_binary_on_the_login_shells_path_is_found(monkeypatch, tmp_path) -> None:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    _exe(bindir / "pio")
+    monkeypatch.setattr(doctor, "_which", lambda name: None)
+    monkeypatch.setattr(doctor, "_EXTRA_BIN_DIRS", ())
+    monkeypatch.setattr(doctor, "_login_path_dirs", lambda: (str(bindir),))
+    checks = [doctor.Check("platformio", "firmware", doctor.STATUS_MISSING, "x", fix="pipx")]
+    doctor._apply_path_gaps(checks)
+    assert checks[0].status == doctor.STATUS_DEGRADED
+
+
+def test_a_binary_absent_everywhere_stays_missing(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(doctor, "_which", lambda name: None)
+    monkeypatch.setattr(doctor, "_EXTRA_BIN_DIRS", (str(tmp_path),))
+    monkeypatch.setattr(doctor, "_login_path_dirs", lambda: ())
+    checks = [doctor.Check("uhubctl", "observability", doctor.STATUS_MISSING, "x", fix="apt")]
+    doctor._apply_path_gaps(checks)
+    assert checks[0].status == doctor.STATUS_MISSING and checks[0].fix == "apt"

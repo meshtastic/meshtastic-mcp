@@ -4,7 +4,7 @@ A node appears on the DUT radio; assert it shows up in the app's node list.
 
 **Stimulus:** a real beacon from the TESTER, or `push_fake_nodedb` injected on the DUT  
 **Oracle:** `android layout` over the app's Nodes screen shows the node's long/short name;
-backstop with `list_nodes` on the DUT.
+backstop with `inspect(what="nodes")` on the DUT.
 
 ## Option A — real beacon (most faithful)
 
@@ -46,7 +46,7 @@ Confirm the device truth independent of the app:
 ```bash
 $MCP -c "from meshtastic_mcp import info,json; print(json.dumps(info.list_nodes('$DUT'),default=str))"
 ```
-(Note: the `list_nodes` *summary* has been observed to drop names; read the raw DB via a
+(Note: the `inspect` node *summary* has been observed to drop names; read the raw DB via a
 SerialInterface `iface.nodes` if you need long/short names reliably — see the main session log.)
 
 ## Failure triage

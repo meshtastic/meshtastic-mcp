@@ -7,6 +7,10 @@ bot holds `View Channels` + `Read Message History` only (permission integer `665
 to the REST API with the stdlib (no gateway, no `discord.py`), and never calls a write
 endpoint.
 
+The tools are served by their own MCP server, `meshtastic-mcp-discord`, in the same package.
+The device server (`meshtastic-mcp`) lists no `discord_*` tool, and the Discord server starts
+without the radio, recorder or any device module.
+
 | Tool | What it answers |
 |---|---|
 | `discord_search` | "what has the community said about X" — Discord's own server-side index, full history, filters by channel / author / mentions / has / date / pinned; `offset` paging |
@@ -89,10 +93,22 @@ the resolved one for your platform. Env overrides: `$DISCORD_BOT_TOKEN`, `$DISCO
 (operator username; a query hint only, it grants nothing), `$DISCORD_GUILD_ID` (if the bot is
 in more than one guild), `$DISCORD_TRUST_TIERS`.
 
-Restart the MCP server — capability detection runs at startup and the `discord_*` tools are
-only advertised when a token resolves.
+### 3. Register the server
 
-### 3. Restricted channels
+```bash
+meshtastic-mcp install --discord        # registers 'meshtastic' and 'meshtastic-discord'
+# or only the Discord server, by hand:
+claude mcp add meshtastic-discord -- uvx --from meshtastic-mcp meshtastic-mcp-discord
+```
+
+`meshtastic-mcp-discord` and `meshtastic-mcp discord-serve` run the same stdio server. With
+`--local`, `install` registers the current interpreter (`python -m meshtastic_mcp.discord_server`)
+instead of `uvx`. `meshtastic-mcp uninstall` removes both entries.
+
+Restart the MCP client. The token is read when the server starts, and the `discord_*` tools are
+only listed when one resolves; without a token the server lists no tools.
+
+### 4. Restricted channels
 
 Guild-wide *View Channels* from the invite lives on the bot's **managed role** (named after
 the app, created automatically). A channel whose `@everyone` overwrite denies View Channel
@@ -125,9 +141,9 @@ indexed. 429s and index-warming 202s are honoured with Discord's `retry_after`, 
 ## Security
 
 Every message is untrusted, user-authored text from a public community server — the same
-posture as `packets_window` and `cot_relay_status`. The tools are `openWorldHint` so clients
+posture as `query` over mesh traffic and `cot_relay_status`. The tools are `openWorldHint` so clients
 can see untrusted content entering the session. Do not process Discord content and call
-`send_text` (or any other exfiltration path) in the same agentic task without human review.
+`send` (or any other exfiltration path) in the same agentic task without human review.
 The `trust` tier is a reading aid derived from public roles; it is not authentication and a
 hostile member cannot raise their own.
 

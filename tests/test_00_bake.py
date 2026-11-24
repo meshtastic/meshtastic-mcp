@@ -28,7 +28,8 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import admin, boards, flash, hw_tools, info, port_recovery, uhubctl
+from meshtastic_mcp import boards, flash, hw_tools, port_recovery, uhubctl
+from meshtastic_mcp.backends import legacy
 
 from . import _bench
 
@@ -201,7 +202,7 @@ def _bake_role(
     # If not forcing, check if already baked with session profile.
     if not force_bake:
         try:
-            live = info.device_info(port=port, timeout_s=8.0)
+            live = legacy.device_info(port=port, timeout_s=8.0)
             # Heuristic: region, primary channel, channel_num and modem_preset all match.
             # A device sharing region/name but flashed with a different slot or preset must
             # NOT be treated as already baked — and if either value can't be observed on this
@@ -314,20 +315,20 @@ def _bake_role(
         # few seconds on the first post-flash boot.
         for _ in range(20):
             try:
-                info.device_info(port=port, timeout_s=6.0)
+                legacy.device_info(port=port, timeout_s=6.0)
                 break
             except Exception:
                 time.sleep(1.5)
         else:
             raise AssertionError(f"{role}: device didn't respond after DFU flash")
         # Trigger full factory reset (wipes NVS + identity)
-        admin.factory_reset(port=port, confirm=True, full=True)
+        legacy.factory_reset(port=port, confirm=True, full=True)
         # Wait for the device to reboot and come back with fresh config
         # populated from USERPREFS defaults.
         time.sleep(10.0)
         for _ in range(30):
             try:
-                live = info.device_info(port=port, timeout_s=6.0)
+                live = legacy.device_info(port=port, timeout_s=6.0)
                 if live.get("my_node_num"):
                     break
             except Exception:

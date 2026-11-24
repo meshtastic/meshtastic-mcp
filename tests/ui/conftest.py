@@ -29,9 +29,9 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import admin as admin_mod
 from meshtastic_mcp import camera as camera_mod
 from meshtastic_mcp import ocr as ocr_mod
+from meshtastic_mcp.backends import legacy
 from meshtastic_mcp.input_events import InputEventCode
 
 from ._screen_log import FrameEvent, get_current_frame, wait_for_frame, wait_for_reason
@@ -370,22 +370,22 @@ def _ui_screen_kept_on(
             continue
         prior: int | None = None
         try:
-            current = admin_mod.get_config(section="display", port=port)
+            current = legacy.get_config(section="display", port=port)
             prior = int(current.get("config", {}).get("display", {}).get("screen_on_secs") or 0)
         except Exception:
             pass
         originals[role] = (port, prior)
         try:
-            admin_mod.set_config("display.screen_on_secs", 86400, port=port)
+            legacy.set_config("display.screen_on_secs", 86400, port=port)
         except Exception:
             pass
         try:
-            admin_mod.set_debug_log_api(True, port=port)
+            legacy.set_debug_log_api(True, port=port)
         except Exception:
             pass
         # Wake the screen so the first test's first event isn't eaten.
         try:
-            admin_mod.send_input_event(event_code=int(InputEventCode.FN_F1), port=port)
+            legacy.send_input_event(event_code=int(InputEventCode.FN_F1), port=port)
         except Exception:
             pass
 
@@ -398,14 +398,14 @@ def _ui_screen_kept_on(
         for _role, (port, prior) in originals.items():
             if prior is not None:
                 try:
-                    admin_mod.set_config("display.screen_on_secs", prior, port=port)
+                    legacy.set_config("display.screen_on_secs", prior, port=port)
                 except Exception:
                     pass
 
 
 def _send_event(port: str, event: InputEventCode) -> None:
     try:
-        admin_mod.send_input_event(event_code=int(event), port=port)
+        legacy.send_input_event(event_code=int(event), port=port)
     except Exception:
         # Treat a failed event as soft — the subsequent frame-log assertion
         # surfaces the real problem with better context.
@@ -469,7 +469,7 @@ def ui_home_state(
 
 def send_event(port: str, event: InputEventCode | int | str, **kwargs: Any) -> dict[str, Any]:
     """Thin wrapper so tests read `send_event(port, InputEventCode.RIGHT)`."""
-    return admin_mod.send_input_event(event_code=event, port=port, **kwargs)
+    return legacy.send_input_event(event_code=event, port=port, **kwargs)
 
 
 __all__ = [

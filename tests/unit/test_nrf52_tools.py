@@ -12,7 +12,9 @@ import pytest
 from fastmcp import Client, FastMCP
 from mcp.types import ElicitResult
 
-from meshtastic_mcp import admin, confirm, nrf52_bootloader
+from meshtastic_mcp import confirm, nrf52_bootloader
+from meshtastic_mcp.tools import hardware as tools_hardware
+from tests.unit._tool_fns import tool_fn
 
 INFO_OTAFIX = (
     "UF2 Bootloader 2.6.0\r\nModel: WisBlock RAK4631 Board\r\nBoard-ID: WisBlock-RAK4631-Board\r\n"
@@ -27,7 +29,7 @@ INFO_OLD = (
 @pytest.fixture(autouse=True)
 def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHTASTIC_MCP_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
 
 
 @pytest.fixture(scope="module")
@@ -49,8 +51,8 @@ def _drive(tmp_path, info_text):
     }
 
 
-def _uf2(path, target):
-    block = struct.pack("<IIIIIIII", 0x0A324655, 0x9E5D5157, 0x2000, target, 256, 0, 1, 0xADA52840)
+def _uf2(path, target, family=0xADA52840):
+    block = struct.pack("<IIIIIIII", 0x0A324655, 0x9E5D5157, 0x2000, target, 256, 0, 1, family)
     block += b"\0" * 476 + struct.pack("<I", 0x0AB16F30)
     path.write_bytes(block)
     return str(path)
@@ -59,7 +61,7 @@ def _uf2(path, target):
 def _app(server, *names):
     app = FastMCP("t")
     for name in names:
-        tool = getattr(server, name)
+        tool = tool_fn(name)
         app.tool()(getattr(tool, "fn", tool))
     return app
 
@@ -93,7 +95,7 @@ def test_a_gone_app_port_still_finds_its_drive_by_serial(server, monkeypatch, tm
 
     monkeypatch.setattr(nrf52_bootloader, "find_drive_for_port", fake_match)
     gone = str(tmp_path / "usb-RAKwireless_WisCore_RAK4631_Board_7885014CB2C5B186-if00")
-    assert server._uf2_drive(gone)["label"] == "RAK4631"
+    assert tools_hardware._uf2_drive(gone)["label"] == "RAK4631"
     assert asked == {"port": None, "serial_number": "7885014CB2C5B186"}
 
 
@@ -121,6 +123,38 @@ def test_a_matching_image_asks_then_flashes_as_a_job(server, monkeypatch, tmp_pa
     result = _call(_app(server, "nrf52_flash_uf2"), "nrf52_flash_uf2", {"uf2_path": image}, handler)
     assert result.is_error is False and len(seen) == 1
     assert result.structured_content["job_id"]
+
+
+def test_a_bootloader_update_skips_the_softdevice_check_and_says_so(
+    server, monkeypatch, tmp_path
+) -> None:
+    drive = _drive(tmp_path, INFO_OTAFIX)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
+    monkeypatch.setattr(
+        nrf52_bootloader, "flash_uf2", lambda d, p, timeout_s: {"ok": True, "outcome": "detached"}
+    )
+    handler, seen = _accept()
+    image = _uf2(tmp_path / "update-rak4631_bootloader_nosd.uf2", 0x0, family=0xD663823C)
+    result = _call(_app(server, "nrf52_flash_uf2"), "nrf52_flash_uf2", {"uf2_path": image}, handler)
+    assert result.is_error is False, result.content[0].text
+    assert result.structured_content["bootloader_update"] is True
+    assert len(seen) == 1 and "bootloader update" in seen[0]
+
+
+def test_a_bootloader_update_asks_the_human_even_with_confirm(
+    server, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv(confirm.POLICY_ENV, "human")
+    drive = _drive(tmp_path, INFO_OTAFIX)
+    monkeypatch.setattr("meshtastic_mcp.tools.hardware._uf2_drive", lambda port: drive)
+    monkeypatch.setattr(
+        nrf52_bootloader, "flash_uf2", lambda d, p, timeout_s: {"ok": True, "outcome": "detached"}
+    )
+    handler, seen = _accept()
+    image = _uf2(tmp_path / "update-rak4631_bootloader_nosd.uf2", 0x0, family=0xD663823C)
+    args = {"uf2_path": image, "confirm": True}
+    result = _call(_app(server, "nrf52_flash_uf2"), "nrf52_flash_uf2", args, handler)
+    assert result.is_error is False and len(seen) == 1
 
 
 def test_a_copy_the_bootloader_did_not_take_is_an_error(server, monkeypatch, tmp_path) -> None:
@@ -178,7 +212,9 @@ def test_a_backup_copies_current_uf2_into_the_data_dir(server, monkeypatch, tmp_
 
 
 def test_enter_uf2_sends_nothing_without_a_confirmation(server, monkeypatch) -> None:
-    monkeypatch.setattr(admin, "enter_uf2_mode", lambda **k: pytest.fail("sent"))
+    monkeypatch.setattr(
+        "meshtastic_mcp.tools.hardware._enter_uf2", lambda port: pytest.fail("sent")
+    )
     app = _app(server, "nrf52_enter_uf2")
     result = _call(app, "nrf52_enter_uf2", {"port": "/dev/x"})
     assert result.is_error is True and "confirm=True" in result.content[0].text

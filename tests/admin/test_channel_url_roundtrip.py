@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from meshtastic_mcp import admin, info
+from meshtastic_mcp.backends import legacy
 
 
 @pytest.mark.timeout(60)
@@ -32,23 +32,23 @@ def test_channel_url_roundtrip(
     """
     port = baked_single["port"]
 
-    url_before = admin.get_channel_url(include_all=False, port=port)["url"]
+    url_before = legacy.get_channel_url(include_all=False, port=port)["url"]
     assert url_before, "device returned empty channel URL"
     assert "meshtastic" in url_before.lower() or "#" in url_before, (
         f"URL does not look like a Meshtastic channel URL: {url_before!r}"
     )
 
     # Re-apply the same URL — no-op in content but exercises the setURL path.
-    applied = admin.set_channel_url(url=url_before, port=port)
+    applied = legacy.set_channel_url(url=url_before, port=port)
     assert applied["ok"] is True
     assert applied["channels_imported"] >= 1
     time.sleep(2.0)
 
     # Confirm the primary channel name survived
-    live = info.device_info(port=port, timeout_s=8.0)
+    live = legacy.device_info(port=port, timeout_s=8.0)
     assert live["primary_channel"] == test_profile["USERPREFS_CHANNEL_0_NAME"]
 
-    url_after = admin.get_channel_url(include_all=False, port=port)["url"]
+    url_after = legacy.get_channel_url(include_all=False, port=port)["url"]
     # Canonicalization is tricky: the firmware may re-serialize the protobuf
     # with fields in a different order, producing a visually-different URL
     # that encodes the same content. Accept that as a success when the

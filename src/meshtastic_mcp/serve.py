@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import hmac
 import os
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 
 from fastmcp.server.auth import AccessToken, TokenVerifier
+
+from .bridge import ServerAlreadyRunning as ServerAlreadyRunning
 
 TOKEN_ENV = "MESHTASTIC_MCP_TOKEN"
 TOKEN_FILE_ENV = "MESHTASTIC_MCP_TOKEN_FILE"
@@ -64,9 +67,30 @@ class BenchTokenVerifier(TokenVerifier):
 
 
 def serve(host: str, port: int, token: str) -> None:
+    """Serve over HTTP, as this host's one server. Raises `ServerAlreadyRunning`."""
+    from . import _version, bridge
+
+    # Clients on this host find the server through the token file, never the token itself.
+    from_env = bool((os.environ.get(TOKEN_ENV) or "").strip())
+    token_file = None if from_env else os.environ.get(TOKEN_FILE_ENV)
+    version = getattr(_version, "__version__", "")
+    source = bridge.source_commit()
+    lock = bridge.claim_host(
+        bridge.local_url(host, port),
+        str(Path(token_file).expanduser().resolve()) if token_file else None,
+        version,
+        source,
+    )
+    at = ""
+    if source:
+        at = f" at {source['commit'][:9]}" + (" with local changes" if source["dirty"] else "")
+    print(f"meshtastic-mcp serve {version or 'unknown'}{at}", file=sys.stderr, flush=True)
     # The server spawns pio, install scripts, emulators and model servers; none needs the token.
     os.environ.pop(TOKEN_ENV, None)
     from .server import app
 
     app.auth = BenchTokenVerifier(token)
-    app.run(transport="http", host=host, port=port)
+    try:
+        app.run(transport="http", host=host, port=port)
+    finally:
+        lock.close()

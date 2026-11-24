@@ -3,7 +3,7 @@
 Type+send a text in the app; assert the wire truth on the tester radio.
 
 **Stimulus:** `adb shell input` types the token in the app and taps send  
-**Oracle:** recorder `packets_window` shows a `TEXT_MESSAGE_APP` from the DUT carrying `token`
+**Oracle:** `query` over the recorder's `packets` view shows a `TEXT_MESSAGE_APP` from the DUT carrying `token`
 
 ## Steps
 
@@ -35,7 +35,7 @@ wait $REC 2>/dev/null
 
 ## Notes
 
-- `watch-tx` greps `packets_window` for a `TEXT_MESSAGE_APP` packet whose JSON contains the
+- `watch-tx` greps the recorder's `packets` view for a `TEXT_MESSAGE_APP` packet whose JSON contains the
   token. The recorder summarizes payloads as hex + matched text; a plaintext channel shows the
   token directly. For an **encrypted DM to the tester**, the tester must be the destination and
   hold the DUT's pubkey — otherwise the recorder logs the packet but can't surface the text.

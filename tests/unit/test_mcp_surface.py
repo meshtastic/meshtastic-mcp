@@ -9,6 +9,9 @@ import asyncio
 
 import pytest
 
+from meshtastic_mcp.tools import android as tools_android
+from meshtastic_mcp.tools import replay as tools_replay
+
 
 @pytest.fixture
 def server():
@@ -78,11 +81,11 @@ def test_cot_relay_rejects_unsafe_session_names(server, bad) -> None:
     # `session` names a subdir under the capture root; separators/traversal/
     # absolute paths must be rejected so a capture can't be written outside it.
     with pytest.raises(ValueError, match="invalid session"):
-        server._safe_session_name(bad)
+        tools_replay._safe_session_name(bad)
 
 
 def test_cot_relay_accepts_plain_session_name(server) -> None:
-    assert server._safe_session_name("run-2026-08-20") == "run-2026-08-20"
+    assert tools_replay._safe_session_name("run-2026-08-20") == "run-2026-08-20"
 
 
 def test_android_type_text_passes_raw(server, monkeypatch) -> None:
@@ -94,19 +97,19 @@ def test_android_type_text_passes_raw(server, monkeypatch) -> None:
         "meshtastic_mcp.emulator.avd.type_text",
         lambda text, serial=None: calls.append(text),
     )
-    server.android_type_text("hello world", serial="emulator-5554")
+    tools_android.android_type_text("hello world", serial="emulator-5554")
     assert calls == ["hello world"]
 
 
 def test_android_poll_for_text_rejects_bad_timeout_and_interval(server) -> None:
     with pytest.raises(ValueError, match="timeout"):
-        server.android_poll_for_text("token", timeout=-1)
+        tools_android.android_poll_for_text("token", timeout=-1)
     with pytest.raises(ValueError, match="timeout"):
-        server.android_poll_for_text("token", timeout=float("inf"))
+        tools_android.android_poll_for_text("token", timeout=float("inf"))
     with pytest.raises(ValueError, match="interval"):
-        server.android_poll_for_text("token", interval=0)
+        tools_android.android_poll_for_text("token", interval=0)
     with pytest.raises(ValueError, match="interval"):
-        server.android_poll_for_text("token", interval=-0.5)
+        tools_android.android_poll_for_text("token", interval=-0.5)
 
 
 def test_resources_registered(server) -> None:

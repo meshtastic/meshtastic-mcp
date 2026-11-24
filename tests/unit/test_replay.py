@@ -30,6 +30,7 @@ from meshtastic_mcp.replay.engine import (
     OBSERVER_NUM,
     _representative_radio_metrics,
 )
+from meshtastic_mcp.tools import replay as tools_replay
 
 ALL_PORTNUMS = {1, 3, 4, 5, 6, 8, 34, 37, 65, 66, 67, 70, 71}
 
@@ -1976,7 +1977,6 @@ def test_cli_replay_builds_session_from_args():
 
 
 def test_mcp_replay_start_wires_dupe_every(monkeypatch):
-    from meshtastic_mcp import server
 
     cap = sim.generate(nodes=2, days=1, seed=1, start=1_700_000_000)
     captured = None
@@ -1993,7 +1993,7 @@ def test_mcp_replay_start_wires_dupe_every(monkeypatch):
     )
     monkeypatch.setattr("meshtastic_mcp.tools.replay.get_replay_manager", lambda: Manager())
 
-    assert server.replay_start(dupe_every=23, mdns=False) == {"id": "test"}
+    assert tools_replay.replay_start(dupe_every=23, mdns=False) == {"id": "test"}
     assert captured is not None
     assert captured.dupe_every == 23
 
@@ -2432,6 +2432,19 @@ def test_injected_items_survive_a_dead_connection():
     sess._inject_loop(dead)
     assert sess._inject_fr_q.qsize() == 1
     assert sess._inject_q.qsize() == 1
+
+
+def test_status_counts_injections_waiting_for_a_client():
+    """With no app connected, accepted injections show as queued, not as zero."""
+    from meshtastic_mcp.replay.engine import _status_dict
+
+    cap = sim.generate(nodes=5, days=1, seed=3, start=1_700_000_000)
+    sess = ReplaySession("no-client", cap, ReplayParams(host="127.0.0.1", port=0))
+    sess.inject([mesh_pb2.MeshPacket(), mesh_pb2.MeshPacket()])
+    sess.inject_fromradio([mesh_pb2.FromRadio()])
+    st = _status_dict(sess)
+    assert st["injected"] == 0
+    assert st["inject_queued"] == 3
 
 
 def test_local_telemetry_comes_from_the_sessions_own_node():

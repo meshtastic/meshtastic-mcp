@@ -4,7 +4,7 @@
 """WS5 realism regression: keep the generator inside tolerance bands.
 
 These bands are reviewed constants derived from the real event captures
-(Burning Man 2025, DEF CON 33) analysed in docs/sim-realism-plan.md. The
+(Burning Man 2025, DEF CON 33). The
 golden stat profiles themselves are dataset-derived and not committed, so the
 guardrails live here as code — they catch regressions in the generator's
 portnum economy, hop model, text shape, telemetry, and the RF observer without

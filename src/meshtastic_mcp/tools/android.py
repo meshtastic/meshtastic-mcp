@@ -15,11 +15,13 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from .. import confirm as confirm_mod
+from ..tool_meta import meta
 from ._app import android_tool
 from ._shared import _off_loop
 
 
 @android_tool()
+@meta("read", open_world=True)
 def android_docs_search(query: str) -> str:
     """Search the official Android Knowledge Base for grounded API/Compose/UI guidance.
 
@@ -37,6 +39,7 @@ def android_docs_search(query: str) -> str:
 
 
 @android_tool()
+@meta("read", open_world=True)
 def android_docs_fetch(url: str) -> str:
     """Fetch the full text of an Android Knowledge Base article by its `kb://...` URL.
 
@@ -49,6 +52,7 @@ def android_docs_fetch(url: str) -> str:
 
 
 @android_tool()
+@meta("read", open_world=True)
 def android_version_lookup(query: str) -> str:
     """Look up the latest version of a maven artifact, Android SDK or tool (`android studio`).
 
@@ -64,6 +68,7 @@ def android_version_lookup(query: str) -> str:
 
 
 @android_tool()
+@meta("read")
 def android_render_compose_preview(file: str, preview: str | None = None) -> str:
     """Render a Jetpack Compose @Preview to a PNG without an emulator (fast UI regression).
 
@@ -87,6 +92,7 @@ _ANDROID_SCREENSHOT_DIR = Path(tempfile.mkdtemp(prefix="meshtastic-mcp-android-"
 
 
 @android_tool()
+@meta("read", open_world=True)
 def android_ui_dump(serial: str | None = None, diff: bool = False) -> list[dict[str, Any]]:
     """Dump the current view hierarchy of the running app as a list of elements.
 
@@ -107,6 +113,7 @@ def android_ui_dump(serial: str | None = None, diff: bool = False) -> list[dict[
 
 
 @android_tool()
+@meta("destructive", open_world=True)
 def android_screenshot(serial: str | None = None, annotate: bool = False) -> dict[str, Any]:
     """Capture a screenshot of the running app to a PNG file and return its `path`.
 
@@ -128,6 +135,7 @@ def android_screenshot(serial: str | None = None, annotate: bool = False) -> dic
 
 
 @android_tool()
+@meta("read", open_world=True)
 def android_resolve(label: int, serial: str | None = None) -> dict[str, Any]:
     """Resolve a `#<label>` from the last `android_screenshot(annotate=True)` call to (x, y).
 
@@ -145,6 +153,7 @@ def android_resolve(label: int, serial: str | None = None) -> dict[str, Any]:
 
 
 @android_tool()
+@meta("destructive", open_world=True)
 def android_tap(
     serial: str | None = None,
     x: int | None = None,
@@ -176,6 +185,7 @@ def android_tap(
 
 
 @android_tool()
+@meta("destructive", open_world=True)
 def android_swipe(
     x1: int,
     y1: int,
@@ -201,6 +211,7 @@ def android_swipe(
 
 
 @android_tool()
+@meta("destructive", open_world=True)
 def android_type_text(text: str, serial: str | None = None) -> dict[str, Any]:
     """Type `text` into the currently focused input field.
 
@@ -219,6 +230,7 @@ def android_type_text(text: str, serial: str | None = None) -> dict[str, Any]:
 
 
 @android_tool()
+@meta("read", open_world=True)
 def android_find_text(token: str, serial: str | None = None) -> bool:
     """True if `token` appears anywhere in the current view hierarchy right now.
 
@@ -235,6 +247,7 @@ def android_find_text(token: str, serial: str | None = None) -> bool:
 
 
 @android_tool()
+@meta("read", open_world=True)
 def android_poll_for_text(
     token: str,
     serial: str | None = None,
@@ -263,6 +276,7 @@ def android_poll_for_text(
 
 
 @android_tool()
+@meta("destructive", open_world=True)
 def android_clear_logcat(serial: str | None = None) -> dict[str, Any]:
     """Flush the device's logcat ring buffer.
 
@@ -278,6 +292,7 @@ def android_clear_logcat(serial: str | None = None) -> dict[str, Any]:
 
 
 @android_tool()
+@meta("read", open_world=True)
 def android_read_logcat(
     serial: str | None = None,
     tags: list[str] | None = None,
@@ -312,6 +327,7 @@ _ATAK_LOCK = threading.Lock()
 
 
 @android_tool()
+@meta("destructive", open_world=True)
 def atak_fleet_up(
     count: int,
     apk_path: str,
@@ -377,6 +393,7 @@ def atak_fleet_up(
 
 
 @android_tool()
+@meta("read", open_world=True)
 def atak_fleet_status() -> dict[str, Any]:
     """Progress of the ATAK fleet bring-up and any active GPS drives.
 
@@ -399,6 +416,7 @@ def atak_fleet_status() -> dict[str, Any]:
 
 
 @android_tool()
+@meta("destructive", open_world=True)
 async def atak_fleet_down(
     ctx: Context, delete_clones: bool = False, confirm: bool = False
 ) -> dict[str, Any]:
@@ -406,7 +424,7 @@ async def atak_fleet_down(
 
     `delete_clones=True` is irreversible (the next `atak_fleet_up` re-provisions from
     scratch), so it requires `confirm=True`, or the user's answer when the client can ask
-    (always, with `MESHTASTIC_MCP_CONFIRM=human`). Returns `{stopped, nodes,
+    (always, unless `MESHTASTIC_MCP_CONFIRM=agent`). Returns `{stopped, nodes,
     clones_deleted}`, or `{running: false}` when no fleet is up.
 
     Args:
@@ -457,6 +475,7 @@ def _atak_teardown(atak: Any, delete_clones: bool) -> dict[str, Any]:
 
 
 @android_tool()
+@meta("destructive", open_world=True)
 def atak_drive_route(
     serial: str,
     waypoints: list[list[float]],
@@ -511,6 +530,7 @@ def atak_drive_route(
 
 
 @android_tool()
+@meta("destructive", open_world=True)
 def atak_share_item(serial: str, name: str) -> dict[str, Any]:
     """Broadcast an existing ATAK map item (marker, shape, route, R&B, bullseye) to all
     contacts.
@@ -532,6 +552,7 @@ def atak_share_item(serial: str, name: str) -> dict[str, Any]:
 
 
 @android_tool()
+@meta("destructive", open_world=True)
 def atak_drive_stop(serial: str | None = None) -> dict[str, Any]:
     """Stop an active GPS drive. The self-PLI holds at the last fix delivered.
 

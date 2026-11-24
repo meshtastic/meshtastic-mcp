@@ -50,11 +50,11 @@ def test_provisions_once_then_pokes_each_cycle(tmp_path, monkeypatch):
     set_calls: list = []
     input_calls: list = []
     monkeypatch.setattr(
-        "meshtastic_mcp.admin.set_config",
+        "meshtastic_mcp.backends.legacy.set_config",
         lambda path, value, port: set_calls.append((path, value, port)) or {"ok": True},
     )
     monkeypatch.setattr(
-        "meshtastic_mcp.admin.send_input_event",
+        "meshtastic_mcp.backends.legacy.send_input_event",
         lambda event_code, kb=0, tx=0, ty=0, port=None: (
             input_calls.append((event_code, port)) or {"ok": True}
         ),
@@ -94,9 +94,9 @@ def test_provisions_once_then_pokes_each_cycle(tmp_path, monkeypatch):
 
 def test_skips_every_action_while_a_run_owns_the_ports(tmp_path, monkeypatch):
     touched: list = []
-    monkeypatch.setattr("meshtastic_mcp.admin.set_config", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr("meshtastic_mcp.backends.legacy.set_config", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(
-        "meshtastic_mcp.admin.send_input_event",
+        "meshtastic_mcp.backends.legacy.send_input_event",
         lambda *a, port=None, **k: touched.append(port) or {"ok": True},
     )
     monkeypatch.setattr("meshtastic_mcp.web.services.test_runner.is_running", lambda: True)
@@ -119,7 +119,7 @@ def test_skips_every_action_while_a_run_owns_the_ports(tmp_path, monkeypatch):
 def test_disabled_does_nothing(tmp_path, monkeypatch):
     touched: list = []
     monkeypatch.setattr(
-        "meshtastic_mcp.admin.send_input_event",
+        "meshtastic_mcp.backends.legacy.send_input_event",
         lambda *a, **k: touched.append(1) or {"ok": True},
     )
     monkeypatch.setattr("meshtastic_mcp.web.services.test_runner.is_running", lambda: False)
@@ -186,7 +186,7 @@ def test_relay_bypasses_port_and_falls_back(tmp_path, monkeypatch):
         def fake_send_input_event(event, kb, x, y, port):
             admin_calls.append(f"input:{port}")
 
-        import meshtastic_mcp.admin as admin_mod
+        from meshtastic_mcp.backends import legacy as admin_mod
 
         monkeypatch.setattr(admin_mod, "set_config", fake_set_config)
         monkeypatch.setattr(admin_mod, "send_input_event", fake_send_input_event)

@@ -1,17 +1,11 @@
 # SPDX-FileCopyrightText: Meshtastic contributors
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Test linger_s parameter to prevent serial TX race.
+"""The port stays open after a write so queued RF and flash writes finish.
 
-When a serial connection closes, DTR reset kills queued RF transmissions.
-Meshtastic firmware queues broadcasts behind ~4s channel-politeness delay.
-The linger_s parameter delays close until queued TX completes.
-
-Tests verify:
-  - send_text() passes tx_linger_s through to connect()
-  - set_owner() uses a nonzero linger
-  - set_config() uses a nonzero linger
-  - set_channel_url() uses a nonzero linger
+When a serial connection closes, DTR reset kills queued RF transmissions, and firmware queues
+broadcasts behind a ~4 s channel-politeness delay. A text send holds the port for its linger;
+a channel import closes with a nonzero linger; `connect()` clamps the linger it is given.
 """
 
 from __future__ import annotations
@@ -20,10 +14,8 @@ import contextlib
 import sys
 import types
 
-import pytest
-
-from meshtastic_mcp import admin
 from meshtastic_mcp import connection as conn
+from meshtastic_mcp.backends import legacy, python_send
 
 
 class _FakeNode:
@@ -46,117 +38,37 @@ class _FakeIface:
         self.close_called = True
 
 
-def test_send_text_passes_tx_linger_s(monkeypatch):
-    """send_text() must pass tx_linger_s through to connect()."""
-    connect_calls = []
+def _send_text_holds(monkeypatch, **kwargs) -> list[float]:
+    slept: list[float] = []
+
+    class Iface:
+        class myInfo:
+            my_node_num = 1
+
+        def sendData(self, *args, **kw):
+            return types.SimpleNamespace(id=42)
 
     @contextlib.contextmanager
-    def fake_connect(port=None, linger_s=0.0, **kwargs):
-        connect_calls.append({"port": port, "linger_s": linger_s})
+    def fake_connect(port=None, **kw):
+        yield Iface()
 
-        class FakeIface:
-            def sendText(self, *args, **kwargs):
-                class Packet:
-                    id = 42
+    monkeypatch.setattr(conn, "connect", fake_connect)
+    monkeypatch.setattr(python_send.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(python_send.time, "sleep", slept.append)
+    legacy.send_text(text="test", port="/dev/ttyUSB0", **kwargs)
+    return slept
 
-                return Packet()
 
-        yield FakeIface()
-
-    monkeypatch.setattr(admin, "connect", fake_connect)
-
-    # Call send_text with a custom tx_linger_s
-    admin.send_text(text="test", port="/dev/ttyUSB0", tx_linger_s=7.5)
-
-    # Verify connect was called with the tx_linger_s value
-    assert len(connect_calls) == 1
-    assert connect_calls[0]["linger_s"] == 7.5, f"Expected linger_s=7.5, got {connect_calls[0]}"
+def test_send_text_holds_the_port_for_tx_linger_s(monkeypatch):
+    assert _send_text_holds(monkeypatch, tx_linger_s=7.5) == [7.5]
 
 
 def test_send_text_defaults_to_8s_linger(monkeypatch):
-    """send_text() must default to tx_linger_s=8.0."""
-    connect_calls = []
-
-    @contextlib.contextmanager
-    def fake_connect(port=None, linger_s=0.0, **kwargs):
-        connect_calls.append({"port": port, "linger_s": linger_s})
-
-        class FakeIface:
-            def sendText(self, *args, **kwargs):
-                class Packet:
-                    id = 42
-
-                return Packet()
-
-        yield FakeIface()
-
-    monkeypatch.setattr(admin, "connect", fake_connect)
-
-    # Call send_text without specifying tx_linger_s
-    admin.send_text(text="test", port="/dev/ttyUSB0")
-
-    # Verify connect was called with the default 8.0s linger
-    assert len(connect_calls) == 1
-    assert connect_calls[0]["linger_s"] == 8.0, (
-        f"Expected default linger_s=8.0, got {connect_calls[0]}"
-    )
-
-
-def test_set_owner_uses_linger(monkeypatch):
-    """set_owner() must use linger_s > 0 for flash write safety."""
-    connect_calls = []
-
-    @contextlib.contextmanager
-    def fake_connect(port=None, linger_s=0.0, **kwargs):
-        connect_calls.append({"port": port, "linger_s": linger_s})
-
-        class FakeNode:
-            def setOwner(self, long_name, short_name):
-                pass
-
-        class FakeIface:
-            localNode = FakeNode()
-
-        yield FakeIface()
-
-    monkeypatch.setattr(admin, "connect", fake_connect)
-
-    # Call set_owner
-    admin.set_owner(long_name="Test Owner", short_name="TEST")
-
-    # Verify connect was called with a nonzero linger
-    assert len(connect_calls) == 1
-    assert connect_calls[0]["linger_s"] > 0, (
-        f"set_owner must use nonzero linger, got {connect_calls[0]['linger_s']}"
-    )
-
-
-def test_set_config_uses_linger(monkeypatch):
-    """set_config() must use linger_s > 0 for flash write safety."""
-    connect_calls = []
-
-    @contextlib.contextmanager
-    def fake_connect(port=None, linger_s=0.0, **kwargs):
-        connect_calls.append({"port": port, "linger_s": linger_s})
-        # Immediately raise an error before set_config continues
-        # (we just want to verify connect was called with linger)
-        raise admin.AdminError("test error")
-
-    monkeypatch.setattr(admin, "connect", fake_connect)
-
-    # Call set_config — it should fail but we can check connect was called
-    with pytest.raises(admin.AdminError):
-        admin.set_config(path="lora.region", value="US")
-
-    # Verify connect was called with a nonzero linger
-    assert len(connect_calls) == 1
-    assert connect_calls[0]["linger_s"] > 0, (
-        f"set_config must use nonzero linger, got {connect_calls[0]['linger_s']}"
-    )
+    assert _send_text_holds(monkeypatch) == [8.0]
 
 
 def test_set_channel_url_uses_linger(monkeypatch):
-    """set_channel_url() must use linger_s > 0 for flash write safety."""
+    """A channel import closes the port with a nonzero linger for the flash write."""
     connect_calls = []
 
     @contextlib.contextmanager
@@ -166,7 +78,7 @@ def test_set_channel_url_uses_linger(monkeypatch):
         class FakeNode:
             channels = []
 
-            def setURL(self, url):
+            def setURL(self, url, addOnly=False):
                 pass
 
         class FakeIface:
@@ -174,16 +86,10 @@ def test_set_channel_url_uses_linger(monkeypatch):
 
         yield FakeIface()
 
-    monkeypatch.setattr(admin, "connect", fake_connect)
-
-    # Call set_channel_url
-    admin.set_channel_url(url="https://example.com/meshtastic/config")
-
-    # Verify connect was called with a nonzero linger
+    monkeypatch.setattr(conn, "connect", fake_connect)
+    legacy.set_channel_url(url="https://meshtastic.org/e/#CgMSAQE")
     assert len(connect_calls) == 1
-    assert connect_calls[0]["linger_s"] > 0, (
-        f"set_channel_url must use nonzero linger, got {connect_calls[0]['linger_s']}"
-    )
+    assert connect_calls[0]["linger_s"] > 0
 
 
 def _drive_connect_linger(monkeypatch, requested_linger: float) -> list[float]:

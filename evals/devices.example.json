@@ -1,0 +1,11 @@
+{
+  "heltec": "Heltec V3",
+  "heltec_port": "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0",
+  "rak": "RAK4631",
+  "rak_port": "/dev/serial/by-id/usb-RAKwireless_WisCore_RAK4631_Board_7885014CB2C5B186-if00",
+  "rak_owner": "olm3c rak solar",
+  "heltec_env": "heltec-v3",
+  "mcp_python": "/home/you/.local/share/uv/tools/meshtastic-mcp/bin/python",
+  "firmware_ref": "develop",
+  "known_node": "olm3c"
+}

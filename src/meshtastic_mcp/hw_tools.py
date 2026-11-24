@@ -33,15 +33,39 @@ class ToolError(RuntimeError):
     pass
 
 
-def _destructive_word(args: Sequence[str], destructive: set[str]) -> str | None:
-    """The first non-flag argument that names a destructive subcommand, wherever it sits.
+_HELP_FLAGS = {"-h", "--help", "--version", "-V"}
 
-    Flags take values (`--port /dev/x`, `-b 921600`), so the first non-flag argument is not
-    always the subcommand; checking every one means a value cannot hide `erase_flash` from the
-    gate. A value that happens to equal a subcommand name asks for confirmation it did not need.
+
+def _norm(word: str) -> str:
+    return word.replace("-", "_").lower()
+
+
+def _unsafe_call(
+    args: Sequence[str], read_only: set[str], value_flags: set[str], depth: int = 1
+) -> str | None:
+    """What a call does when it is not provably read-only; None when it is.
+
+    The subcommand is the first `depth` words left after dropping each value flag and its
+    value; only a subcommand in `read_only` runs without confirmation, so one this list does
+    not know asks.
     """
-    wanted = {s.replace("-", "_") for s in destructive}
-    return next((a for a in args if not a.startswith("-") and a.replace("-", "_") in wanted), None)
+    words: list[str] = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+            continue
+        if arg.startswith("-"):
+            if arg in value_flags:
+                skip = True
+            continue
+        words.append(arg)
+    if not words:
+        return None if args and all(a in _HELP_FLAGS for a in args) else " ".join(args) or "it"
+    sub = " ".join(_norm(w) for w in words[:depth])
+    if sub in read_only:
+        return None
+    return " ".join(words[:depth])
 
 
 class ConfirmRequired(ToolError):
@@ -89,15 +113,27 @@ def _require_confirm(confirm: bool, what: str) -> None:
 
 # ---------- esptool --------------------------------------------------------
 
-ESPTOOL_DESTRUCTIVE = {
-    "write_flash",
-    "write-flash",
-    "erase_flash",
-    "erase-flash",
-    "erase_region",
-    "erase-region",
-    "merge_bin",
-    "merge-bin",
+# Subcommands that only read the chip; anything else asks first.
+ESPTOOL_READ_ONLY = {
+    "chip_id",
+    "flash_id",
+    "read_mac",
+    "read_flash_status",
+    "get_security_info",
+    "image_info",
+    "version",
+}
+_ESPTOOL_VALUE_FLAGS = {
+    "-p",
+    "--port",
+    "-b",
+    "--baud",
+    "-c",
+    "--chip",
+    "--before",
+    "--after",
+    "--connect-attempts",
+    "--port-filter",
 }
 
 
@@ -156,7 +192,7 @@ def esptool_raw(args: list[str], port: str | None = None, confirm: bool = False)
     if not args:
         raise ToolError("args must not be empty")
     connection.reject_if_tcp(port, "esptool_raw")
-    subcommand = _destructive_word(args, ESPTOOL_DESTRUCTIVE)
+    subcommand = _unsafe_call(args, ESPTOOL_READ_ONLY, _ESPTOOL_VALUE_FLAGS)
     if subcommand:
         _require_confirm(confirm, f"esptool {subcommand}")
 
@@ -170,7 +206,9 @@ def esptool_raw(args: list[str], port: str | None = None, confirm: bool = False)
 
 # ---------- nrfutil --------------------------------------------------------
 
-NRFUTIL_DESTRUCTIVE = {"dfu", "settings"}
+# adafruit-nrfutil and Nordic's nrfutil: listing and identity reads only.
+NRFUTIL_READ_ONLY = {"version", "list", "device list", "device device_info", "device core_info"}
+_NRFUTIL_VALUE_FLAGS = {"-p", "--port", "--serial-number", "--traits", "--log-level"}
 
 
 _BY_ID = Path("/dev/serial/by-id")
@@ -293,7 +331,7 @@ def nrfutil_dfu(port: str, package_path: str, confirm: bool = False) -> dict[str
 def nrfutil_raw(args: list[str], confirm: bool = False) -> dict[str, Any]:
     if not args:
         raise ToolError("args must not be empty")
-    subcommand = _destructive_word(args, NRFUTIL_DESTRUCTIVE)
+    subcommand = _unsafe_call(args, NRFUTIL_READ_ONLY, _NRFUTIL_VALUE_FLAGS, depth=2)
     if subcommand:
         _require_confirm(confirm, f"nrfutil {subcommand}")
     binary = config.nrfutil_bin()
@@ -302,7 +340,8 @@ def nrfutil_raw(args: list[str], confirm: bool = False) -> dict[str, Any]:
 
 # ---------- picotool -------------------------------------------------------
 
-PICOTOOL_DESTRUCTIVE = {"load", "reboot", "save", "erase"}
+PICOTOOL_READ_ONLY = {"info", "version", "help"}
+_PICOTOOL_VALUE_FLAGS = {"--bus", "--address", "--ser"}
 
 
 def _parse_picotool_info(stdout: str) -> dict[str, Any]:
@@ -360,7 +399,7 @@ def picotool_load(uf2_path: str, confirm: bool = False) -> dict[str, Any]:
 def picotool_raw(args: list[str], confirm: bool = False) -> dict[str, Any]:
     if not args:
         raise ToolError("args must not be empty")
-    subcommand = _destructive_word(args, PICOTOOL_DESTRUCTIVE)
+    subcommand = _unsafe_call(args, PICOTOOL_READ_ONLY, _PICOTOOL_VALUE_FLAGS)
     if subcommand:
         _require_confirm(confirm, f"picotool {subcommand}")
     binary = config.picotool_bin()

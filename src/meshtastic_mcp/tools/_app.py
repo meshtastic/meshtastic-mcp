@@ -9,6 +9,7 @@ without importing `server`, which imports them.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from fastmcp import FastMCP
@@ -31,162 +32,31 @@ tasks_mod.install(app)
 CAPS = capabilities.detect()
 
 
-def firmware_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when the firmware capability is active.
-
-    Without a firmware tree the handler is still defined (so imports/tests are unaffected)
-    but is not advertised to MCP clients.
-    """
-
-    def deco(fn):
-        if CAPS.firmware:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
+# Tool names each capability gates, recorded whether or not it is active, so the startup log
+# and `doctor` can name what an inactive capability leaves out.
+GATED: dict[str, list[str]] = {}
 
 
-def android_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when the android capability is active.
+def _gated(capability: str, active: Callable[[], bool]) -> Callable[..., Any]:
+    def factory(*args: Any, **kwargs: Any) -> Callable[[Any], Any]:
+        def deco(fn: Any) -> Any:
+            GATED.setdefault(capability, []).append(fn.__name__)
+            return app.tool(*args, **kwargs)(fn) if active() else fn
 
-    Without the `android` CLI + `adb` the Android tools are not advertised so
-    they cannot be called and cannot error on a missing binary.
-    """
+        return deco
 
-    def deco(fn):
-        if CAPS.android:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
+    return factory
 
 
-def apple_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when the apple capability is active.
-
-    Without `xcrun` (+ optional `idb`) the Apple tools are not advertised.
-    """
-
-    def deco(fn):
-        if CAPS.apple:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
-def local_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when a local Ollama model is reachable.
-
-    Gates the optional offload tools (summarize/triage recorder windows) so they
-    aren't advertised — and can't error — when no local model is available.
-    """
-
-    def deco(fn):
-        if CAPS.local_model:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
-def local_serve_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but registers when a local backend is reachable *or* a
-    `llama`/`llama-server` binary is present — so the bootstrap/status tools show
-    up even before any model is up (their whole job is to bring one up).
-    """
-
-    def deco(fn):
-        if CAPS.local_model or CAPS.llama_server:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
-def sdr_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when the sdr capability is active.
-
-    Without `pyrtlsdr` + an attached RTL-SDR, the RF-compliance oracle tools
-    (`rf_scan`, `rf_confirm_tx`) are not advertised. See `doctor` for what's missing.
-    """
-
-    def deco(fn):
-        if CAPS.sdr:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
-def ble_sniffer_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when a BLE sniffer dongle is attached.
-
-    Gates the capture tools only. `ble_sniff_status` is core, for the same reason
-    `pa_meter_status` is: the tool that reports the hardware missing must not be
-    hidden by the hardware being missing.
-    """
-
-    def deco(fn):
-        if CAPS.ble_sniffer:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
-def sdk_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when the Kotlin SDK CLI is present.
-
-    Gates the experimental device-IO bridge tools that shell out to the
-    meshtastic-sdk headless JVM CLI (an alternative to the Python `meshtastic`
-    library); plain installs without the CLI are unaffected.
-    """
-
-    def deco(fn):
-        if CAPS.sdk_cli:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
-def discord_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when a Discord bot token resolves.
-
-    Gates the read-only Discord source tools; installs without a token never
-    advertise them. Content they return is untrusted (public community server).
-    """
-
-    def deco(fn):
-        if CAPS.discord:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
-def vanity_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but only registers when the `mvgrind` grinder is present.
-
-    Gates the GPU grind tools only. `vanity_preview` and `vanity_apply` are core:
-    a key ground on another machine is still inspectable and applicable here.
-    """
-
-    def deco(fn):
-        if CAPS.mvgrind:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
-
-
-def app_plane_tool(*args: Any, **kwargs: Any):
-    """Like `@app.tool()` but registers when the android or apple capability is active."""
-
-    def deco(fn):
-        if CAPS.android or CAPS.apple:
-            return app.tool(*args, **kwargs)(fn)
-        return fn
-
-    return deco
+# Without the capability the handler is still defined, so imports and tests are unaffected,
+# but it is not advertised and cannot fail on a missing binary.
+firmware_tool = _gated("firmware", lambda: CAPS.firmware)
+android_tool = _gated("android", lambda: CAPS.android)
+apple_tool = _gated("apple", lambda: CAPS.apple)
+sdr_tool = _gated("sdr", lambda: CAPS.sdr)
+# The capture tools only; `ble_sniff_status` stays core so it can report the dongle missing.
+ble_sniffer_tool = _gated("ble_sniffer", lambda: CAPS.ble_sniffer)
+sdk_tool = _gated("sdk_cli", lambda: CAPS.sdk_cli)
+# The GPU grind only; `vanity_preview` and `vanity_apply` stay core.
+vanity_tool = _gated("mvgrind", lambda: CAPS.mvgrind)
+app_plane_tool = _gated("app_plane", lambda: CAPS.android or CAPS.apple)

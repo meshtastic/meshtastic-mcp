@@ -15,13 +15,15 @@ import pytest
 from fastmcp import Client, FastMCP
 from mcp.types import ElicitResult, InputRequiredResult
 
-from meshtastic_mcp import admin, confirm, flash, hw_tools, jobs, pio
+from meshtastic_mcp import confirm, flash, hw_tools, jobs, pio
+from meshtastic_mcp.tools import core as tools_core
+from meshtastic_mcp.tools import firmware as tools_firmware
 
 
 @pytest.fixture(autouse=True)
 def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHTASTIC_MCP_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv(confirm.POLICY_ENV, raising=False)
+    monkeypatch.setenv(confirm.POLICY_ENV, "agent")
 
 
 @pytest.fixture(scope="module")
@@ -46,15 +48,13 @@ def _answer():
 
 
 def test_a_slow_gated_tool_does_not_stall_other_calls(server, monkeypatch) -> None:
-    monkeypatch.setattr(
-        admin,
-        "reboot",
-        lambda port=None, confirm=False, seconds=10: (
-            time.sleep(1.5) or {"ok": True, "rebooting_in_s": seconds}
-        ),
-    )
+    from meshtastic_mcp import backends
+    from meshtastic_mcp.backends.python import PythonBackend
+
+    monkeypatch.setattr(PythonBackend, "admin", lambda self, *a, **k: time.sleep(1.5) or {})
+    monkeypatch.delenv(backends.BACKEND_ENV, raising=False)
     app = FastMCP("t")
-    app.tool()(getattr(server.reboot, "fn", server.reboot))
+    app.tool()(getattr(tools_core.reboot, "fn", tools_core.reboot))
 
     @app.tool()
     def ping() -> str:
@@ -97,7 +97,9 @@ def test_a_task_asks_the_human_and_then_flashes(server, monkeypatch, args, polic
     )
     app = FastMCP("t")
     app.add_extension(tasks_mod.TasksExtension())
-    app.tool(task=True)(getattr(server.erase_and_flash, "fn", server.erase_and_flash))
+    app.tool(task=True)(
+        getattr(tools_firmware.erase_and_flash, "fn", tools_firmware.erase_and_flash)
+    )
     handler, seen = _answer()
 
     async def run():
@@ -273,7 +275,7 @@ def test_run_sync_hands_over_the_job_id_before_the_job_finishes() -> None:
 def test_a_flash_tool_logs_its_job_id_to_the_client(server, monkeypatch) -> None:
     monkeypatch.setattr(flash, "flash", lambda *a, **k: {"exit_code": 0})
     app = FastMCP("t")
-    app.tool()(getattr(server.pio_flash, "fn", server.pio_flash))
+    app.tool()(getattr(tools_firmware.pio_flash, "fn", tools_firmware.pio_flash))
     messages: list[str] = []
 
     async def log_handler(message) -> None:
@@ -288,3 +290,41 @@ def test_a_flash_tool_logs_its_job_id_to_the_client(server, monkeypatch) -> None
     result = asyncio.run(run())
     job_id = result.structured_content["job_id"]
     assert any(job_id in m and "flash_poll" in m for m in messages), messages
+
+
+@pytest.mark.parametrize(
+    ("tool", "binary", "args"),
+    [
+        ("esptool_raw", "esptool_bin", ["write-flash-status", "--non-volatile", "0x7c"]),
+        ("esptool_raw", "esptool_bin", ["write_mem", "0x3ff00000", "0x1", "0xff"]),
+        ("esptool_raw", "esptool_bin", ["-p", "/dev/x", "load-ram", "stub.bin"]),
+        ("esptool_raw", "esptool_bin", ["burn_efuse", "JTAG_DISABLE"]),
+        ("nrfutil_raw", "nrfutil_bin", ["device", "recover"]),
+        ("nrfutil_raw", "nrfutil_bin", ["device", "erase", "--all"]),
+        ("nrfutil_raw", "nrfutil_bin", ["--serial-number", "123", "device", "program"]),
+        ("picotool_raw", "picotool_bin", ["otp", "set", "0x10", "1"]),
+        ("picotool_raw", "picotool_bin", ["--bus", "1", "uf2", "convert", "a.elf", "b.uf2"]),
+    ],
+)
+def test_a_subcommand_off_the_read_only_list_asks(monkeypatch, tool, binary, args) -> None:
+    monkeypatch.setattr(hw_tools.config, binary, lambda: "bin")
+    monkeypatch.setattr(hw_tools, "_run", lambda *a, **k: pytest.fail("ran without confirm"))
+    with pytest.raises(hw_tools.ConfirmRequired):
+        getattr(hw_tools, tool)(args)
+
+
+@pytest.mark.parametrize(
+    ("tool", "binary", "args"),
+    [
+        ("esptool_raw", "esptool_bin", ["--chip", "esp32s3", "-b", "921600", "chip-id"]),
+        ("esptool_raw", "esptool_bin", ["read_mac"]),
+        ("esptool_raw", "esptool_bin", ["--help"]),
+        ("nrfutil_raw", "nrfutil_bin", ["device", "list"]),
+        ("nrfutil_raw", "nrfutil_bin", ["version"]),
+        ("picotool_raw", "picotool_bin", ["info", "-a"]),
+    ],
+)
+def test_a_read_only_subcommand_runs_without_asking(monkeypatch, tool, binary, args) -> None:
+    monkeypatch.setattr(hw_tools.config, binary, lambda: "bin")
+    monkeypatch.setattr(hw_tools, "_run", lambda b, a, **k: {"exit_code": 0, "args": a})
+    assert getattr(hw_tools, tool)(args)["exit_code"] == 0

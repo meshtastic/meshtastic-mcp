@@ -20,7 +20,7 @@ Returns `{path, bytes, width, height, panel_width, panel_height, scale, format, 
 
 ## `drive_display_start`
 
-Runs input steps against the device UI and snapshots the mirrored screen after each. It holds one connection with mirroring armed, so a whole walkthrough costs one handshake. It returns a `job_id` at once; `drive_display_poll` reports status and each finished step's PNG and `changed_px`.
+Runs input steps against the device UI and snapshots the mirrored screen after each. It holds one connection with mirroring armed, so a whole walkthrough costs one handshake. It returns a `job_id` at once; `job(job_id)` reports status and each finished step's PNG and `changed_px`.
 
 `steps` is a list of at most 32 `{"event", "kb_char"?, "touch_x"?, "touch_y"?, "label"?}`. `event` takes the `send_input_event` names or codes:
 

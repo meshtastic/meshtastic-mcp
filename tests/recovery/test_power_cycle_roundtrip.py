@@ -16,7 +16,8 @@ import time
 
 import pytest
 
-from meshtastic_mcp import info, port_recovery
+from meshtastic_mcp import port_recovery
+from meshtastic_mcp.backends import legacy
 from tests import _power
 from tests._port_discovery import resolve_port_by_role
 
@@ -37,7 +38,7 @@ def test_power_cycle_preserves_node_identity(
     pre_fw = baked_single.get("firmware_version")
 
     # Record pre-cycle state.
-    pre_info = info.device_info(port=pre_port, timeout_s=5.0)
+    pre_info = legacy.device_info(port=pre_port, timeout_s=5.0)
     assert pre_info.get("my_node_num") == pre_node_num
 
     # Resolve the hub slot ONCE, while the device is still visible — once it's
@@ -87,7 +88,7 @@ def test_power_cycle_preserves_node_identity(
         new_port = resolve_port_by_role(role, timeout_s=30.0, require_openable=True)
         new_port = port_recovery.ensure_port_responsive(new_port, role=role, reenum_timeout_s=30.0)
 
-        post_info = info.device_info(port=new_port, timeout_s=10.0)
+        post_info = legacy.device_info(port=new_port, timeout_s=10.0)
         assert post_info.get("my_node_num") == pre_node_num, (
             f"my_node_num changed across power-cycle: pre={pre_node_num:#x} "
             f"post={post_info.get('my_node_num'):#x}"

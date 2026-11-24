@@ -94,7 +94,7 @@ practice it does not always fail open — a Pro gate run on 2026-09-10 correctly
 assert on an impossible step rather than fabricating a pass — but the structure permits it,
 and one honest run is not a guarantee. Treat `report_task_status`, `output.md` and every Checker verdict as a **hint**. The
 `LOOP <name> <PASS|FAIL>` line in rule 6 above is still computed from the device plane —
-the recorder, `packets_window`, `mesh_e2e.py` — exactly as for a scripted run. Nothing
+the recorder, `query`, `mesh_e2e.py` — exactly as for a scripted run. Nothing
 about the oracle changes; only who does the tapping.
 
 ### Interleaving, per journey
@@ -111,7 +111,7 @@ about the oracle changes; only who does the tapping.
   1. Make the journey's last action a bounded `wait_for_text` on the token, using the
      hop-count deadline from `harness.md` rule 2.
   2. Start `mobile_run_task`; the journey connects the app as one of its own steps.
-  3. Watch the device plane for the app's session — `replay_status` reporting
+  3. Watch the device plane for the app's session — `sim_status` reporting
      `connected: true` with a client, or the recorder seeing the phone-API session open.
   4. Inject only then, while Artemis is inside that final bounded wait.
 

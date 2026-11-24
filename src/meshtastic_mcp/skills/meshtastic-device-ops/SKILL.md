@@ -25,7 +25,7 @@ skill maps common operator intents to the right tools and the safe order to use 
 ## Connect
 
 Two transports, same admin surface:
-- **Serial:** a USB port from `list_devices` (e.g. `/dev/cu.usbmodem101`).
+- **Serial:** a USB port from `devices` (e.g. `/dev/cu.usbmodem101`).
 - **TCP:** `tcp://host:port` (a networked node, or a virtual `meshtasticd` at `127.0.0.1:4403`).
 
 **Prefer the CLI subcommands for read-only discovery** — they cost no MCP schema tokens
@@ -42,14 +42,14 @@ meshtastic-mcp boards get heltec-v3     # full metadata for one board
 ```
 
 Fall back to MCP tools when already in an MCP session or when you need board metadata
-for a follow-on `build_start`:
+for a follow-on `install`:
 ```
-list_devices()                   # find candidates (include_unknown=True to see every port)
-device_info(port=P)              # firmware version, node identity, channel summary
-list_nodes(port=P)               # the node DB (long/short name, SNR, last-heard, position)
+devices()                        # attached radios by name; opens no port
+inspect(node=N)                  # firmware version, node identity, region, channel summary
+inspect(node=N, what="nodes")    # the node DB (long/short name, SNR, hops, last-heard)
 ```
 
-Pass `port` as the path `list_devices` reports (on Linux prefer the stable
+Pass `node` as a name `devices` reports (`heltec-v3-aa13`), the port `devices` reports (on Linux prefer the stable
 `/dev/serial/by-id/...` link) or `tcp://host:port`. Omit it only when exactly one radio is
 attached.
 
@@ -63,19 +63,21 @@ same call does not help.
 ## Configure (mutating)
 
 ```
-get_config(section="lora", port=P)                   # lora | device | position | power | ...
-set_config(path="lora.region", value="US", port=P)   # one field by dot-path
-get_channel_url(port=P)                              # the shareable channel URL (keys)
+inspect(node=N, what="lora")                         # a section, default values included
+configure(node=N, changes={"lora.region": "US", "owner.long_name": "Base"})
+configure(node=N, restore=<snapshot>)                # undo, from the snapshot it returned
+inspect(node=N, what="url")                          # the shareable channel URL (keys)
 set_channel_url(url=U, port=P)
-set_owner(long_name="...", short_name="ABCD", port=P)
 ```
-After a write, **reboot then re-read** to prove it persisted to NVS, not just RAM
-(`reboot(port=P)`, which is confirm-gated, then `get_config`). Region (`lora.region`) and
-`network.enabled_protocols` are the two that bite; see `meshtastic-e2e` `topology.md`.
+`configure` snapshots first and reads every change back over a fresh connection, so
+`verified: true` means it stuck; no restart is needed to commit. Fields the firmware changed
+on its own (a region change caps `tx_power`) come back as `side_effects`. Region
+(`lora.region`) and `network.enabled_protocols` are the two that bite; see `meshtastic-e2e`
+`topology.md`.
 
 ## Destructive tools and confirmation
 
-`reboot`, `shutdown`, `factory_reset`, the flash tools, the `nrf52_*` writers, `uhubctl_power`
+`admin` (restarts, power-off and resets), the flash tools, the `nrf52_*` writers, `uhubctl_power`
 (off) / `uhubctl_cycle`, `vanity_apply` and the destructive `esptool`/`nrfutil`/`picotool` calls
 take `confirm`.
 
@@ -84,10 +86,10 @@ take `confirm`.
 - A refusal naming `confirm=True` means this client cannot ask (subagents, `claude -p`). Tell
   the user what will happen and pass `confirm=True` only after they agree. Never retry with it
   on your own.
-- With `MESHTASTIC_MCP_CONFIRM=human` on the server, irreversible tools (`factory_reset`,
-  `erase_and_flash`, `nrf52_factory_erase`, `vanity_apply`, destructive vendor calls) ask even
-  with `confirm=True`; "cannot ask" then means the user must run it from a client that can.
-- `esptool_raw(args=["flash_id"])` and other harmless subcommands never ask.
+- Irreversible tools (`admin` resets, `install(erase=True)`, `nrf52_factory_erase`,
+  `vanity_apply`, destructive vendor calls) always ask a person, even with `confirm=True`. A
+  `Stopped:` refusal means this client cannot ask: report what it would destroy and stop.
+- `vendor(tool="esptool", args=["flash_id"])` and other harmless subcommands never ask.
 
 ## Vanity identity (chosen node id / app colour)
 
@@ -111,7 +113,9 @@ vanity_apply <private_key> <port>             # asks; irreversible (see Destruct
 ## Message + observe
 
 ```
-send_text <port> <text> [--dest <nodeId>]   # broadcast (^all) or directed
+send(node=N, text="...")                         # broadcast
+send(node=N, to="!c2c91376", text="...", want_ack=True)   # delivery: delivered | relayed | nak | no_ack
+send(node=N, to="!c2c91376", request="traceroute")       # or "telemetry"; returns the reply
 ```
 The **recorder** is always capturing to JSONL; query windows instead of tailing:
 ```
@@ -132,20 +136,19 @@ delivered) see `meshtastic-e2e` `references/loop-outbound.md`.
 meshtastic-mcp boards --query <slug>                     # find the env name
 meshtastic-mcp boards get <env>                          # confirm arch + upload_speed
 ```
-Build and flash from the firmware tree (firmware capability). The start/poll pair works with
-any client:
+Build and flash from the firmware tree (firmware capability) with `install`, which picks the
+flasher from the board:
 ```
-build_start(env=E)                         # returns build_id immediately
-build_poll(build_id=ID)                    # poll until status=done/failed
-flash_start(env=E, port=P)                 # asks (or confirm=True), returns job_id
-flash_poll(job_id=ID)                      # poll until status=done/failed
+install(port=P, source={"env": E})              # build + flash; ESP32 OTA-updates the app
+install(port=P, source={"env": E}, erase=True)  # ESP32 full erase and factory flash
+install(port=P, source={"file": F})             # .uf2 (nRF52), .zip (nrfutil DFU), factory .bin
+job(job_id=ID, wait_s=50)                       # follow a flash past a client timeout
 ```
-`build`, `pio_flash`, `erase_and_flash` (ESP32 full erase) and `update_flash` (ESP32 OTA) do
-the same in one call. With the server's `[tasks]` extra a task-capable client runs them as
-background tasks; otherwise the call blocks until the job ends. Each returns a `job_id`, and the
-flash tools log it before they wait. A flash cannot be canceled: if the call is canceled or
-times out, `flash_poll` that id to the end before touching the board. A failed build or flash
-is a tool error carrying the output tail.
+With the server's `[tasks]` extra a task-capable client runs `install` as a background task;
+otherwise the call blocks until the job ends. It returns a `job_id` and logs it before it waits.
+A flash cannot be canceled: if the call is canceled or times out, follow that id with `job` to
+the end before touching the board. A failed flash is a tool error carrying the output tail. A
+build alone is `build(env=E)` in the opt-in `firmware` toolset.
 
 **nRF52 by UF2** (Meshtastic bootloader; core, no firmware tree needed). Faster than serial DFU
 and no touch:
@@ -153,7 +156,7 @@ and no touch:
 nrf52_enter_uf2(port=P)                    # reboots into the UF2 drive (asks)
 nrf52_bootloader_info(port=P)              # bootloader version, SoftDevice, Last-Fault
 nrf52_backup_firmware(port=P)              # CURRENT.UF2 into the data dir; do this first
-nrf52_flash_uf2(uf2_path=F, port=P)        # asks; refuses a wrong-SoftDevice image
+install(port=P, source={"file": F})      # asks; refuses a wrong-SoftDevice image
 nrf52_factory_erase(port=P)                # wipes config/node DB/keys, keeps firmware
 ```
 Keep passing the board's app port (its by-id path): the drive is matched by USB serial even
@@ -161,14 +164,15 @@ after that link disappears in UF2 mode. The drive must be mounted; a headless ho
 automount needs it mounted by hand. The board stays in UF2 mode until a UF2 lands or it is
 power-cycled.
 
-**nRF52 by serial DFU**: `nrfutil_dfu(port=P, package_path=ZIP)` touches the board into DFU
+**nRF52 by serial DFU**: `install(port=P, source={"file": ZIP})` touches the board into DFU
 itself and fails unless adafruit-nrfutil printed `Device programmed.`. A board left sitting in
 serial DFU takes the package with no touch:
-`nrfutil_raw(args=["dfu", "serial", "--package", ZIP, "--port", "/dev/ttyACM0", "-b", "115200", "--singlebank"], confirm=True)`.
+`vendor(tool="nrfutil", args=["dfu", "serial", "--package", ZIP, "--port", "/dev/ttyACM0", "-b", "115200", "--singlebank"], confirm=True)`.
 
 `touch_1200bps(port=P)` bounces nRF52, ESP32-S3 and RP2040 boards into their bootloader and
-reports the bootloader's port. Chip-specific escape hatches when pio can't help:
-`esptool_*`, `nrfutil_*`, `picotool_*` (raw passthroughs; destructive subcommands ask). For a
+reports the bootloader's port. Chip-specific escape hatch when `install` can't help:
+`vendor(tool="esptool" | "nrfutil" | "picotool", args=[...])` (read-only subcommands run at
+once; anything else asks). For a
 wedged USB device, power-cycle the hub port with `uhubctl_list` / `uhubctl_power` /
 `uhubctl_cycle`.
 > **Linux:** `uhubctl` requires udev rules to work without root. Run
@@ -177,7 +181,7 @@ wedged USB device, power-cycle the hub port with `uhubctl_list` / `uhubctl_power
 
 ### BLE OTA DFU (manual — no MCP tool covers this yet)
 
-Every `pio_flash`/`nrfutil_dfu`/`nrf52_flash_uf2` path above is USB (serial or UF2). There is
+Every `install` path above is USB (serial or UF2). There is
 no MCP tool for the *wireless* leg — the Nordic legacy BLE DFU that the Meshtastic
 Android app uses for its in-app bootloader/firmware upgrade, and that the
 Meshtastic nRF52 Bootloader (`meshtastic/nRF52_Bootloader`)
@@ -220,7 +224,7 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    ambiguous — resolve it to exactly one device before acting.** The app's
    advertised name is `<short_name>_<hex><hex>` where the hex suffix is the
    last two bytes of the nRF52's FICR `DEVICEADDR` (`getDeviceName()` in
-   `firmware/src/main.cpp`) — **not** derived from `my_node_num`/`device_info`'s
+   `firmware/src/main.cpp`) — **not** derived from `my_node_num`/`inspect`'s
    node id in any way you can compute offline. Scan (`BleakScanner.discover`)
    and match by the known `short_name` prefix, but confirm the scan turned up
    exactly one match before connecting: `nrf_dfu_py` (and most such tools)
@@ -239,7 +243,7 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    neither it nor a live debug log was actually checked in real time here;
    the passkey/display behavior below is reasoned from firmware source
    after the fact, not confirmed against what this device actually showed.
-   Whether the passkey is visible in a live debug log (`set_debug_log_api`)
+   Whether the passkey is visible in a live debug log (`security.debug_log_api_enabled`)
    depends on the exact firmware build — `onPairingPasskey`'s `LOG_INFO`
    included the passkey digits in
    `v2.7.26.54e0d8d` (what this was tested against) and still does on
@@ -252,9 +256,8 @@ speaks natively. To validate that path from a dev machine instead of a phone:
    dropped. This is
    expected `RANDOM_PIN` behavior, not a bug — switch to `FIXED_PIN` (a value
    you already know) for scripted/headless testing instead of chasing it.
-   `get_config`-read the current `bluetooth.mode`/`fixed_pin` *before* changing
-   anything, and restore them (`set_config` + `reboot` + `get_config` to
-   confirm) once testing is done — a device left in `FIXED_PIN` carries a
+   `configure` snapshots `bluetooth.mode`/`fixed_pin` before changing them;
+   restore them with `configure(restore=<snapshot>)` once testing is done — a device left in `FIXED_PIN` carries a
    known, reusable pairing credential indefinitely otherwise.
    Separately, firmware `develop` (2.8) does carry two real nRF52 BLE-pairing
    fixes not yet in 2.7.x that are worth knowing about if pairing looks
@@ -271,7 +274,7 @@ speaks natively. To validate that path from a dev machine instead of a phone:
   (System Settings → Privacy & Security → Bluetooth) — without it, scanning
   either errors or (confusingly) just finds nothing.
 - A newly-enumerated USB device can trigger a silent macOS "accessory" permission
-  popup that hides the port from `list_devices`/`ls /dev/cu.*` until approved —
+  popup that hides the port from `devices`/`ls /dev/cu.*` until approved —
   if a device that was just flashed or reset seems to vanish from USB entirely,
   check for that popup before assuming a bad flash.
 
@@ -314,7 +317,7 @@ drive_display_start(port=P, out_dir="docs/img", scale=2, wake="BACK", steps=[
     {"event": "DOWN", "label": "nodes"},
     {"event": "USER_PRESS", "touch_x": 20, "touch_y": 140, "label": "chats"},
 ])
-drive_display_poll(job_id)          # until status=done; steps[] holds each PNG and changed_px
+job(job_id, wait_s=50)              # until status=done; steps[] holds each PNG and changed_px
 ```
 
 `changed_px` is the diff against the previous shot; 0 means the press changed nothing on screen.
@@ -333,7 +336,7 @@ minute on a T-Deck with a large node DB). Check `blank` on every shot.
 - **Typing:** any code with `kb_char` set, e.g. `{"event": 255, "kb_char": 104}` types `h`.
 - **Going back:** `BACK` is the back action. On BaseUI it closes an open menu and otherwise goes to
   the previous frame (firmware without meshtastic/firmware#12358 closes menus only on `CANCEL`).
-  A touch MUI board (`device_info` → `display.has_touch`) has no back key by design and ignores
+  A touch MUI board (`inspect(detail="full")` → `summary.display.has_touch`) has no back key by design and ignores
   `BACK`: tap the sidebar instead. Avoid `CANCEL` as a back key: on BaseUI with no menu open it
   turns the screen off.
 - **Enter sends:** `SELECT` or `SELECT_LONG` with a focused MUI text field submits it as a mesh
@@ -343,7 +346,7 @@ Two things that bite in practice:
 
 - **The content varies shot to shot.** Node counts, battery percentage and the clock all move,
   so a set captured over several minutes looks inconsistent. `push_fake_nodedb` (and
-  `replay_start` for a simulated mesh) give every screenshot the same mesh; `set_owner` fixes
+  `sim(action="start")` for a simulated mesh) give every screenshot the same mesh; `configure(changes={"owner.long_name": ...})` fixes
   the device name.
 - **Real screens leak real data.** Node long_names, positions and message text from your own
   mesh end up in the image. Seed a fake node DB before capturing anything destined for a public
@@ -365,8 +368,8 @@ Two things that bite in practice:
 2. A config write lives in RAM until a reboot commits it; re-read after the reboot.
 3. Destructive tools ask the user when the client can; never pass `confirm=True` for an action
    the user has not agreed to.
-4. `factory_reset(full=true)` wipes BLE bonds + the identity key; `full=false` keeps them.
+4. `admin(action="factory_reset_full")` wipes BLE bonds + the identity key; `action="factory_reset"` keeps them.
 5. Prefer the recorder windows over ad-hoc reads: they're timestamped and align with app snapshots.
-6. A canceled flash keeps writing; follow its `job_id` with `flash_poll` before touching the board.
+6. A canceled flash keeps writing; follow its `job_id` with `job` before touching the board.
 7. Never apply a ground key whose `verified` is false, and never apply one without telling the
    operator the old node id first — the change is not reversible without the previous key.

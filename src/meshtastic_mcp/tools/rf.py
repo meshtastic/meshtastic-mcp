@@ -13,6 +13,7 @@ from .. import ble_sniffer, rf_oracle, vanity
 from .. import confirm as confirm_mod
 from .. import pa_sweep as pa_sweep_mod
 from ..schemas import BleSniffStatus, PaMeasureResult, PaMeterStatus, PaSweepResult
+from ..tool_meta import meta
 from ._app import app, ble_sniffer_tool, sdr_tool, vanity_tool
 from ._shared import _off_loop
 
@@ -20,6 +21,7 @@ from ._shared import _off_loop
 
 
 @sdr_tool()
+@meta("read")
 def rf_scan(
     center_freq_hz: float,
     span_khz: float = 1000.0,
@@ -54,6 +56,7 @@ def rf_scan(
 
 
 @sdr_tool()
+@meta("destructive")
 def rf_confirm_tx(
     text: str,
     channel_index: int = 0,
@@ -108,6 +111,7 @@ def rf_confirm_tx(
 
 
 @app.tool()
+@meta("read", open_world=True, title="PA Meter Status")
 def pa_meter_status(meter_port: str | None = None) -> PaMeterStatus:
     """Detect the ImmersionRC RF Power Meter and report a live reading.
 
@@ -126,6 +130,7 @@ def pa_meter_status(meter_port: str | None = None) -> PaMeterStatus:
 
 
 @app.tool()
+@meta("destructive", open_world=True, idempotent=True, title="PA Meter Measure")
 def pa_measure(
     band: str,
     samples: int = 20,
@@ -167,6 +172,7 @@ def pa_measure(
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="PA Power Sweep (Closed-Loop)")
 async def pa_sweep(
     ctx: Context,
     powers: list[int],
@@ -253,6 +259,7 @@ async def pa_sweep(
 
 
 @app.tool()
+@meta("read", open_world=True, title="BLE Sniffer Status")
 def ble_sniff_status() -> BleSniffStatus:
     """Report whether an off-device BLE capture is possible right now.
 
@@ -268,6 +275,7 @@ def ble_sniff_status() -> BleSniffStatus:
 
 
 @ble_sniffer_tool()
+@meta("destructive", open_world=True, title="BLE Capture (Async Start)")
 def ble_sniff_start(
     port: str | None = None,
     duration_s: float = ble_sniffer.DEFAULT_DURATION_S,
@@ -279,7 +287,7 @@ def ble_sniff_start(
     """Capture the BLE air in the background: the phone-to-node link, from outside.
 
     The independent check when the app says "no devices found" and the node says
-    "advertising". Returns a `job_id` at once; poll `ble_sniff_poll`. See
+    "advertising". Returns a `job_id` at once; follow it with `job`. See
     docs/ble-sniffer.md.
 
     Args:
@@ -304,6 +312,7 @@ def ble_sniff_start(
 
 
 @ble_sniffer_tool()
+@meta("read", open_world=True, title="BLE Capture (Poll Status)")
 def ble_sniff_poll(job_id: str, tail_lines: int = 12, max_advertisers: int = 40) -> dict[str, Any]:
     """Check a capture and get everything seen so far, per advertiser; works mid-capture.
 
@@ -327,12 +336,13 @@ def ble_sniff_poll(job_id: str, tail_lines: int = 12, max_advertisers: int = 40)
 
 
 @ble_sniffer_tool()
+@meta("destructive", open_world=True, title="BLE Capture (Stop)")
 def ble_sniff_stop(job_id: str) -> dict[str, Any]:
     """Stop a running capture. The pcap written so far is kept and summarized.
 
     The pcap has no trailer, so a terminated capture is a valid file; open `pcap_path` in
     Wireshark for the per-packet view this summary flattens. The summary carries the same
-    untrusted device names as `ble_sniff_poll`.
+    untrusted device names as `job` on the capture.
 
     Args:
         job_id: Id from `ble_sniff_start`.
@@ -348,6 +358,7 @@ def ble_sniff_stop(job_id: str) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("read", title="Vanity Identity Preview")
 def vanity_preview(private_key: str) -> dict[str, Any]:
     """What node id and color a private key produces. No device, no grinder.
 
@@ -362,6 +373,7 @@ def vanity_preview(private_key: str) -> dict[str, Any]:
 
 
 @vanity_tool()
+@meta("destructive", title="Vanity Grind (Async Start)")
 def vanity_grind_start(
     pattern: str | None = None,
     color: str | None = None,
@@ -372,7 +384,7 @@ def vanity_grind_start(
 ) -> dict[str, Any]:
     """Grind for a keypair whose node id / app color matches, in the background.
 
-    Returns a `job_id` in under a second; poll `vanity_grind_poll`. Ask for an id, a color,
+    Returns a `job_id` in under a second; follow it with `job`. Ask for an id, a color,
     or both; an impossible pair is rejected in the job log. Hits are private keys, written
     to a 0600 file and returned by the poll: treat them as secrets. See docs/vanity.md.
 
@@ -397,6 +409,7 @@ def vanity_grind_start(
 
 
 @vanity_tool()
+@meta("read", title="Vanity Grind (Poll Status)")
 def vanity_grind_poll(job_id: str, tail_lines: int = 12) -> dict[str, Any]:
     """Check a background grind: status, progress tail, and any hits so far.
 
@@ -412,6 +425,7 @@ def vanity_grind_poll(job_id: str, tail_lines: int = 12) -> dict[str, Any]:
 
 
 @vanity_tool()
+@meta("destructive", title="Vanity Grind (Stop)")
 def vanity_grind_stop(job_id: str) -> dict[str, Any]:
     """Stop a running grind. Anything already found is kept and returned.
 
@@ -422,6 +436,7 @@ def vanity_grind_stop(job_id: str) -> dict[str, Any]:
 
 
 @app.tool()
+@meta("destructive", open_world=True, title="Adopt Vanity Identity")
 async def vanity_apply(
     ctx: Context,
     private_key: str,
@@ -435,12 +450,12 @@ async def vanity_apply(
     Destructive: it replaces the node's identity. Peers keep the old public key until
     they see the new NodeInfo, and anything naming the old node (admin keys, DM history)
     must be re-pointed; keep the old key for a way back. Requires confirm=True, or the
-    user's answer when the client can ask (always, with `MESHTASTIC_MCP_CONFIRM=human`), a
+    user's answer when the client can ask (always, unless `MESHTASTIC_MCP_CONFIRM=agent`), a
     clamped key, and `lora.region` set, since firmware will not derive keys while it is
     UNSET. The board reboots (~7 s). See docs/vanity.md.
 
     Args:
-        private_key: The vanity private key, hex or base64, as `vanity_grind_poll` or
+        private_key: The vanity private key, hex or base64, as `job` on a grind or
             `vanity_preview` shows it.
         port: Serial port or `tcp://host[:port]`; omit to auto-select the one likely
             Meshtastic device.
