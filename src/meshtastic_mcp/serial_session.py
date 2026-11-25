@@ -10,6 +10,10 @@ etc. Raw pyserial would give us bytes; pio gives us developer-grade logs.
 Each session runs `pio device monitor` in a subprocess, with a daemon reader
 thread draining stdout into a bounded ring buffer. Callers pull lines via
 `serial_read` using a cursor that survives across calls.
+
+pio's monitor refuses to run unless its stdout is a tty, and Windows has no pty
+to give it, so there the subprocess is a pyserial tail of the port instead: raw
+lines, no monitor filters.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from __future__ import annotations
 import collections
 import os
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -32,6 +37,15 @@ except ImportError:  # pragma: no cover - Windows fallback
 
 _BUFFER_MAX_LINES = 10_000
 _POLL_NEW_PORT_TIMEOUT_S = 3.0
+
+# Child for hosts without pty support: argv is `port baud`, raw lines go to stdout.
+_PYSERIAL_TAIL = (
+    "import sys, serial\n"
+    "s = serial.serial_for_url(sys.argv[1], int(sys.argv[2]))\n"
+    "while True:\n"
+    "    sys.stdout.buffer.write(s.readline())\n"
+    "    sys.stdout.buffer.flush()\n"
+)
 
 
 @dataclass
@@ -106,7 +120,9 @@ def _drain(session: SerialSession) -> None:
         session.stopped_at = time.time()
 
 
-def _spawn_monitor(argv: list[str], cwd: str) -> tuple[subprocess.Popen, int | None, int | None]:
+def _spawn_monitor(
+    argv: list[str], cwd: str | None
+) -> tuple[subprocess.Popen, int | None, int | None]:
     """Spawn the monitor child on ptys; return `(proc, stdin_master, stdout_master)`.
 
     `pio device monitor` needs a terminal on both ends. pyserial miniterm's
@@ -117,7 +133,8 @@ def _spawn_monitor(argv: list[str], cwd: str) -> tuple[subprocess.Popen, int | N
     controlling terminal (`start_new_session`), so the masters must stay open
     for the session lifetime: closing one early sends SIGHUP to the child.
     Callers close the masters (close_session does). Without pty support (Windows)
-    stdin is DEVNULL and stdout a pipe, returned as `None` masters.
+    stdin is DEVNULL and stdout a pipe, returned as `None` masters; pio refuses
+    that, so open_session spawns the pyserial tail there instead.
     """
     if pty is None:
         proc = subprocess.Popen(
@@ -126,7 +143,9 @@ def _spawn_monitor(argv: list[str], cwd: str) -> tuple[subprocess.Popen, int | N
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
+            encoding="utf-8",
+            # Boot noise is not valid UTF-8; a decode error would end the reader thread.
+            errors="replace",
             bufsize=1,
         )
         return proc, None, None
@@ -165,6 +184,8 @@ def open_session(
 
     If `env` is supplied, pio resolves baud and filters from platformio.ini.
     Otherwise uses the supplied `baud` and `filters` (default `['direct']`).
+    Without pty support (Windows) a pyserial tail runs at the resolved baud and
+    no filters apply.
     """
     # Lazy import to avoid circular: registry imports serial_session.
     from . import connection
@@ -218,10 +239,18 @@ def open_session(
         for f in effective_filters:
             args.extend(["--filter", f])
 
-    binary = str(config.pio_bin())
-    work_dir = str(config.firmware_root())
+    argv: list[str]
+    work_dir: str | None
+    if pty is None:
+        # -I: a serial.py in the server's cwd must not shadow pyserial.
+        argv = [sys.executable, "-I", "-c", _PYSERIAL_TAIL, port, str(effective_baud)]
+        work_dir = None
+        effective_filters = []
+    else:
+        argv = [str(config.pio_bin()), *args]
+        work_dir = str(config.firmware_root())
 
-    proc, stdin_master_fd, stdout_master_fd = _spawn_monitor([binary, *args], work_dir)
+    proc, stdin_master_fd, stdout_master_fd = _spawn_monitor(argv, work_dir)
 
     session = SerialSession(
         id=uuid.uuid4().hex,
