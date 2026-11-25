@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: Meshtastic contributors
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The monitor child must see a tty on stdin and stdout, and its output must be drained."""
+"""The monitor child must see a tty on stdin and stdout, and its output must be drained.
+
+Without pty support the child is a pyserial tail instead, drained from a pipe.
+"""
 
 from __future__ import annotations
 
 import os
+import socket
 import sys
 import time
 
@@ -13,7 +17,7 @@ import pytest
 
 from meshtastic_mcp import serial_session
 
-pytestmark = pytest.mark.skipif(serial_session.pty is None, reason="needs pty support")
+needs_pty = pytest.mark.skipif(serial_session.pty is None, reason="needs pty support")
 
 _CHILD = (
     "import os, sys; "
@@ -32,6 +36,7 @@ def _wait(pred, timeout: float = 10.0) -> bool:
     return False
 
 
+@needs_pty
 def test_spawn_gives_child_a_tty_on_stdin_and_stdout(tmp_path) -> None:
     proc, stdin_master, stdout_master = serial_session._spawn_monitor(
         [sys.executable, "-c", _CHILD], str(tmp_path)
@@ -48,6 +53,7 @@ def test_spawn_gives_child_a_tty_on_stdin_and_stdout(tmp_path) -> None:
                 os.close(fd)
 
 
+@needs_pty
 def test_session_drains_pty_output_and_closes_fds(tmp_path, monkeypatch) -> None:
     from meshtastic_mcp import config, connection
 
@@ -73,3 +79,49 @@ def test_session_drains_pty_output_and_closes_fds(tmp_path, monkeypatch) -> None
     for fd in (stdin_fd, stdout_fd):
         with pytest.raises(OSError):
             os.fstat(fd)
+
+
+def test_without_pty_tails_the_port_with_pyserial(monkeypatch) -> None:
+    from meshtastic_mcp import connection
+
+    # No firmware_root / pio_bin patch: this path must need neither.
+    monkeypatch.setattr(serial_session, "pty", None)
+    monkeypatch.setattr(connection, "reject_if_tcp", lambda *a, **k: None)
+    srv = socket.create_server(("127.0.0.1", 0))
+    srv.settimeout(10)
+    url = f"socket://127.0.0.1:{srv.getsockname()[1]}"
+
+    session = serial_session.open_session(url, baud=115200, filters=["time"])
+    try:
+        conn, _ = srv.accept()
+        with conn:
+            # The banner comes after open(), whose input reset would drop earlier bytes.
+            assert _wait(lambda: session.total_lines >= 1)
+            # Invalid UTF-8 (boot noise) must not stop the reader.
+            conn.sendall(b"\xff\x81boot\nhello\n")
+            assert _wait(lambda: session.total_lines >= 3)
+        lines = serial_session.read_session(session, since_cursor=0)["lines"]
+        assert lines[0] == f"--- Reading {url} at 115200 baud"
+        assert lines[1:3] == [2 * "\N{REPLACEMENT CHARACTER}" + "boot", "hello"]
+        assert session.filters == []
+    finally:
+        serial_session.close_session(session)
+        srv.close()
+    assert session.proc.poll() is not None
+
+
+def test_without_pty_an_unreadable_env_fails_before_spawning(monkeypatch) -> None:
+    from meshtastic_mcp import boards, connection
+
+    def unknown(env):
+        raise KeyError(env)
+
+    def no_spawn(*a, **k):
+        raise AssertionError("spawned with a guessed baud")
+
+    monkeypatch.setattr(serial_session, "pty", None)
+    monkeypatch.setattr(connection, "reject_if_tcp", lambda *a, **k: None)
+    monkeypatch.setattr(boards, "get_board", unknown)
+    monkeypatch.setattr(serial_session, "_spawn_monitor", no_spawn)
+    with pytest.raises(ValueError, match="monitor_speed"):
+        serial_session.open_session("COM9", env="heltec-v3")

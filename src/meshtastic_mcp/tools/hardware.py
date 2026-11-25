@@ -63,10 +63,12 @@ def serial_open(
 ) -> dict[str, Any]:
     """Open a `pio device monitor` session reading from `port`.
 
-    Needs PlatformIO and `MESHTASTIC_FIRMWARE_ROOT`. The session holds the port until
-    `serial_close`, so the admin tools cannot use it meanwhile. Returns `{session_id,
-    resolved_baud, resolved_filters, env}`: the `session_id` for `serial_read` /
-    `serial_close`, plus the baud and filters pio resolved.
+    Needs PlatformIO and `MESHTASTIC_FIRMWARE_ROOT`. On Windows, where pio's monitor
+    refuses to run without a terminal, the session reads the port with pyserial instead
+    and applies no filters. The session holds the port until `serial_close`, so the admin
+    tools cannot use it meanwhile. Returns `{session_id, resolved_baud, resolved_filters,
+    env}`: the `session_id` for `serial_read` / `serial_close`, plus the baud and filters
+    that apply.
 
     Args:
         port: The serial port to read.
