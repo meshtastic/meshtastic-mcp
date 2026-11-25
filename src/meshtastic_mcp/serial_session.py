@@ -39,9 +39,12 @@ _BUFFER_MAX_LINES = 10_000
 _POLL_NEW_PORT_TIMEOUT_S = 3.0
 
 # Child for hosts without pty support: argv is `port baud`, raw lines go to stdout.
+# The banner, like pio's `--- Terminal on` line, comes after open(), which discards
+# input that arrived before it.
 _PYSERIAL_TAIL = (
     "import sys, serial\n"
     "s = serial.serial_for_url(sys.argv[1], int(sys.argv[2]))\n"
+    "print('--- Reading', sys.argv[1], 'at', sys.argv[2], 'baud', flush=True)\n"
     "while True:\n"
     "    sys.stdout.buffer.write(s.readline())\n"
     "    sys.stdout.buffer.flush()\n"
@@ -201,7 +204,13 @@ def open_session(
             raw = boards.get_board(env).get("raw_config")
             if isinstance(raw, dict):
                 raw_config = raw
-        except Exception:
+        except Exception as exc:
+            if pty is None:
+                # No pio here to resolve the env, and a guessed baud garbles the output.
+                raise ValueError(
+                    f"Cannot read env {env!r} for its monitor_speed: {exc}. Check "
+                    "MESHTASTIC_FIRMWARE_ROOT and the env name, or pass baud without env."
+                ) from exc
             raw_config = {}
 
         monitor_speed = raw_config.get("monitor_speed")
@@ -242,8 +251,8 @@ def open_session(
     argv: list[str]
     work_dir: str | None
     if pty is None:
-        # -I: a serial.py in the server's cwd must not shadow pyserial.
-        argv = [sys.executable, "-I", "-c", _PYSERIAL_TAIL, port, str(effective_baud)]
+        # -P: a serial.py in the server's cwd must not shadow pyserial.
+        argv = [sys.executable, "-P", "-c", _PYSERIAL_TAIL, port, str(effective_baud)]
         work_dir = None
         effective_filters = []
     else:

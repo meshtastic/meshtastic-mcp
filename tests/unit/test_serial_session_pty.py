@@ -95,13 +95,33 @@ def test_without_pty_tails_the_port_with_pyserial(monkeypatch) -> None:
     try:
         conn, _ = srv.accept()
         with conn:
+            # The banner comes after open(), whose input reset would drop earlier bytes.
+            assert _wait(lambda: session.total_lines >= 1)
             # Invalid UTF-8 (boot noise) must not stop the reader.
             conn.sendall(b"\xff\x81boot\nhello\n")
-            assert _wait(lambda: session.total_lines >= 2)
-        res = serial_session.read_session(session, since_cursor=0)
-        assert res["lines"][:2] == [2 * "\N{REPLACEMENT CHARACTER}" + "boot", "hello"]
+            assert _wait(lambda: session.total_lines >= 3)
+        lines = serial_session.read_session(session, since_cursor=0)["lines"]
+        assert lines[0] == f"--- Reading {url} at 115200 baud"
+        assert lines[1:3] == [2 * "\N{REPLACEMENT CHARACTER}" + "boot", "hello"]
         assert session.filters == []
     finally:
         serial_session.close_session(session)
         srv.close()
     assert session.proc.poll() is not None
+
+
+def test_without_pty_an_unreadable_env_fails_before_spawning(monkeypatch) -> None:
+    from meshtastic_mcp import boards, connection
+
+    def unknown(env):
+        raise KeyError(env)
+
+    def no_spawn(*a, **k):
+        raise AssertionError("spawned with a guessed baud")
+
+    monkeypatch.setattr(serial_session, "pty", None)
+    monkeypatch.setattr(connection, "reject_if_tcp", lambda *a, **k: None)
+    monkeypatch.setattr(boards, "get_board", unknown)
+    monkeypatch.setattr(serial_session, "_spawn_monitor", no_spawn)
+    with pytest.raises(ValueError, match="monitor_speed"):
+        serial_session.open_session("COM9", env="heltec-v3")
