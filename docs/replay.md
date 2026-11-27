@@ -67,6 +67,10 @@ The RF gateway observer set by `sim_profile["observer"]` is not the connected no
 
 `screenshot_set_start` uses all three to show the Android and iOS apps one mesh; see [screenshot-set.md](screenshot-set.md).
 
+## Client sends
+
+The session answers a connected client's packets as firmware does. Every packet gets a `QueueStatus` carrying its id. A `want_ack` packet is then resolved with a Routing packet whose `request_id` is that id: a broadcast gets the implicit ack from the observer to itself, a unicast to a node in the capture gets that node's ACK, and a unicast to any other node gets `MAX_RETRANSMIT` from the observer. The Routing packet arrives 0.5 to 1.5 seconds after the send. A packet without `want_ack` gets only the `QueueStatus`. Admin and traceroute requests get their own responses.
+
 ## Discovery
 
 `mdns` advertises the session over mDNS/Bonjour as `_meshtastic._tcp` with the `shortname` and `id` TXT records real firmware publishes, so apps list it in network discovery (as `RPLY_4331`) with no manual IP entry. The default `None` is on unless the session binds loopback only. It is best effort: it prefers the `zeroconf` package, falls back to `dns-sd` or `avahi-publish-service`, and otherwise reports a hint under `mdns` in `replay_status`.

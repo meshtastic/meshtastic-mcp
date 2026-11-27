@@ -414,6 +414,8 @@ class ReplaySession:
         # re-adds a node the next time it's heard, the replay keeps them gone for the rest of
         # the session: left out of the node DB on reconnect, their packets dropped.
         self._removed_nodes: set[int] = set()
+        # Seconds between a want_ack send and the Routing packet that resolves it.
+        self._ack_delay: tuple[float, float] = (0.5, 1.5)
         # Held across a sender's removed check and its write, and around a removal, so no
         # packet from a node goes out once its removal is recorded.
         self._removal_lock = threading.Lock()
@@ -867,11 +869,16 @@ class ReplaySession:
         """
         portnum = pkt.decoded.portnum
 
+        # Every client packet is queued and reported, answered or not.
+        pkt_id = pkt.id or (int(time.time() * 1000) & 0x7FFFFFFF)
+        self._send_queue_status(send, pkt_id)
+
         if portnum == _TRACEROUTE_APP:
             self._handle_traceroute(pkt, send)
             return
 
         if portnum != portnums_pb2.PortNum.ADMIN_APP:
+            self._resolve_want_ack(pkt, pkt_id, send)
             return
         try:
             req = admin_pb2.AdminMessage()
@@ -911,6 +918,73 @@ class ReplaySession:
             mp.decoded.request_id = pkt.id
         mp.decoded.payload = resp.SerializeToString()
         send(fr)
+
+    @staticmethod
+    def _send_queue_status(send: Any, mesh_packet_id: int) -> None:
+        """The QueueStatus firmware reports for a packet it queued from the client."""
+        fr = mesh_pb2.FromRadio()
+        fr.queueStatus.res = 0
+        fr.queueStatus.free = 16
+        fr.queueStatus.maxlen = 16
+        fr.queueStatus.mesh_packet_id = mesh_packet_id
+        with contextlib.suppress(OSError, ConnectionError):
+            send(fr)
+
+    def _resolve_want_ack(self, pkt: mesh_pb2.MeshPacket, pkt_id: int, send: Any) -> None:
+        """Resolve a want_ack send with the Routing packet firmware would deliver.
+
+        A broadcast gets the implicit ack from the observer to itself, as when its
+        rebroadcast is overheard. A unicast to a node in the capture gets that node's
+        ACK. A unicast to any other node runs out its retransmits and gets
+        MAX_RETRANSMIT, again from the observer to itself.
+        """
+        if not pkt.want_ack:
+            return
+        dest = pkt.to & 0xFFFFFFFF
+        observer = self.params.observer_num & 0xFFFFFFFF
+        if dest == 0 or dest == observer:
+            return
+        if dest == 0xFFFFFFFF:
+            sender, error = observer, mesh_pb2.Routing.Error.NONE
+        elif dest in self._live_node_nums():
+            sender, error = dest, mesh_pb2.Routing.Error.NONE
+        else:
+            sender, error = observer, mesh_pb2.Routing.Error.MAX_RETRANSMIT
+
+        routing = mesh_pb2.Routing()
+        routing.error_reason = error
+        fr = mesh_pb2.FromRadio()
+        mp = fr.packet
+        setattr(mp, "from", sender)
+        mp.to = observer
+        mp.id = int(time.time() * 1000) & 0x7FFFFFFF
+        mp.channel = pkt.channel
+        mp.priority = mesh_pb2.MeshPacket.Priority.ACK
+        mp.decoded.portnum = portnums_pb2.PortNum.ROUTING_APP
+        mp.decoded.request_id = pkt_id
+        mp.decoded.payload = routing.SerializeToString()
+
+        def deliver() -> None:
+            if self.state.stop.is_set():
+                return
+            mp.rx_time = int(time.time())
+            with contextlib.suppress(OSError, ConnectionError):
+                send(fr)
+
+        lo, hi = self._ack_delay
+        if hi <= 0:
+            deliver()
+            return
+        timer = threading.Timer(random.uniform(lo, hi), deliver)
+        timer.daemon = True
+        timer.start()
+
+    def _live_node_nums(self) -> set[int]:
+        return {
+            n.num & 0xFFFFFFFF
+            for n in self.capture.nodes
+            if n.num & 0xFFFFFFFF not in self._removed_nodes
+        }
 
     def _handle_traceroute(self, pkt: mesh_pb2.MeshPacket, send: Any) -> None:
         """Synthesise a RouteDiscovery response to a client traceroute request.
