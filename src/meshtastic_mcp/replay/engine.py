@@ -951,25 +951,31 @@ class ReplaySession:
         else:
             sender, error = observer, mesh_pb2.Routing.Error.MAX_RETRANSMIT
 
-        routing = mesh_pb2.Routing()
-        routing.error_reason = error
-        fr = mesh_pb2.FromRadio()
-        mp = fr.packet
-        setattr(mp, "from", sender)
-        mp.to = observer
-        mp.id = int(time.time() * 1000) & 0x7FFFFFFF
-        mp.channel = pkt.channel
-        mp.priority = mesh_pb2.MeshPacket.Priority.ACK
-        mp.decoded.portnum = portnums_pb2.PortNum.ROUTING_APP
-        mp.decoded.request_id = pkt_id
-        mp.decoded.payload = routing.SerializeToString()
+        def build(src: int, err: mesh_pb2.Routing.Error.ValueType) -> mesh_pb2.FromRadio:
+            routing = mesh_pb2.Routing()
+            routing.error_reason = err
+            fr = mesh_pb2.FromRadio()
+            mp = fr.packet
+            setattr(mp, "from", src)
+            mp.to = observer
+            mp.id = int(time.time() * 1000) & 0x7FFFFFFF
+            mp.channel = pkt.channel
+            mp.priority = mesh_pb2.MeshPacket.Priority.ACK
+            mp.decoded.portnum = portnums_pb2.PortNum.ROUTING_APP
+            mp.decoded.request_id = pkt_id
+            mp.decoded.payload = routing.SerializeToString()
+            mp.rx_time = int(time.time())
+            return fr
 
         def deliver() -> None:
             if self.state.stop.is_set():
                 return
-            mp.rx_time = int(time.time())
-            with contextlib.suppress(OSError, ConnectionError):
-                send(fr)
+            with self._removal_lock, contextlib.suppress(OSError, ConnectionError):
+                if sender in self._removed_nodes:
+                    # A node removed during the delay never answers; the send still has to end.
+                    send(build(observer, mesh_pb2.Routing.Error.MAX_RETRANSMIT))
+                else:
+                    send(build(sender, error))
 
         lo, hi = self._ack_delay
         if hi <= 0:

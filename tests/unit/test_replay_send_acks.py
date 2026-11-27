@@ -111,3 +111,29 @@ def test_admin_request_still_answered_and_queue_reported():
     assert out[0].queueStatus.mesh_packet_id == 77
     assert out[1].packet.decoded.portnum == portnums_pb2.PortNum.ADMIN_APP
     assert out[1].packet.decoded.request_id == 77
+
+
+def test_node_removed_during_ack_delay_never_sends_its_ack(monkeypatch):
+    """Regression: a delayed ACK went out from a node the client had removed meanwhile."""
+    pending = []
+
+    class _Timer:
+        def __init__(self, _delay, fn):
+            pending.append(fn)
+
+        daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr("meshtastic_mcp.replay.engine.threading.Timer", _Timer)
+    sess = _session()
+    sess._ack_delay = (1, 1)
+    dest = sess.capture.nodes[0].num & 0xFFFFFFFF
+    out = _run(sess, _text(dest, want_ack=True))
+    sess._removed_nodes.add(dest)
+    pending.pop()()
+    me = sess.params.observer_num
+    assert (getattr(out[1].packet, "from"), out[1].packet.to) == (me, me)
+    assert out[1].packet.decoded.request_id == PKT_ID
+    assert _routing(out[1]).error_reason == mesh_pb2.Routing.Error.MAX_RETRANSMIT
